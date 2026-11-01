@@ -12,10 +12,12 @@ Compose model or tool identities change.  Runtime lifecycle never calls
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -24,7 +26,7 @@ from typing import Any, Sequence
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from nas_v2_compose import ComposeProjectionError, render_compose_override
+from nas_v2_compose import ComposeProjectionError, render_compose_override_snapshot
 
 
 class ComposeImportError(RuntimeError):
@@ -63,11 +65,13 @@ def _run(
     *,
     env: dict[str, str] | None = None,
     timeout: int = 120,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
             list(command),
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL if input_text is None else None,
+            input=input_text,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -90,6 +94,98 @@ def _json_bytes(value: Any) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
+_INTERPOLATION = re.compile(r"\$(?:\{|[A-Za-z_])")
+
+
+def _validate_compose_source(service_id: str, source_bytes: bytes) -> bytes:
+    """Validate source and quote scalars to preserve types across provider YAML versions."""
+    parser = YAML(typ="safe", pure=True)
+    parser.version = (1, 2)
+    parser.allow_duplicate_keys = False
+    try:
+        model = parser.load(source_bytes.decode("utf-8"))
+    except (UnicodeError, YAMLError) as exc:
+        raise ComposeImportError(f"invalid Compose source for {service_id!r}: {exc}") from exc
+    if not isinstance(model, dict):
+        raise ComposeImportError(f"Compose source for {service_id!r} must be a YAML object")
+    # Includes load unvalidated files with their own interpolation environment.
+    if "include" in model:
+        raise ComposeImportError(
+            f"Compose service {service_id!r} uses include files which cannot be validated before provider invocation"
+        )
+    services = model.get("services", {})
+    if isinstance(services, dict):
+        for service in services.values():
+            if not isinstance(service, dict):
+                continue
+            # Compose can load additional configuration or environment values
+            # from these files before emitting its canonical model. They have
+            # not been validated and could interpolate ambient variables.
+            if "env_file" in service:
+                raise ComposeImportError(
+                    f"Compose service {service_id!r} uses an external env_file which cannot be "
+                    "validated before provider invocation; use V2 environment-file attachments"
+                )
+            extends = service.get("extends")
+            if isinstance(extends, dict) and "file" in extends:
+                raise ComposeImportError(
+                    f"Compose service {service_id!r} uses an external extends file which "
+                    "cannot be validated before provider invocation"
+                )
+
+    visited: set[int] = set()
+    active: set[int] = set()
+
+    def check(value: Any) -> None:
+        if isinstance(value, str):
+            if _INTERPOLATION.search(value.replace(chr(36) * 2, "")):
+                raise ComposeImportError(
+                    f"Compose service {service_id!r} uses interpolation, which Podlet import does not support; "
+                    "use literal configuration or V2 credential/environment-file attachments"
+                )
+            return
+        if not isinstance(value, (dict, list, tuple, set)):
+            return
+        identity = id(value)
+        if identity in active:
+            raise ComposeImportError(f"Compose service {service_id!r} contains a recursive YAML alias")
+        if identity in visited:
+            return
+        active.add(identity)
+        try:
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    check(key)
+                    check(item)
+            else:
+                for item in value:
+                    check(item)
+        finally:
+            active.remove(identity)
+        visited.add(identity)
+
+    check(model)
+    if isinstance(services, dict):
+        for service in services.values():
+            if not isinstance(service, dict):
+                continue
+            for field in ("command", "entrypoint"):
+                value = service.get(field)
+                if isinstance(value, str):
+                    try:
+                        for argument in shlex.split(value):
+                            check(argument)
+                    except ValueError as exc:
+                        raise ComposeImportError(
+                            f"Compose service {service_id!r} has malformed {field} quoting"
+                        ) from exc
+    # Podman Compose's PyYAML loader otherwise treats names such as 'on' as booleans.
+    parser.representer.default_style = '"'
+    output = io.StringIO()
+    parser.dump(model, output)
+    return output.getvalue().encode("utf-8")
+
+
 def _canonical_compose(
     effective: dict[str, Any],
     service_id: str,
@@ -100,23 +196,22 @@ def _canonical_compose(
 ) -> tuple[pathlib.Path, bytes, bytes]:
     _absolute_binary(podman_bin, label=f"Compose service {service_id!r} Podman binary")
     _absolute_binary(compose_provider_bin, label=f"Compose service {service_id!r} provider binary")
+    provider_source: bytes | None = None
+
+    def validate_source(data: bytes) -> None:
+        nonlocal provider_source
+        provider_source = _validate_compose_source(service_id, data)
+
     try:
-        source, override = render_compose_override(effective, service_id, service)
+        source, override, _source_bytes = render_compose_override_snapshot(
+            effective,
+            service_id,
+            service,
+            validate_source=validate_source,
+        )
     except ComposeProjectionError as exc:
         raise ComposeImportError(str(exc)) from exc
-    try:
-        source_bytes = source.read_bytes()
-    except OSError as exc:
-        raise ComposeImportError(f"unable to read Compose source {source}: {exc}") from exc
-    # Podlet deliberately does not implement Compose interpolation.  Refuse a
-    # model whose meaning would depend on ambient reconciliation environment;
-    # V2 credentials/environment-file attachments are the deterministic secret
-    # path instead.
-    if b"${" in source_bytes:
-        raise ComposeImportError(
-            f"Compose service {service_id!r} uses interpolation, which Podlet import does not support; "
-            "use literal configuration or V2 credential/environment-file attachments"
-        )
+    assert provider_source is not None
 
     with tempfile.TemporaryDirectory(prefix=f"nas-v2-compose-config-{service_id}-") as raw:
         root = pathlib.Path(raw)
@@ -124,18 +219,21 @@ def _canonical_compose(
         override_path.write_bytes(override)
         env = os.environ.copy()
         env["PODMAN_COMPOSE_PROVIDER"] = compose_provider_bin
+        # Podman Compose 1.5.0 reads '-f -' from stdin and uses
+        # COMPOSE_PROJECT_DIR as the base for relative source paths.
+        env["COMPOSE_PROJECT_DIR"] = str(source.parent)
         command = [
             podman_bin,
             "compose",
             "--project-name",
             f"nas-v2-{service_id}",
             "--file",
-            str(source),
+            "-",
             "--file",
             str(override_path),
             "config",
         ]
-        canonical = _run(command, env=env).stdout.encode("utf-8")
+        canonical = _run(command, env=env, input_text=provider_source.decode("utf-8")).stdout.encode("utf-8")
     if not canonical.strip():
         raise ComposeImportError(f"Compose service {service_id!r} resolved to an empty model")
     _validate_canonical_networking(service_id, canonical)

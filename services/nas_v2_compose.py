@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+from collections.abc import Callable
 from typing import Any
 
 from ruamel.yaml import YAML
@@ -98,7 +99,7 @@ def _reject_duplicate_targets(
                 seen.add(target)
 
 
-def _source(service_id: str, service: dict[str, Any]) -> tuple[pathlib.Path, dict[str, dict[str, Any]]]:
+def _source(service_id: str, service: dict[str, Any]) -> tuple[pathlib.Path, dict[str, dict[str, Any]], bytes]:
     raw = service["runtime"]["source"]
     candidate = pathlib.Path(raw)
     if candidate.suffix not in {".yaml", ".yml"}:
@@ -117,8 +118,9 @@ def _source(service_id: str, service: dict[str, Any]) -> tuple[pathlib.Path, dic
     parser.version = (1, 2)
     parser.allow_duplicate_keys = False
     try:
-        document = parser.load(resolved.read_text(encoding="utf-8"))
-    except (OSError, YAMLError) as exc:
+        source_bytes = resolved.read_bytes()
+        document = parser.load(source_bytes.decode("utf-8"))
+    except (OSError, UnicodeError, YAMLError) as exc:
         raise ComposeProjectionError(f"unable to parse Compose source for {service_id!r}: {exc}") from exc
     raw_services = document.get("services") if isinstance(document, dict) else None
     if not isinstance(raw_services, dict) or not raw_services:
@@ -128,7 +130,7 @@ def _source(service_id: str, service: dict[str, Any]) -> tuple[pathlib.Path, dic
         if not isinstance(name, str) or not name or not isinstance(definition, dict):
             raise ComposeProjectionError(f"Compose service {service_id!r} contains an invalid service definition")
         services[name] = definition
-    return resolved, services
+    return resolved, services, source_bytes
 
 
 def _target(overrides: dict[str, dict[str, Any]], names: set[str], target: Any) -> dict[str, Any]:
@@ -354,17 +356,21 @@ def _apply_isolated_ingress(
             published[key] = mapping
 
 
-def render_compose_override(
+def render_compose_override_snapshot(
     effective: dict[str, Any],
     service_id: str,
     service: dict[str, Any],
-) -> tuple[pathlib.Path, bytes]:
-    """Return validated source path and deterministic Compose override."""
+    *,
+    validate_source: Callable[[bytes], None] | None = None,
+) -> tuple[pathlib.Path, bytes, bytes]:
+    """Derive the V2 override from the exact bytes passed to the Compose provider."""
     if service["runtime"]["type"] != "compose":
         raise ComposeProjectionError(f"service {service_id!r} is not a Compose runtime")
     if service["workload"]["kind"] != "daemon":
         raise ComposeProjectionError(f"Compose service {service_id!r} currently supports daemon workloads only")
-    source, source_services = _source(service_id, service)
+    source, source_services, source_bytes = _source(service_id, service)
+    if validate_source is not None:
+        validate_source(source_bytes)
     service_names = set(source_services)
     overrides: dict[str, dict[str, Any]] = {}
 
@@ -455,7 +461,15 @@ def render_compose_override(
 
     document: dict[str, Any] = {"services": {name: overrides[name] for name in sorted(overrides)}}
     document.update(top_level)
-    return source, (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    return source, (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8"), source_bytes
 
 
-__all__ = ["ComposeProjectionError", "render_compose_override"]
+def render_compose_override(
+    effective: dict[str, Any], service_id: str, service: dict[str, Any]
+) -> tuple[pathlib.Path, bytes]:
+    """Return validated source path and deterministic Compose override."""
+    source, override, _snapshot = render_compose_override_snapshot(effective, service_id, service)
+    return source, override
+
+
+__all__ = ["ComposeProjectionError", "render_compose_override", "render_compose_override_snapshot"]
