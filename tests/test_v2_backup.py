@@ -169,9 +169,7 @@ class V2BackupTests(unittest.TestCase):
             self.assertIn(str(root / "backup-paths.txt"), result["changedFiles"])
 
     def test_restic_profile_uses_stable_host_tag_identity_for_backups_and_retention(self):
-        source = (ROOT / "modules/nas/config/managed-services-backup-profile.nix").read_text(
-            encoding="utf-8"
-        )
+        source = (ROOT / "modules/nas/config/managed-services-backup-profile.nix").read_text(encoding="utf-8")
         backup_section = source.split("      backup = {", 1)[1].split("      retention = {", 1)[0]
         retention_section = source.split("      retention = {", 1)[1].split("      check = {", 1)[0]
         self.assertIn('"group-by" = "host,tags";', backup_section)
