@@ -21,8 +21,9 @@ APPLICATION_NAMES = (
     "nut-webgui",
 )
 
+GENERIC_PYTHON_PATHS = tuple(sorted((ROOT / "services").glob("nas_v2_*.py")))
 GENERIC_PATHS = (
-    *sorted((ROOT / "services").glob("nas_v2_*.py")),
+    *GENERIC_PYTHON_PATHS,
     ROOT / "modules/nas/config/managed-services.nix",
     ROOT / "modules/nas/config/managed-services-lifecycle.nix",
     ROOT / "modules/nas/config/managed-services-transactions.nix",
@@ -39,6 +40,7 @@ def violations(paths: tuple[pathlib.Path, ...] = GENERIC_PATHS) -> list[tuple[pa
     result: list[tuple[pathlib.Path, str, int]] = []
     for path in paths:
         if not path.is_file():
+            result.append((path.relative_to(ROOT), "missing generic source file", 0))
             continue
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             for name, pattern in patterns.items():
@@ -49,6 +51,8 @@ def violations(paths: tuple[pathlib.Path, ...] = GENERIC_PATHS) -> list[tuple[pa
 
 def main() -> int:
     found = violations()
+    if not GENERIC_PYTHON_PATHS:
+        found.append((pathlib.Path("services/nas_v2_*.py"), "no generic Python sources discovered", 0))
     if found:
         for path, name, line_number in found:
             print(f"architecture boundary violation: {path}:{line_number}: {name}", file=sys.stderr)
