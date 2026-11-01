@@ -611,14 +611,14 @@ def _validate_managed_files(service_id: str, service: dict[str, Any]) -> None:
                 )
         destinations.append(target)
         payload = entry["content"]["literal"]
-        if "\\x00" in payload or len(payload.encode("utf-8")) > 65536:
+        if "\x00" in payload or len(payload.encode("utf-8")) > 65536:
             raise ManagedServicesV2Error(
                 "Managed file literal contains NUL or exceeds 64 KiB",
                 path=f"{prefix}.content.literal",
                 code="managed-file-content",
             )
 
-        for index_storage, attachment in enumerate(service["storage"]):
+        for attachment in service["storage"]:
             mount = pathlib.PurePosixPath(attachment["mountPath"])
             if _under(mount, target) or _under(target, mount):
                 raise ManagedServicesV2Error(
