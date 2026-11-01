@@ -4,25 +4,27 @@
 
 ## Default deny
 
-An ordinary account receives **no NAS application capability merely by belonging to `nas_users`**. The administrator grants access in Authentik by adding the account to one or more explicit groups:
+`nas_users` is a baseline identity role, **not** an application-access grant. Managed Services V2 generates a distinct Authentik capability group for each declared service capability. An administrator grants access by assigning users to those groups **in Authentik**:
 
-| Authentik group | Capability |
+| Authentik group | Protected capability |
 |---|---|
-| `nas_allow_files` | Authenticated CopyParty UI and personal-volume template |
-| `nas_allow_webdav` | WebDAV route |
-| `nas_allow_syncthing` | Own Syncthing-device settings and managed personal sync |
-| `nas_allow_vault` | Vaultwarden SSO enrollment/sign-in path |
+| `application.copyparty.files` | CopyParty file UI and file-scoped access |
+| `application.copyparty.webdav` | CopyParty WebDAV route |
+| `application.syncthing.access` | Personal Syncthing-device settings and managed synchronization |
+| `application.vaultwarden.access` | Vaultwarden web/OIDC access |
 
-The matching `nas_deny_*` group overrides an allow grant. `nas_disabled` disables the account across shared policy.
+These are examples from the default V2 service seed. Other applications declare their own `application.<service>.<capability>` groups. A service or capability that is not installed is not an available grant.
 
-Authentik application/group bindings should mirror these grants so unauthorized applications are hidden in Authentik as well as denied by Caddy and the backend policy. The proxy checks remain authoritative even if a dashboard binding is accidentally broad.
+The retired `nas_allow_*` / `nas_deny_*` groups do **not** implement V2 authorization. There is no matching-deny-group precedence model: identity-protected routes allow the required capability group or `nas_admin`, after successful Authentik forward authentication. `nas_disabled` marks an account disabled under shared identity policy.
 
-Ordinary accounts may always manage their password, MFA, and permitted profile fields through Authentik. They can create or use native CopyParty share links only inside volumes and ACLs configured by the administrator.
+**The account setup CLI manages reserved identity roles, not application grants.** In particular, do not pass `application.*` groups to `nas-setup account apply --group`; it rejects non-role groups. Assign or remove application capabilities using Authentik's group membership administration instead.
 
-Ordinary accounts cannot open Cockpit, the global Syncthing UI, or the administrator CopyParty configuration volume.
+V2 creates the capability objects and the appropriate launcher application bindings, but does not assign their members. Caddy checks the effective group membership at request time. The application launcher may hide unauthorized links, but is not a security boundary; a missing or overly broad launcher binding cannot grant Caddy access.
+
+Ordinary accounts may manage passwords, MFA, sessions and permitted profile fields in Authentik. They may use native CopyParty share links only within volumes and ACLs configured by the administrator. Ordinary accounts cannot use administrator-only CopyParty configuration, the global Syncthing UI or Cockpit without `nas_admin`.
 
 ## Share policy
 
-CopyParty is the only authority for paths, ACLs, flags, quotas, indexing, and share links. Authentik groups are identity inputs referenced by CopyParty ACLs; they do not generate shares. There is no `nasShareFlags` or `share-*` translation path.
+CopyParty remains the authority for volumes, paths, ACLs, flags, quotas, indexing, and share links. Its group ACLs refer to Authentik-supplied identity groups, including V2 application capability groups. V2 does not synthesize shares or create a second share authorization policy.
 
-Caddy deletes client-supplied identity headers before invoking Authentik forward authentication. Backend services accept only the trusted headers produced by that path.
+Caddy strips client-supplied identity headers before calling Authentik forward-auth and forwards only trusted identity results to backends. These proxy checks complement, rather than replace, application-native ACLs.
