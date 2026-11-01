@@ -24,6 +24,9 @@ function loginCase(name) {
     marker: 0,
     markerReads: 0,
     earlyCookieClears: 0,
+    cookieClears: 0,
+    navigations: 0,
+    cancellations: 0,
     submissions: [],
     listeners: new Map(),
   };
@@ -50,11 +53,13 @@ function loginCase(name) {
     context() {
       return {
         async clearCookies() {
+          state.cookieClears += 1;
           if (state.submissions.some((item) => !item.rendered)) state.earlyCookieClears += 1;
         },
       };
     },
     async goto() {
+      state.navigations += 1;
       state.stage = "username";
       state.marker = 0;
     },
@@ -64,6 +69,14 @@ function loginCase(name) {
         name: options.name,
         async fill(value) {
           state[options.name === "Password" ? "password" : "username"] = value;
+        },
+        async click() {
+          assert.equal(role, "link");
+          assert.equal(options.name, "Not you?");
+          assert.equal(state.stage, "password");
+          assert.ok(state.submissions.every((item) => item.rendered));
+          state.cancellations += 1;
+          state.stage = "username";
         },
       };
     },
@@ -154,6 +167,9 @@ test("hostile-login callback waits for every rejection before assertions or cook
   assert.equal(fixture.state.markerReads, 8);
   assert.equal(fixture.state.submissions.length, 8);
   assert.equal(new Set(fixture.state.submissions.map((item) => item.password)).size, 8);
+  assert.equal(fixture.state.navigations, 1, "initialize the anonymous login flow once");
+  assert.equal(fixture.state.cookieClears, 0, "retain native anonymous CSRF/session state");
+  assert.equal(fixture.state.cancellations, 7, "reset each rejected flow through native cancellation");
 });
 
 test("hostile-login callback rejects a marker changed while rejection was pending", async () => {
