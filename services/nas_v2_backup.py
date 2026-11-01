@@ -462,7 +462,7 @@ def _native_dump_path(
     }
     if on_pending is not None:
         on_pending(pending)
-    _run([systemctl_bin, "restart", preparation_unit], timeout=3600)
+    _run([systemctl_bin, "restart", preparation_unit])
     artifact = _validate_staged_artifact_path(resource_id, artifact_path, artifact_resource)
     try:
         produced = any(artifact.iterdir())
@@ -624,7 +624,7 @@ def _stop_native_dump(entry: dict[str, Any], systemctl_bin: str) -> None:
         return
     # systemctl start/restart is a waiting client. Its timeout does not imply
     # the systemd unit has stopped writing to the staged backup artifact.
-    _run([systemctl_bin, "stop", unit], timeout=120)
+    _run([systemctl_bin, "stop", unit])
 
 
 def cleanup(

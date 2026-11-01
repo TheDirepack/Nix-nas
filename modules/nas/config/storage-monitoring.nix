@@ -248,12 +248,6 @@ in
     };
 
     systemd.services.restic-backups-nas-boot-system = lib.mkIf cfg.backup.enable {
-      # Cleanup can synchronously stop any number of V2 native-dump units.
-      # The Python cleanup helper bounds each systemctl client wait and
-      # persists outstanding work after individual failures. A fixed systemd
-      # stop timeout would abort that helper mid-cleanup and lose its journal.
-      # Do not impose a service-level aggregate timeout on this cleanup path.
-      serviceConfig.TimeoutStopSec = "infinity";
       requires = [ "nas-managed-services-reconcile.service" ]
         ++ lib.optional (cfg.backup.repositoryFile == "" && !remoteEnabled) "nas-zfs-mount-guard.service";
       after = [ "nas-managed-services-reconcile.service" ]
