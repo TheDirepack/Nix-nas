@@ -174,10 +174,10 @@ class SecuritySurfaceTests(unittest.TestCase):
             'false || command -p eval "$payload"',
         )
         not_executed = (
-            'command -v eval',
-            'command -V eval',
+            "command -v eval",
+            "command -V eval",
             'printf "eval is a string\\n"',
-            'nix eval --raw .#value',
+            "nix eval --raw .#value",
         )
         for line in executed:
             with self.subTest(executed=line):
