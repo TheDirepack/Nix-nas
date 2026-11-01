@@ -211,13 +211,14 @@ def prune_generations(
     for path in candidates:
         if len(keep) >= retain:
             break
-        keep.add(path)
+        keep.add(path.resolve())
 
     removed: list[pathlib.Path] = []
     for path in candidates:
-        if path in keep:
+        if path.resolve() in keep:
             continue
         try:
+            _unseal_tree(path)
             shutil.rmtree(path)
         except OSError as exc:
             raise GenerationError(f"unable to prune old generation {path}: {exc}") from exc
@@ -236,6 +237,15 @@ def _refuse_if_current(path: pathlib.Path, current_link: pathlib.Path) -> None:
         raise GenerationError(f"refusing to discard current generation {path}")
 
 
+def _unseal_tree(path: pathlib.Path) -> None:
+    os.chmod(path, 0o700)
+    for directory in (item for item in path.rglob("*") if item.is_dir()):
+        try:
+            os.chmod(directory, 0o700)
+        except OSError:
+            pass
+
+
 def discard_generation(path: pathlib.Path, *, current_link: pathlib.Path) -> None:
     """Best-effort cleanup of one candidate not selected by ``current``.
 
@@ -247,12 +257,7 @@ def discard_generation(path: pathlib.Path, *, current_link: pathlib.Path) -> Non
         if path.exists() and path.is_dir() and not path.is_symlink():
             resolved = path.resolve(strict=True)
             _refuse_if_current(resolved, current_link)
-            os.chmod(path, 0o700)
-            for directory in (item for item in path.rglob("*") if item.is_dir()):
-                try:
-                    os.chmod(directory, 0o700)
-                except OSError:
-                    pass
+            _unseal_tree(path)
             _refuse_if_current(resolved, current_link)
             shutil.rmtree(path)
     except GenerationError:
