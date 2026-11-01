@@ -77,8 +77,8 @@
           };
           port = lib.mkOption {
             type = lib.types.port;
-            default = 9000;
-            description = "Loopback NUT Web GUI HTTP port.";
+            default = 9005;
+            description = "Loopback NUT Web GUI HTTP port, separate from Authentik.";
           };
           upsdAddress = lib.mkOption {
             type = lib.types.str;
