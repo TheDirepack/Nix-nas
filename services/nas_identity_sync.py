@@ -31,7 +31,7 @@ import urllib.request
 from typing import Any, Mapping
 
 from nas_common import ADMIN_GROUP, DISABLED_GROUP
-from nas_operation_journal import JournalError, OperationJournal, atomic_write_json, load_json
+from nas_operation_journal import JournalError, OperationJournal, load_json
 from nas_operation_lock import (
     COORDINATION_TOKEN_ENV,
     OperationBusyError,
