@@ -64,7 +64,9 @@ pkgs.testers.runNixOSTest {
     telegraf_environment = shlex.split(machine.succeed("systemctl show telegraf.service --property=Environment --value"))
     telegraf_path = next(value.removeprefix("PATH=") for value in telegraf_environment if value.startswith("PATH="))
     smart_rule = machine.succeed("sudo -n -l -U telegraf")
-    smart_wrapper = re.search(r"/nix/store/[A-Za-z0-9-]+-nas-smartctl-readonly", smart_rule).group(0)
+    smart_match = re.search(r"/nix/store/[A-Za-z0-9-]+-nas-smartctl-readonly", smart_rule)
+    assert smart_match is not None, "Telegraf sudo policy is missing its read-only SMART wrapper"
+    smart_wrapper = smart_match.group(0)
     smart_command = "runuser -u telegraf -- env " + shlex.quote("PATH=" + telegraf_path) + " sh -c "
     machine.succeed(smart_command + shlex.quote('test "$(command -v sudo)" = /run/wrappers/bin/sudo && sudo -n "$1" --scan') + " _ " + shlex.quote(smart_wrapper))
     machine.succeed(smart_command + shlex.quote('sudo -n "$1" --set=on /dev/vdb; test "$?" = 64') + " _ " + shlex.quote(smart_wrapper))

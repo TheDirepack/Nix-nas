@@ -8,6 +8,8 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import textwrap
+from types import SimpleNamespace
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -50,6 +52,21 @@ def numeric_series_from_line_protocol(text: str) -> dict[str, list[float]]:
 
 
 class ObservabilityIngestionContractTests(unittest.TestCase):
+    def test_installed_smart_rule_requires_a_wrapper_before_extracting_its_path(self) -> None:
+        source = (ROOT / "tests/nixos/integration.nix").read_text()
+        snippet = "smart_rule =" + source.split("smart_rule =", 1)[1].split("    smart_command =", 1)[0]
+        snippet = textwrap.dedent("    " + snippet)
+        wrapper = "/nix/store/0123456789abcdefghijklmnopqrstuv-nas-smartctl-readonly"
+        for rule in ("(root) NOPASSWD: " + wrapper, "no matching sudo rule"):
+            with self.subTest(rule=rule):
+                namespace = {"re": re, "machine": SimpleNamespace(succeed=lambda _command: rule)}
+                if rule.startswith("(root)"):
+                    exec(snippet, namespace)
+                    self.assertEqual(namespace["smart_wrapper"], wrapper)
+                else:
+                    with self.assertRaisesRegex(AssertionError, "SMART wrapper"):
+                        exec(snippet, namespace)
+
     def run_smart_wrapper(self, arguments: list[str], *, exit_status: int = 0) -> subprocess.CompletedProcess[str]:
         source = OBSERVABILITY.read_text(encoding="utf-8")
         script = source.split("smartctlReadOnly = pkgs.writeShellScript \"nas-smartctl-readonly\" ''", 1)[1].split(
