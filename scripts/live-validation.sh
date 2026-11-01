@@ -4,7 +4,14 @@ set -Eeuo pipefail
 fail() { printf 'live-validation: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || fail "missing command: $1"; }
 need_env() { [[ -n "${!1:-}" ]] || fail "set $1"; }
-confirm() { [[ "${NAS_LIVE_CONFIRM:-}" == "$1" ]] || fail "set NAS_LIVE_CONFIRM=$1"; }
+confirm() {
+  # Accept exact tokens or an explicit comma-separated authorization set.
+  local wanted=$1
+  case ",${NAS_LIVE_CONFIRM:-}," in
+    *,"$wanted",*) ;;
+    *) fail "set NAS_LIVE_CONFIRM=$wanted (or include it in a comma-separated list)" ;;
+  esac
+}
 
 read_secret_file() {
   local path=$1 mode
@@ -47,7 +54,9 @@ remote_zfs() {
     'case "$action" in' \
     '  clone) exec zfs clone -- "$first" "$second" ;;' \
     '  destroy) exec zfs destroy -- "$first" ;;' \
+    '  destroy-recursive) exec zfs destroy -r -- "$first" ;;' \
     '  mountpoint) exec zfs get -H -o value mountpoint "$first" ;;' \
+    '  list) exec zfs list -H -o name -t filesystem,volume ;;' \
     '  *) exit 64 ;;' \
     'esac' \
     | ssh -o BatchMode=yes "$host" bash -s -- "$action" "$first" "$second"
@@ -76,15 +85,18 @@ sys.stdout.write("".join(out))
 curl_basic() {
   local username=$1 password=$2
   shift 2
-  printf 'user = "%s:%s"\n' "$(curl_config_escape "$username")" "$(curl_config_escape "$password")" \
-    | curl --config - "$@"
+  local escaped_user escaped_password
+  escaped_user=$(curl_config_escape "$username")
+  escaped_password=$(curl_config_escape "$password")
+  printf 'user = "%s:%s"\n' "$escaped_user" "$escaped_password" | curl --config - "$@"
 }
 
 curl_bearer() {
   local token=$1
   shift
-  printf 'header = "Authorization: Bearer %s"\n' "$(curl_config_escape "$token")" \
-    | curl --config - "$@"
+  local escaped_token
+  escaped_token=$(curl_config_escape "$token")
+  printf 'header = "Authorization: Bearer %s"\n' "$escaped_token" | curl --config - "$@"
 }
 
 locked_boot() {
@@ -113,8 +125,9 @@ locked_boot() {
   nas-zfs-mount-check
 }
 
-copyparty() {
+copyparty() (
   need curl
+  need python3
   need_env NAS_COPY_USER
   need_env NAS_COPY_PASSWORD_FILE
   need_env NAS_COPY_BASE_URL
@@ -122,7 +135,7 @@ copyparty() {
   local password=$REPLY temp remote downloaded
   temp=$(mktemp)
   downloaded=$(mktemp)
-  trap 'rm -f "$temp" "$downloaded"' RETURN
+  trap 'rm -f "$temp" "$downloaded"' EXIT
   printf 'nas live validation %s\n' "$(date -u +%FT%TZ)" > "$temp"
   nas-identity-sync sync >/dev/null
   if [[ -n "${NAS_COPY_EXPECTED_PATH:-}" ]]; then
@@ -136,67 +149,96 @@ copyparty() {
   if [[ -n "${NAS_COPY_NATIVE_SHARE_URL:-}" ]]; then
     curl --fail --silent --show-error "$NAS_COPY_NATIVE_SHARE_URL" >/dev/null
   fi
-}
+)
 
-syncoid_drill() {
+syncoid_drill() (
   confirm SYNCOID_DRILL
   need syncoid
   need zfs
   need_env NAS_SYNCOID_SOURCE
   need_env NAS_SYNCOID_TARGET
   local stamp child snapshot mountpoint marker target_dataset target_host clone cleanup_remote=false
-  stamp=$(date -u +%Y%m%d%H%M%S)
+  local target_spec remote_path local_datasets target_datasets
+  local owned_child=false owned_target=false owned_clone=false
+  stamp="$(date -u +%Y%m%d%H%M%S)-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
   child="${NAS_SYNCOID_SOURCE}/nas-live-$stamp"
   snapshot="$child@validation"
   validate_dataset "$child"
   validate_dataset "$snapshot"
+  target_spec=${NAS_SYNCOID_TARGET%/}
+  # Validate the target and clone BEFORE creating the local drill dataset.
+  if [[ "$target_spec" == *:* ]]; then
+    need ssh
+    target_host=${target_spec%%:*}
+    remote_path=${target_spec#*:}
+    [[ "$target_host" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || fail "unsafe Syncoid target host"
+    validate_dataset "$remote_path"
+    target_dataset="$remote_path/nas-live-$stamp"
+    clone="${NAS_SYNCOID_REMOTE_CLONE:-${target_dataset}-restore}"
+    cleanup_remote=true
+  else
+    validate_dataset "$target_spec"
+    target_dataset="$target_spec/nas-live-$stamp"
+    clone="${NAS_SYNCOID_LOCAL_CLONE:-${target_dataset}-restore}"
+  fi
+  validate_dataset "$target_dataset"
+  validate_dataset "$clone"
+  [[ "$clone" != "$child" && "$clone" != "$target_dataset" ]] || fail "drill clone must differ from source and target"
+
+  # Inventory must be readable *before* any mutation. A failed list is not
+  # evidence of absence. Never treat a name collision as our own data.
+  local_datasets=$(zfs list -H -o name -t filesystem,volume) || fail "cannot inspect local ZFS datasets"
+  if "$cleanup_remote"; then
+    target_datasets=$(remote_zfs "$target_host" list "$remote_path") || fail "cannot inspect remote ZFS datasets"
+  else
+    target_datasets=$local_datasets
+  fi
+  ! grep -Fxq -- "$child" <<< "$local_datasets" || fail "source dataset already exists: $child"
+  ! grep -Fxq -- "$target_dataset" <<< "$target_datasets" || fail "target dataset already exists: $target_dataset"
+  ! grep -Fxq -- "$clone" <<< "$target_datasets" || fail "clone dataset already exists: $clone"
+
+  # shellcheck disable=SC2329 # invoked by EXIT trap
   cleanup_syncoid() {
-    set +e
     if "$cleanup_remote"; then
-      remote_zfs "$target_host" destroy "$clone" >/dev/null 2>&1 || true
-      remote_zfs "$target_host" destroy "$target_dataset" >/dev/null 2>&1 || true
+      if "$owned_clone"; then remote_zfs "$target_host" destroy "$clone" >/dev/null 2>&1 || true; fi
+      if "$owned_target"; then remote_zfs "$target_host" destroy-recursive "$target_dataset" >/dev/null 2>&1 || true; fi
     else
-      [[ -z "${clone:-}" ]] || zfs destroy -r -- "$clone" >/dev/null 2>&1 || true
-      [[ -z "${target_dataset:-}" ]] || zfs destroy -r -- "$target_dataset" >/dev/null 2>&1 || true
+      if "$owned_clone"; then zfs destroy -r -- "$clone" >/dev/null 2>&1 || true; fi
+      if "$owned_target"; then zfs destroy -r -- "$target_dataset" >/dev/null 2>&1 || true; fi
     fi
-    zfs destroy -r -- "$child" >/dev/null 2>&1 || true
+    if "$owned_child"; then zfs destroy -r -- "$child" >/dev/null 2>&1 || true; fi
   }
-  trap cleanup_syncoid RETURN
+  trap cleanup_syncoid EXIT
   zfs create -- "$child"
+  owned_child=true
   mountpoint=$(zfs get -H -o value mountpoint "$child")
   marker="nas-live-$stamp"
   printf '%s
 ' "$marker" > "$mountpoint/marker.txt"
   zfs snapshot -- "$snapshot"
-  syncoid --no-sync-snap "$child" "${NAS_SYNCOID_TARGET%/}/nas-live-$stamp"
-  if [[ "$NAS_SYNCOID_TARGET" == *:* ]]; then
-    need ssh
-    target_host=${NAS_SYNCOID_TARGET%%:*}
-    target_dataset=${NAS_SYNCOID_TARGET#*:}/nas-live-$stamp
-    clone="${NAS_SYNCOID_REMOTE_CLONE:-${target_dataset}-restore}"
-    validate_dataset "$target_dataset"
-    validate_dataset "$clone"
-    cleanup_remote=true
+  # If replication fails after creating a partial destination, leave it
+  # for operator inspection; do not assume ownership of an incomplete run.
+  syncoid --no-sync-snap "$child" "$target_dataset"
+  owned_target=true
+  if "$cleanup_remote"; then
     remote_zfs "$target_host" clone "$target_dataset@validation" "$clone"
+    owned_clone=true
     remote_mount=$(remote_zfs "$target_host" mountpoint "$clone")
     [[ "$(ssh -o BatchMode=yes "$target_host" cat -- "$remote_mount/marker.txt")" == "$marker" ]]
     remote_zfs "$target_host" destroy "$clone"
-    clone=""
+    owned_clone=false
   else
-    target_dataset="${NAS_SYNCOID_TARGET%/}/nas-live-$stamp"
-    clone="${NAS_SYNCOID_LOCAL_CLONE:-${target_dataset}-restore}"
-    validate_dataset "$target_dataset"
-    validate_dataset "$clone"
     zfs clone -- "$target_dataset@validation" "$clone"
+    owned_clone=true
     [[ "$(cat "$(zfs get -H -o value mountpoint "$clone")/marker.txt")" == "$marker" ]]
     zfs destroy -- "$clone"
-    clone=""
+    owned_clone=false
   fi
   zfs destroy -r -- "$child"
-  child=""
-}
+  owned_child=false
+)
 
-restic_drill() {
+restic_drill() (
   confirm RESTIC_DRILL
   need jq
   need restic
@@ -204,24 +246,27 @@ restic_drill() {
   need_env RESTIC_PASSWORD_FILE
   need_env NAS_RESTIC_SOURCE
   need_env NAS_RESTIC_RESTORE_TARGET
-  local stamp marker snapshot_id restored restore_root
-  stamp=$(date -u +%Y%m%d%H%M%S)
-  marker="$NAS_RESTIC_SOURCE/.nas-live-$stamp"
-  restore_root="$NAS_RESTIC_RESTORE_TARGET/nas-live-$stamp"
-  restored="$restore_root${NAS_RESTIC_SOURCE}/.nas-live-$stamp"
+  local marker="" snapshot_id restored restore_root="" run_id
+  [[ -d "$NAS_RESTIC_SOURCE" ]] || fail "Restic source directory is missing: $NAS_RESTIC_SOURCE"
+  [[ -d "$NAS_RESTIC_RESTORE_TARGET" ]] || fail "Restic restore parent is missing: $NAS_RESTIC_RESTORE_TARGET"
+  # mktemp atomically claims a unique marker; never overwrite another run's file.
+  marker=$(mktemp -- "$NAS_RESTIC_SOURCE/.nas-live-XXXXXXXX")
+  # shellcheck disable=SC2329 # invoked by EXIT trap
   cleanup_restic() {
-    rm -f -- "$marker"
-    rm -rf -- "$restore_root"
+    [[ -z "$marker" ]] || rm -f -- "$marker"
+    [[ -z "$restore_root" ]] || rm -rf -- "$restore_root"
   }
-  trap cleanup_restic RETURN
-  install -d -m 0700 "$NAS_RESTIC_SOURCE" "$restore_root"
-  printf '%s
-' "$stamp" > "$marker"
+  trap cleanup_restic EXIT
+  # Only a successfully created, run-owned directory may enter the cleanup trap.
+  restore_root=$(mktemp -d -- "$NAS_RESTIC_RESTORE_TARGET/nas-live-XXXXXXXX")
+  run_id=${marker##*/}
+  restored="$restore_root${NAS_RESTIC_SOURCE}/$run_id"
+  printf '%s\n' "$run_id" > "$marker"
   snapshot_id=$(restic backup --json "$NAS_RESTIC_SOURCE" | jq -r 'select(.message_type == "summary") | .snapshot_id')
   [[ -n "$snapshot_id" && "$snapshot_id" != null ]] || fail "restic did not return a snapshot id"
   restic restore "$snapshot_id" --target "$restore_root"
   cmp "$marker" "$restored"
-}
+)
 
 authentik() {
   need curl
@@ -253,9 +298,17 @@ observability() {
   metric="nas_live_validation,run=$stamp value=1i"
   curl --fail --silent --show-error --data-binary "$metric" \
     http://127.0.0.1:8428/victoriametrics/write >/dev/null
-  curl --fail --silent --show-error \
-    "http://127.0.0.1:8428/victoriametrics/api/v1/query?query=nas_live_validation_value%7Brun%3D%22$stamp%22%7D" \
-    | jq -e '.status == "success" and (.data.result | length) == 1' >/dev/null
+  local observed=false
+  for _ in {1..10}; do
+    if curl --fail --silent --show-error \
+      "http://127.0.0.1:8428/victoriametrics/api/v1/query?query=nas_live_validation_value%7Brun%3D%22$stamp%22%7D" \
+      | jq -e '.status == "success" and (.data.result | length) == 1' >/dev/null; then
+      observed=true
+      break
+    fi
+    sleep 5
+  done
+  "$observed" || fail "VictoriaMetrics did not expose the written sample within 50 seconds"
   curl --fail --silent --show-error http://127.0.0.1:8880/-/healthy >/dev/null
   curl --fail --silent --show-error http://127.0.0.1:8880/api/v1/rules \
     | jq -e '.status == "success"' >/dev/null
@@ -279,6 +332,12 @@ case "${1:-}" in
   restic) restic_drill ;;
   authentik) authentik ;;
   observability) observability ;;
-  all) locked_boot; copyparty; syncoid_drill; restic_drill; authentik; observability ;;
+  all)
+    # Validate every required destructive consent before the first mutation.
+    confirm LOCKED_BOOT
+    confirm SYNCOID_DRILL
+    confirm RESTIC_DRILL
+    locked_boot; copyparty; syncoid_drill; restic_drill; authentik; observability
+    ;;
   *) fail "usage: $0 {locked-boot|copyparty|syncoid|restic|authentik|observability|all}" ;;
 esac
