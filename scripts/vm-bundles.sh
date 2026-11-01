@@ -275,8 +275,15 @@ save() {
     local export_name=$1 export_paths=$2 export_archive=$3 export_tmp=$4
     local path_count
     local heartbeat_pid
-    local -a export_status
-    path_count="$(wc -l < "$export_paths")"
+    local -a export_status store_paths=()
+    # Each nix-store --export invocation emits a complete terminated NAR
+    # stream. xargs splitting creates concatenated streams, which are not one
+    # importable archive. Keep all paths in one argv; fail closed on E2BIG.
+    mapfile -t store_paths < "$export_paths"
+    path_count="${#store_paths[@]}"
+    for store_path in "${store_paths[@]}"; do
+      [[ -n "$store_path" && "$store_path" == /* ]] || die "invalid export store path for $export_name"
+    done
     printf '%s: exporting %s bundle (%s store paths)\n' \
       "$PROG" "$export_name" "$path_count" >&2
     # The heartbeat is a separate process group so its sleep child cannot
@@ -293,7 +300,7 @@ save() {
     # These archives are disposable cache transport, not release artifacts.
     # Fast deterministic compression keeps a cold handoff from spending most
     # of its time compressing data that Nix will checksum and cache again.
-    xargs --no-run-if-empty "$NIX_STORE_CMD" --export < "$export_paths" | gzip -1 -n > "$export_tmp"
+    "$NIX_STORE_CMD" --export "${store_paths[@]}" | gzip -1 -n > "$export_tmp"
     export_status=("${PIPESTATUS[@]}")
     set -e
     kill -- "-$heartbeat_pid" 2>/dev/null || kill -KILL "$heartbeat_pid" 2>/dev/null || true
@@ -317,9 +324,11 @@ save() {
     archive="$dir/$name.nar.gz"
     tmp="$archive.tmp.$$"
     if [[ $name == vm-drivers ]]; then
-      comm -23 <(closure_cached "$name") "$base_file" > "$dir/.export.paths"
+      closure_cached "$name" > "$dir/.export.full.paths"
+      comm -23 "$dir/.export.full.paths" "$base_file" > "$dir/.export.paths"
     else
-      comm -23 <(closure_cached "$name") "$core_file" > "$dir/.export.paths"
+      closure_cached "$name" > "$dir/.export.full.paths"
+      comm -23 "$dir/.export.full.paths" "$core_file" > "$dir/.export.paths"
     fi
     export_bundle "$name" "$dir/.export.paths" "$archive" "$tmp"
   done < <(list_bundles)
@@ -327,7 +336,7 @@ save() {
   write_manifest
   verify_manifest "$dir"
   write_handoff_checksum "$dir"
-  rm -f "$core_file" "$application_file" "$base_file" "$dir/.export.paths"
+  rm -f "$core_file" "$application_file" "$base_file" "$dir/.export.paths" "$dir/.export.full.paths"
   rm -rf -- "$closure_cache"
   SAVE_CLOSURE_CACHE=
   trap - EXIT
@@ -445,7 +454,6 @@ main() {
       [[ $# -eq 1 ]] || die "save requires exactly one directory argument"
       need "$NIX"
       need "$NIX_STORE_CMD"
-      need xargs
       need sha256sum
       save "$1"
       ;;
@@ -453,7 +461,6 @@ main() {
       [[ $# -eq 1 ]] || die "save-missing requires exactly one directory argument"
       need "$NIX"
       need "$NIX_STORE_CMD"
-      need xargs
       need sha256sum
       save "$1" 1
       ;;
