@@ -3,6 +3,7 @@
 This developer probe deliberately exercises an actual display session. It is not
 an application launcher, management API, or production V2 implementation.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -49,16 +50,31 @@ def private_xvfb(*, width: int = 800, height: int = 600, depth: int = 24, timeou
             result = subprocess.run(
                 ["xauth", "-f", str(authority), "-"],
                 input=f"add {display} MIT-MAGIC-COOKIE-1 {cookie}\n",
-                capture_output=True, text=True, timeout=3, check=False,
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
             )
             if result.returncode:
                 raise RuntimeError("xauth rejected private cookie: " + result.stderr.strip())
             env = dict(os.environ, DISPLAY=display, XAUTHORITY=str(authority))
             proc = subprocess.Popen(
-                ["Xvfb", display, "-screen", "0", f"{width}x{height}x{depth}",
-                 "-nolisten", "tcp", "-auth", str(authority), "-noreset"],
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE, env=env,
+                [
+                    "Xvfb",
+                    display,
+                    "-screen",
+                    "0",
+                    f"{width}x{height}x{depth}",
+                    "-nolisten",
+                    "tcp",
+                    "-auth",
+                    str(authority),
+                    "-noreset",
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                env=env,
             )
             try:
                 deadline = time.monotonic() + timeout
@@ -68,7 +84,11 @@ def private_xvfb(*, width: int = 800, height: int = 600, depth: int = 24, timeou
                         break
                     try:
                         probe = subprocess.run(
-                            ["xdpyinfo"], env=env, capture_output=True, timeout=1, check=False,
+                            ["xdpyinfo"],
+                            env=env,
+                            capture_output=True,
+                            timeout=1,
+                            check=False,
                         )
                     except subprocess.TimeoutExpired:
                         # A slow client is not a failed display until the outer deadline.
@@ -122,9 +142,12 @@ def main() -> int:
     parser.add_argument("--screenshot", type=Path, help="save a screenshot during this disposable probe")
     args = parser.parse_args()
     with private_xvfb() as (display, env, private_dir, _proc):
-        status: dict[str, object] = {"display": display, "isolated_cookie": True,
-                                     "private_dir_mode": oct(private_dir.stat().st_mode & 0o777),
-                                     "tcp_listener": False}
+        status: dict[str, object] = {
+            "display": display,
+            "isolated_cookie": True,
+            "private_dir_mode": oct(private_dir.stat().st_mode & 0o777),
+            "tcp_listener": False,
+        }
         if args.screenshot:
             size = snapshot_png(env, args.screenshot)
             status["screenshot_size"] = list(size)

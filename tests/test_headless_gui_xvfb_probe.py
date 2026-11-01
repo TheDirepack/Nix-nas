@@ -1,4 +1,5 @@
 """Opt-in local Linux display proof: no NixOS/Podman claim from host tests."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -114,12 +115,14 @@ class PrivateDisplaySmokeTest(unittest.TestCase):
                 after = Path(out) / "after.png"
                 probe.snapshot_png(env, before)
                 app = subprocess.Popen(
-                    ["xterm", "-geometry", "40x10+20+20", "-bg", "white", "-fg", "black",
-                     "-e", "sh", "-c", "sleep 4"],
-                    env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                    ["xterm", "-geometry", "40x10+20+20", "-bg", "white", "-fg", "black", "-e", "sh", "-c", "sleep 4"],
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
                 )
                 try:
                     import time
+
                     for _ in range(20):
                         time.sleep(0.1)
                         if app.poll() is not None:
@@ -143,10 +146,17 @@ class PrivateDisplaySmokeTest(unittest.TestCase):
                 self.assertEqual(subprocess.run(["xdpyinfo"], env=env_b, capture_output=True, timeout=2).returncode, 0)
                 # Re-key B's real cookie to display A. This tests cookie rejection,
                 # rather than merely failing because B's authority lacks an A entry.
-                b_cookie_entries = subprocess.run(
-                    ["xauth", "-f", env_b["XAUTHORITY"], "list", b],
-                    capture_output=True, text=True, check=True, timeout=2,
-                ).stdout.strip().splitlines()
+                b_cookie_entries = (
+                    subprocess.run(
+                        ["xauth", "-f", env_b["XAUTHORITY"], "list", b],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                        timeout=2,
+                    )
+                    .stdout.strip()
+                    .splitlines()
+                )
                 self.assertEqual(len(b_cookie_entries), 1)
                 b_cookie = b_cookie_entries[0].split()[-1]
                 self.assertEqual(len(b_cookie), 32)
@@ -155,7 +165,10 @@ class PrivateDisplaySmokeTest(unittest.TestCase):
                 crossed_authority.chmod(0o600)
                 subprocess.run(
                     ["xauth", "-f", str(crossed_authority), "add", a, "MIT-MAGIC-COOKIE-1", b_cookie],
-                    capture_output=True, text=True, check=True, timeout=2,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=2,
                 )
                 crossed = dict(env_a, XAUTHORITY=str(crossed_authority))
                 self.assertNotEqual(
