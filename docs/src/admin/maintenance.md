@@ -24,8 +24,8 @@ For offline checks before installation or while debugging, use `nas-v2 validate`
 
 ## Failed identity account-plan recovery
 
-An interrupted \`nas-identity-sync apply-accounts\` can leave the durable
-account-plan journal in \`failed\` status. A corrected plan with a different
+An interrupted `nas-identity-sync apply-accounts` can leave the durable
+account-plan journal in `failed` status. A corrected plan with a different
 fingerprint is intentionally blocked until the operator reviews the partial
 changes: some earlier Authentik user or password operations may already have
 succeeded, even when the entire plan failed.
@@ -33,22 +33,22 @@ succeeded, even when the entire plan failed.
 Inspect the password-free journal summary and the live Authentik accounts
 before proceeding:
 
-\`\`\`bash
+```bash
 sudo nas-identity-sync account-journal
 sudo nas-identity-sync status
-\`\`\`
+```
 
 Only after reviewing the completed and failed steps, explicitly abandon the
 **failed** journal using the exact fingerprint reported above and a note:
 
-\`\`\`bash
+```bash
 sudo nas-identity-sync cancel-failed-accounts \
   --fingerprint FINGERPRINT_FROM_ACCOUNT_JOURNAL \
   --note "Reviewed partial account changes and prepared a corrected plan"
-\`\`\`
+```
 
 Cancellation preserves an owner-private archived journal under
-\`/var/lib/nas-identity-sync/account-plan-history/\`. It does **not** undo
+`/var/lib/nas-identity-sync/account-plan-history/`. It does **not** undo
 any Authentik changes, restore passwords, delete identities, or automatically
 replay the plan. Running, ambiguous, completed, and manual-recovery-required
 journals cannot be cancelled by this command. After cancellation, preview
