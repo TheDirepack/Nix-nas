@@ -1289,8 +1289,7 @@ def cancel_failed_account_plan(*, fingerprint: str, note: str) -> dict[str, Any]
         raise SyncError("Only failed account journals may be cancelled; running or uncertain work needs recovery")
     steps = previous.get("steps")
     if not isinstance(steps, dict) or any(
-        not isinstance(item, dict) or item.get("status") not in {"complete", "failed"}
-        for item in steps.values()
+        not isinstance(item, dict) or item.get("status") not in {"complete", "failed"} for item in steps.values()
     ):
         raise SyncError("Account journal has unverified or running steps; manual recovery required")
 
@@ -1299,9 +1298,7 @@ def cancel_failed_account_plan(*, fingerprint: str, note: str) -> dict[str, Any]
         history_dir.mkdir(mode=0o700, exist_ok=True)
         if history_dir.is_symlink() or not history_dir.is_dir() or history_dir.stat().st_mode & 0o077:
             raise SyncError("Account journal history must be a private real directory")
-        archived_path = history_dir / (
-            f"{int(time.time())}-{fingerprint[:12]}-{secrets.token_hex(6)}.json"
-        )
+        archived_path = history_dir / f"{int(time.time())}-{fingerprint[:12]}-{secrets.token_hex(6)}.json"
         atomic_write_json(archived_path, previous)
         changed = dict(previous)
         changed["status"] = "cancelled"
