@@ -212,6 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True, type=pathlib.Path)
     parser.add_argument("--sys-class-drm", type=pathlib.Path, default=pathlib.Path("/sys/class/drm"))
     parser.add_argument("--dev-root", type=pathlib.Path, default=pathlib.Path("/dev"))
+    parser.add_argument("--nvidia-ctk-bin", default="nvidia-ctk")
     return parser
 
 
@@ -224,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
                 _load_base(args.base),
                 sys_class_drm=args.sys_class_drm,
                 dev_root=args.dev_root,
+                nvidia_ctk_bin=args.nvidia_ctk_bin,
             ),
         )
     except PlatformProbeError as exc:
