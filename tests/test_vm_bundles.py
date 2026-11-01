@@ -229,9 +229,7 @@ class VmBundleScriptTests(unittest.TestCase):
         output = self._root / "bundles"
         result = self._run("save", str(output), env=env)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
-        calls = [
-            line for line in store_log.read_text(encoding="utf-8").splitlines() if line.startswith("--export")
-        ]
+        calls = [line for line in store_log.read_text(encoding="utf-8").splitlines() if line.startswith("--export")]
         self.assertEqual(
             len(calls),
             len(EXPECTED_BUNDLES),
