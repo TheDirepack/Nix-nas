@@ -13,7 +13,7 @@ states in `nas-setup status`:
 - `configuration-missing`: create the configured JSON file;
 - `configuration-invalid`: correct the reported schema or policy error;
 - `state-invalid`: repair or recover the setup journal/state file;
-- `ready`: review the exact non-secret storage, account, feature plan, and plan
+- `ready`: review the exact non-secret storage, account, managed-service policy plan, and plan
   digest, then enter the KeePassXC database password;
 - `configuration-changed`: the normalized plan differs from the plan that was
   completed and must be reviewed again;
@@ -32,7 +32,7 @@ nas.firstStart.configFile = "/etc/nixos/nixos-nas/first-run.json";
 
 `nas-setup` performs the actual appliance workflow by calling the existing
 component authorities in their required order. It does not replace NixOS,
-KeePassXC, Authentik, CopyParty, ZFS, or the feature controller.
+KeePassXC, Authentik, CopyParty, ZFS, or the finite Managed Services V2 compiler and native runtime authorities.
 
 ## Prepare the configuration
 
@@ -81,8 +81,8 @@ remains declarative NixOS configuration rather than a second mutable setup
 authority.
 
 Copy `setup/first-run.example.json` and edit it outside the Nix store. The file
-may define storage creation, Authentik accounts, reserved NAS groups, and initial
-feature modes.
+may define storage creation, Authentik accounts, reserved NAS identity-role groups, and initial
+managed-service lifecycle modes.
 
 Do not place plaintext passwords in the JSON file. Each account can reference a
 private password file:
@@ -178,7 +178,7 @@ The workflow prompts once for the KeePass database password. It then:
 8. creates only the ZFS-backed personal directories required by file-enabled
    accounts, leaving CopyParty ACLs and volumes authoritative;
 9. reconciles managed Syncthing objects when enabled;
-10. applies requested feature lifecycle modes;
+10. applies requested managed-service lifecycle policies through V2;
 11. runs mount, identity, and optional repository preflight checks; and
 12. writes a password-free completion report to
     `/var/lib/nas-setup/state.json`.
