@@ -594,9 +594,7 @@ def _validate_managed_files(service_id: str, service: dict[str, Any]) -> None:
                 path=f"{prefix}.destination",
                 code="managed-file-path",
             )
-        if target == pathlib.PurePosixPath("/") or any(
-            _under(root, target) for root in reserved
-        ):
+        if target == pathlib.PurePosixPath("/") or any(_under(root, target) for root in reserved):
             raise ManagedServicesV2Error(
                 "Managed file destination overlaps a reserved runtime path",
                 path=f"{prefix}.destination",
