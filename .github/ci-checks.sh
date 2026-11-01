@@ -23,7 +23,7 @@ ci_run() {
   fi
 
   local log="$CI_LOG_DIR/$section-$slug.log"
-  local command_text start end elapsed rc
+  local command_text start end elapsed rc results_rc
   local -a pipeline_status
   printf -v command_text '%q ' "$@"
   command_text=${command_text% }
@@ -41,8 +41,14 @@ ci_run() {
 
   end=$(date +%s)
   elapsed=$((end - start))
-  printf '%s\t%s\t%s\t%d\t%d\t%s\t%s\n' \
-    "$section" "$slug" "$label" "$rc" "$elapsed" "$log" "$command_text" >> "$CI_RESULTS_FILE"
+  if printf '%s\t%s\t%s\t%d\t%d\t%s\t%s\n' \
+    "$section" "$slug" "$label" "$rc" "$elapsed" "$log" "$command_text" >> "$CI_RESULTS_FILE"; then
+    :
+  else
+    results_rc=$?
+    printf 'ci_run: unable to append results to %s (exit %d)\n' "$CI_RESULTS_FILE" "$results_rc" >&2
+    if ((rc == 0)); then rc=$results_rc; fi
+  fi
 
   if ((rc != 0)); then
     printf '::error title=%s::exit %d after %ds; full log: %s\n' "$label" "$rc" "$elapsed" "$log"
