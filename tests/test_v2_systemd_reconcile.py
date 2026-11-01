@@ -135,6 +135,63 @@ class V2SystemdReconcileTests(unittest.TestCase):
             self.assertEqual((runtime / unit).resolve(), source.resolve())
             self.assertNotIn("stop " + unit, log.read_text(encoding="utf-8"))
 
+    def test_active_unlinked_session_is_stopped_before_enabling_new_descriptor(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            projection = root / "projection"
+            units = projection / "units"
+            units.mkdir(parents=True)
+            unit = "nas-v2-session-agent.target"
+            source = units / unit
+            source.write_text("[Unit]\\nDescription=Agent\\n", encoding="utf-8")
+            manifest = projection / "manifest.json"
+            runtime = root / "systemd"
+            runtime.mkdir()
+            systemctl, log = self.make_systemctl(root)
+            kwargs = dict(
+                manifest=manifest, projection=projection, runtime=runtime,
+                state=root / "state.json", systemctl=systemctl, log=log,
+            )
+            manifest.write_text(
+                json.dumps({
+                    "schemaVersion": 1, "links": [], "quadletLinks": [],
+                    "ownedUnits": [unit], "startUnits": [], "stopUnits": [unit],
+                    "fingerprints": {},
+                }),
+                encoding="utf-8",
+            )
+            self.run_reconcile(**kwargs)
+            # Simulate an orphaned active unit after the disabled generation,
+            # even though the manifest contains no previous target link.
+            systemctl.write_text(
+                '#!/bin/sh\\nprintf "%s\\\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\\n'
+                'if [ "$1" = is-active ]; then printf "active\\\\n"; fi\\n'
+                'exit 0\\n',
+                encoding="utf-8",
+            )
+            log.write_text("", encoding="utf-8")
+            manifest.write_text(
+                json.dumps({
+                    "schemaVersion": 1,
+                    "links": [{"target": unit, "source": str(source)}],
+                    "quadletLinks": [], "ownedUnits": [unit],
+                    "startUnits": [], "stopUnits": [],
+                    "fingerprints": {unit: "new-descriptor"},
+                }),
+                encoding="utf-8",
+            )
+            result = self.run_reconcile(**kwargs)
+            commands = log.read_text(encoding="utf-8").splitlines()
+            self.assertIn("stop " + unit, commands)
+            self.assertNotIn("try-restart " + unit, commands)
+            self.assertNotIn("restart " + unit, commands)
+            self.assertEqual(result["stopped"], [unit])
+            self.assertEqual((runtime / unit).resolve(), source.resolve())
+            self.assertEqual(
+                json.loads((root / "state.json").read_text(encoding="utf-8"))["fingerprints"][unit],
+                "new-descriptor",
+            )
+
     def test_session_fingerprint_migration_preserves_unchanged_transients(self):
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
