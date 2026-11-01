@@ -54,8 +54,9 @@ in
     # Keep both repository-owned and generated blueprints in one writable
     # directory. The population service copies the immutable native tree so
     # Authentik's discovery walker sees nested system blueprints as files.
+    # tmpfiles runs before the selector installs the compatibility symlink.
     systemd.tmpfiles.rules = [
-      "d ${blueprintDir} 0750 authentik authentik -"
+      "d ${nasInternal.bootstrapAuthentikDataDir}/blueprints 0750 authentik authentik -"
     ];
 
     systemd.services.nas-authentik-blueprints = {

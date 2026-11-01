@@ -520,8 +520,21 @@ in
         ${pkgs.coreutils}/bin/install -d -m 0700 -o postgres -g postgres "$target/postgresql"
         ${pkgs.coreutils}/bin/install -d -m 0700 -o "$secret_owner" -g users "$target/nas-secrets"
         for name in authentik postgresql nas-secrets; do
-          ${pkgs.coreutils}/bin/rm -rf -- "/var/lib/$name"
-          ${pkgs.coreutils}/bin/ln -s "$target/$name" "/var/lib/$name"
+          destination="/var/lib/$name"
+          if [[ -L "$destination" ]]; then
+            # Only remove the link itself. Never follow it into user data.
+            ${pkgs.coreutils}/bin/rm -f -- "$destination"
+          elif [[ -d "$destination" ]]; then
+            # rmdir refuses to remove a populated preexisting directory.
+            ${pkgs.coreutils}/bin/rmdir -- "$destination" || {
+              echo "Refusing to replace populated service data at $destination" >&2
+              exit 1
+            }
+          elif [[ -e "$destination" ]]; then
+            echo "Refusing to replace unexpected service data at $destination" >&2
+            exit 1
+          fi
+          ${pkgs.coreutils}/bin/ln -s -- "$target/$name" "$destination"
         done
         ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g authentik /run/nas-authentik
         ${pkgs.coreutils}/bin/rm -f -- ${lib.escapeShellArg authentikRuntimeEnvironmentFile}
