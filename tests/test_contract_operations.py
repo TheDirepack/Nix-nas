@@ -102,7 +102,7 @@ class ContractTests(unittest.TestCase):
         systemd = text("modules/nas/config/managed-services.nix")
         self.assertIn("nas-managed-services-reconcile", systemd)
 
-    def test_v2_authority_bootstraps_before_first_run_storage(self) -> None:
+    def test_v2_authority_waits_for_storage_without_requiring_completed_setup(self) -> None:
         managed = text("modules/nas/config/managed-services.nix")
         seed = managed.split("systemd.services.nas-managed-services-seed = {", 1)[1].split(
             "systemd.services.nas-managed-services-reconcile = {", 1
@@ -112,8 +112,10 @@ class ContractTests(unittest.TestCase):
         )[0]
         protected = text("modules/nas/config/systemd-services.nix")
 
-        self.assertNotIn("nas-zfs-mount-guard.service", seed)
-        self.assertNotIn("RequiresMountsFor", seed)
+        self.assertIn("nas-zfs-mount-guard.service", seed)
+        self.assertIn("RequiresMountsFor", seed)
+        self.assertIn("ConditionPathIsMountPoint = cfg.zfsRoot;", seed)
+        self.assertNotIn("/var/lib/nas-setup/state.json", seed)
         self.assertIn("nas-zfs-mount-guard.service", reconcile)
         self.assertIn("systemd-tmpfiles --create --graceful --prefix", protected)
         self.assertIn("RequiresMountsFor", reconcile)

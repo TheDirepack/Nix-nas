@@ -41,6 +41,10 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     machine.wait_for_unit("multi-user.target")
     machine.succeed("test $(systemctl show -p Result --value nas-vm-test-repository.service) = success")
+    machine.succeed("systemctl start nas-managed-services-seed.service")
+    machine.succeed("test $(systemctl show -p ConditionResult --value nas-managed-services-seed.service) = no")
+    machine.succeed("test ! -e /var/lib/nas-control/services.yaml")
+    machine.succeed("test ! -e /var/lib/nas-control/.managed-services-native-seed-v2")
     machine.succeed("timeout --signal=TERM --kill-after=${toString outerKillAfter}s ${toString timeoutBudget.timeouts.encryptedGuest}s nas-vm-encrypted-guest-test /dev/vdb")
   '';
 }

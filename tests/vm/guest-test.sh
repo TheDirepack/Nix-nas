@@ -360,11 +360,6 @@ require_commands \
   nas-zfs-create-encrypted-dataset nas-zfs-export-recovery-key nas-zfs-lock \
   nas-zfs-mount-check nas-zfs-unlock proxy python3 readlink ss systemctl zfs zpool
 
-nas-managed-services-control status >/dev/null
-pass "nas-managed-services-control status reports the V2 authority"
-nas-managed-services-control document >/dev/null
-pass "nas-managed-services-control document returns the editable YAML authority"
-
 log "Locked-state and configuration checks"
 ! systemctl is-active --quiet cockpit.socket || fail "stock Cockpit socket must stay inactive while locked"
 wait_active nas-cockpit-sso.service
@@ -665,6 +660,10 @@ for required_keepass_entry in authentik-secret-key authentik-api-token state-bun
 done
 pass "setup replaced the bootstrap KeePass database and populated the fresh database"
 pass "GUI first start created the expected storage, accounts, and administrator"
+nas-managed-services-control status >/dev/null
+pass "nas-managed-services-control status reports the V2 authority"
+nas-managed-services-control document >/dev/null
+pass "nas-managed-services-control document returns the editable YAML authority"
 # This is a test-only static plan created by the disposable administrator.
 # Transfer it to the permanent administrator before verifying the idempotent
 # status path; browser-submitted production secrets are already deleted.

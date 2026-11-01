@@ -116,6 +116,17 @@ ss -tln | grep -Eq '127\.0\.0\.1:9092[[:space:]]' || fail "Cockpit SSO session i
 [[ ! -e /run/nas-secrets/ready ]] || fail "runtime secrets were unexpectedly active"
 ! systemctl is-active --quiet nas-protected-services.target || fail "protected services started before unlock"
 [[ ! -e /run/nas-control/effective.json ]] || fail "managed state was compiled before unlock"
+# A skipped mount guard is not sufficient: the seed itself must refuse to
+# create /tank/nas-control on the root filesystem before encrypted ZFS mounts.
+systemctl start nas-managed-services-seed.service >/dev/null 2>&1 || true
+# tmpfiles may create the directory itself before mount. The seed must
+# not populate its authority or marker on that backing filesystem.
+[[ ! -e /tank/nas-control/services.yaml ]] || fail "managed seed wrote desired state before ZFS mount"
+[[ ! -e /tank/nas-control/.managed-services-native-seed-v2 ]] || \
+  fail "managed seed wrote bootstrap marker before ZFS mount"
+! systemctl is-active --quiet nas-managed-services-seed.service || \
+  fail "managed seed became active before the encrypted dataset mounted"
+
 systemctl start nas-managed-services-authentik-reconcile.service
 [[ "$(systemctl show nas-managed-services-authentik-reconcile.service --property=ConditionResult --value)" == no ]] || \
   fail "managed Authentik projection was not condition-skipped while locked"
@@ -266,6 +277,22 @@ wait_active nas-protected-services.target
 wait_active nas-zfs-unlock.service
 wait_active nas-zfs-mount-guard.service
 nas-zfs-mount-check
+systemctl start nas-managed-services-seed.service
+[[ -d /tank/nas-control ]] || fail "managed seed did not create control root after mount"
+[[ "$(findmnt -n -o FSTYPE -T /tank/nas-control)" == zfs ]] || \
+  fail "managed seed control directory is not on mounted ZFS"
+# Exercise the composed systemd service boundary, not just bootstrap helpers:
+# re-running seed against existing desired state must preserve operator policy.
+[[ -s /var/lib/nas-control/services.yaml ]] || fail "managed seed authority missing after setup"
+# A valid operator-authored YAML comment must survive a seed restart;
+# checking an unmodified default would not detect accidental re-seeding.
+printf '\n# operator-owned-preservation-probe\n' >> /var/lib/nas-control/services.yaml
+seed_authority_before=$(sha256sum /var/lib/nas-control/services.yaml | cut -d ' ' -f1)
+systemctl restart nas-managed-services-seed.service
+[[ "$(sha256sum /var/lib/nas-control/services.yaml | cut -d ' ' -f1)" == "$seed_authority_before" ]] || \
+  fail "managed seed overwrote existing operator-owned desired state"
+
+
 [[ "$(zfs get -H -o value encryptionroot tank/nas)" == "tank/nas" ]]
 [[ "$(zfs get -H -o value keyformat tank/nas)" == "hex" ]]
 [[ "$(zfs get -H -o value keylocation tank/nas)" == "file:///run/nas-secret-runtime/live/zfs/dataset-key" ]]

@@ -96,6 +96,12 @@ in
       description = "Seed Managed Services V2 desired state once";
       wantedBy = [ "multi-user.target" ];
       before = [ "nas-managed-services-reconcile.service" ];
+      requires = [ "nas-zfs-mount-guard.service" ];
+      after = [ "nas-zfs-mount-guard.service" ];
+      unitConfig.RequiresMountsFor = [ cfg.zfsRoot ];
+      # First-start seeds before publishing setup state; only the mounted
+      # dataset, not a completed-setup marker, may gate this unit.
+      unitConfig.ConditionPathIsMountPoint = cfg.zfsRoot;
       serviceConfig = {
         Type = "oneshot";
         ExecStart = seedDesiredState;

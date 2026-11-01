@@ -10,7 +10,6 @@ in
     systemd.tmpfiles.rules = lib.mkIf cfg.virtualization.enable [
       "d ${cfg.zfsRoot}/containers 0755 root root -"
       "d ${cfg.zfsRoot}/containers/storage 0710 root root -"
-      "L+ /var/lib/containers - - - - ${cfg.zfsRoot}/containers/storage"
     ];
 
     virtualisation.podman.enable = true;
