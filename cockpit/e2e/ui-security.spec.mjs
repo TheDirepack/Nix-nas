@@ -193,6 +193,7 @@ async function installCockpitMock(page, behavior = {}) {
       const response = structuredClone(payload);
       const overviewOutputs = [...(configuredBehavior.overviewOutputs || [])];
       const firstStartResponses = [...(configuredBehavior.firstStartResponses || [])];
+      let firstStartJob = null;
       const rejected = (message) => {
         const promise = Promise.reject(new Error(message));
         promise.input = () => {};
@@ -230,9 +231,8 @@ async function installCockpitMock(page, behavior = {}) {
           ) {
             const next = firstStartResponses.shift();
             if (next.error) return rejected(next.error);
-            const output = JSON.stringify(
-              next.value || {status: "submitted", jobId: "a".repeat(24)},
-            );
+            firstStartJob = next.value || {status: "submitted", jobId: "a".repeat(24)};
+            const output = JSON.stringify(firstStartJob);
             const promise = new Promise((resolve) => {
               if (next.hold) {
                 globalThis.__nas_release_first_start = () => resolve(output);
@@ -245,6 +245,9 @@ async function installCockpitMock(page, behavior = {}) {
             return promise;
           }
           let value = {ok: true};
+          if (args[0] === "nas-cockpit-api" && args[1] === "first-start-job-status") {
+            value = {...firstStartJob, status: "running"};
+          }
           if (args[0] === "nas-cockpit-api" && args[1] === "overview") value = response;
           if (args[0] === "nas-cockpit-api" && args[1] === "feature")
             value = {ok: true, feature: args[2], mode: args[3]};
@@ -614,7 +617,10 @@ test("first-start form cannot submit twice while pending and does not report com
   await start.click();
   await expect(start).toBeDisabled();
   await expect(page.getByText("Operation completed.")).toHaveCount(0);
-  await expect(page.getByRole("heading", {name: "First-start job"})).toHaveCount(0);
+  const job = page.locator(".pf-v6-c-card").filter({
+    has: page.getByText("First-start job", {exact: true}),
+  });
+  await expect(job).toHaveCount(0);
   const countCalls = () =>
     page.evaluate(
       () =>
@@ -628,7 +634,9 @@ test("first-start form cannot submit twice while pending and does not report com
   await start.dispatchEvent("click");
   expect(await countCalls()).toBe(1);
   await page.evaluate(() => globalThis.__nas_release_first_start());
-  await expect(page.getByRole("heading", {name: "First-start job"})).toBeVisible();
+  await expect(job).toBeVisible();
+  await expect(job.locator("pre")).toContainText(`"jobId": "${"a".repeat(24)}"`);
+  await expect(job.locator("pre")).not.toContainText('"status": "complete"');
   expect(await countCalls()).toBe(1);
   await expect(page.getByText("Operation completed.")).toHaveCount(0);
 });
@@ -659,9 +667,15 @@ test("failed first-start submission reports its error and allows a retry", async
   const start = page.getByRole("button", {name: "Start", exact: true});
   await start.click();
   await expect(page.getByText("simulated first-start submission failure")).toBeVisible();
+  const job = page.locator(".pf-v6-c-card").filter({
+    has: page.getByText("First-start job", {exact: true}),
+  });
+  await expect(job).toHaveCount(0);
   await expect(start).toBeEnabled();
   await start.click();
-  await expect(page.getByRole("heading", {name: "First-start job"})).toBeVisible();
+  await expect(job).toBeVisible();
+  await expect(job.locator("pre")).toContainText(`"jobId": "${"b".repeat(24)}"`);
+  await expect(job.locator("pre")).not.toContainText('"status": "complete"');
   await expect(page.getByText("Operation completed.")).toHaveCount(0);
   expect(
     await page.evaluate(
