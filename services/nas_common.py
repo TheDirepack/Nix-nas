@@ -297,27 +297,38 @@ def resolve_v2_service_capability(
     try:
         data = load_effective_authority(effective_path)
     except FileNotFoundError:
-        try:
-            effective_path.lstat()
-        except FileNotFoundError:
+        # ENOENT can name a dangling ancestor, not an unpublished authority.
+        for candidate in (effective_path, *effective_path.parents):
+            try:
+                candidate.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return None
+            if candidate == effective_path:
+                return None
+            try:
+                candidate.resolve(strict=True)
+            except OSError:
+                return None
             return service, capability
-        except OSError:
-            return None
         return None
     except (OSError, ValueError, TypeError, AttributeError, RecursionError):
         return None
     service_entry = data["services"].get(service)
     if not isinstance(service_entry, dict):
         return None
-    if capability != "access":
-        declared_authorization = service_entry.get("authorization")
-        if not isinstance(declared_authorization, dict):
-            return None
-        declared = declared_authorization.get("capabilities")
-        if not isinstance(declared, list) or not any(
-            isinstance(item, dict) and item.get("id") == capability for item in declared
-        ):
-            return None
+    declared_authorization = service_entry.get("authorization")
+    if not isinstance(declared_authorization, dict):
+        return None
+    declared = declared_authorization.get("capabilities")
+    if not isinstance(declared, list) or not all(
+        isinstance(item, dict) and isinstance(item.get("id"), str) and _CAPABILITY_ID_RE.fullmatch(item["id"])
+        for item in declared
+    ):
+        return None
+    if capability != "access" and not any(item["id"] == capability for item in declared):
+        return None
     authorization = data["derived"]["authorization"]
     entry = authorization.get(service)
     if not isinstance(entry, dict):

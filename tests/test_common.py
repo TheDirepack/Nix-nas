@@ -272,7 +272,7 @@ class CommonPolicyTests(unittest.TestCase):
                             json.dumps(
                                 {
                                     "schemaVersion": 3,
-                                    "services": {"demo": {}},
+                                    "services": {"demo": {"authorization": {"capabilities": []}}},
                                     "derived": {"authorization": authorization},
                                 }
                             ),
@@ -290,6 +290,83 @@ class CommonPolicyTests(unittest.TestCase):
                 mock.patch.object(pathlib.Path, "lstat", side_effect=PermissionError("authority parent is unreadable")),
             ):
                 self.assertIsNone(common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", "access"))
+
+    def test_access_and_explicit_capabilities_reject_malformed_service_declarations(self) -> None:
+        declarations = (
+            None,
+            {},
+            {"capabilities": None},
+            {"capabilities": {}},
+            {"capabilities": [None]},
+            {"capabilities": [{"id": "view"}, None]},
+            {"capabilities": [{"id": "view"}, {}]},
+            {"capabilities": [{"id": "view"}, {"id": None}]},
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            effective = pathlib.Path(raw) / "effective.json"
+            for declaration in declarations:
+                value = {
+                    "schemaVersion": 3,
+                    "services": {"demo": {"authorization": declaration}},
+                    "derived": {
+                        "authorization": {
+                            "demo": {
+                                "capabilities": {"access": "application.demo.access", "view": "application.demo.view"}
+                            }
+                        }
+                    },
+                }
+                effective.write_text(json.dumps(value), encoding="utf-8")
+                with mock.patch.dict("os.environ", {"NAS_V2_EFFECTIVE": str(effective)}):
+                    for capability in ("access", "view"):
+                        with self.subTest(declaration=declaration, capability=capability):
+                            self.assertIsNone(
+                                common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", capability)
+                            )
+
+    def test_compiler_implicit_access_with_no_declared_capabilities_remains_valid(self) -> None:
+        from nas_v2_spec import build_effective, normalize
+
+        compiled = build_effective(
+            normalize(
+                {
+                    "schemaVersion": 3,
+                    "services": {
+                        "demo": {"runtime": {"type": "systemd", "unit": "demo.service"}, "workload": {"kind": "daemon"}}
+                    },
+                }
+            )
+        )
+        self.assertEqual(compiled["services"]["demo"]["authorization"]["capabilities"], [])
+        with tempfile.TemporaryDirectory() as raw:
+            effective = pathlib.Path(raw) / "effective.json"
+            effective.write_text(json.dumps(compiled), encoding="utf-8")
+            with mock.patch.dict("os.environ", {"NAS_V2_EFFECTIVE": str(effective)}):
+                self.assertEqual(
+                    common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", "access"), ("demo", "access")
+                )
+
+    def test_bootstrap_fallback_distinguishes_missing_parents_from_dangling_ancestors(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            dangling = root / "dangling"
+            dangling.symlink_to("absent")
+            live = root / "live"
+            live.mkdir()
+            linked = root / "linked"
+            linked.symlink_to(live, target_is_directory=True)
+            for parent, expected in (
+                (dangling, None),
+                (root / "missing", ("demo", "access")),
+                (linked, ("demo", "access")),
+            ):
+                with (
+                    self.subTest(parent=parent.name),
+                    mock.patch.dict("os.environ", {"NAS_V2_EFFECTIVE": str(parent / "future/effective.json")}),
+                ):
+                    self.assertEqual(
+                        common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", "access"), expected
+                    )
 
     def test_load_effective_authority_validates_shape_and_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
