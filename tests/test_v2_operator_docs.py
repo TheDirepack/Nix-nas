@@ -37,7 +37,7 @@ class V2OperatorDocumentationTests(unittest.TestCase):
             "vaultwarden": ("access",),
         }.items():
             with self.subTest(service=service):
-                self.assertRegex(seed, rf"\\b{re.escape(service)}\\s*= ")
+                self.assertRegex(seed, rf"\b{re.escape(service)}\s*= ")
                 for capability in capabilities:
                     self.assertIn(f'(capability "{capability}"', seed)
 
@@ -51,10 +51,10 @@ class V2OperatorDocumentationTests(unittest.TestCase):
         # Historical mentions explaining that these groups are retired are
         # fine; actionable grants, ACLs, and CLI examples are not.
         unsafe = re.compile(
-            r"(?:--group\\s+nas_(?:allow|deny)_"
-            r"|(?:^|\\n)\\s*[-|]\\s*`nas_(?:allow|deny)_"
+            r"(?:--group\s+nas_(?:allow|deny)_"
+            r"|(?:^|\n)\s*[-|]\s*`nas_(?:allow|deny)_"
             r"|@nas_(?:allow|deny)_"
-            r"|\\$\\{u%\\+nas_(?:allow|deny)_)"
+            r"|\$\{u%\+nas_(?:allow|deny)_)"
         )
         for path in (
             *CAPABILITY_DOCS,
@@ -68,7 +68,7 @@ class V2OperatorDocumentationTests(unittest.TestCase):
     def test_account_cli_uses_only_reserved_identity_roles(self) -> None:
         accounts = (DOC / "admin/accounts.md").read_text()
         self.assertIn("--group nas_users", accounts)
-        self.assertNotRegex(accounts, r"--group\\s+application\\.")
+        self.assertNotRegex(accounts, r"--group\s+application\.")
         self.assertIn("Authentik", accounts)
 
     def test_first_start_has_no_retired_controller_dependency(self) -> None:
