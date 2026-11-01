@@ -44,6 +44,9 @@ let
     platformBasePath
     "--output"
     platformPath
+  ] ++ lib.optionals (nasInternal.hasNvidiaGpu && cfg.hardware.nvidia.containerToolkit) [
+    "--nvidia-ctk-bin"
+    (lib.getExe' config.hardware.nvidia-container-toolkit.package "nvidia-ctk")
   ];
 
   seedDesiredState = pkgs.writeShellScript "nas-managed-services-v2-seed" ''
@@ -135,7 +138,11 @@ in
         "nas-managed-services-seed.service"
         "nas-zfs-mount-guard.service"
       ] ++ lib.optional cfg.virtualization.enable "nas-containers-storage-check.service"
-        ++ lib.optional firewalldEnabled "firewalld.service";
+        ++ lib.optional firewalldEnabled "firewalld.service"
+        ++ lib.optional (nasInternal.hasNvidiaGpu && cfg.hardware.nvidia.containerToolkit)
+          "nvidia-container-toolkit-cdi-generator.service";
+      wants = lib.optional (nasInternal.hasNvidiaGpu && cfg.hardware.nvidia.containerToolkit)
+        "nvidia-container-toolkit-cdi-generator.service";
       unitConfig = {
         RequiresMountsFor = [ cfg.zfsRoot ];
         AssertPathIsMountPoint = cfg.zfsRoot;
