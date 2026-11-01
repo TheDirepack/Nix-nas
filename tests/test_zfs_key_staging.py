@@ -34,6 +34,56 @@ class ZfsKeyStagingTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_real_secret_reader_prompt_keeps_captured_zfs_key_clean(self):
+        source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text()
+        functions = (
+            "require_database() {"
+            + source.split("require_database() {", 1)[1].split("ensure_group() {", 1)[0]
+            + "get_secret() {"
+            + source.split("get_secret() {", 1)[1].split("get_secret_optional() {", 1)[0]
+            + "command_show_zfs_key() {"
+            + source.split("command_show_zfs_key() {", 1)[1].split("command_show_authentik_bootstrap() {", 1)[0]
+        ).replace("''${", "${")
+        with tempfile.TemporaryDirectory() as raw:
+            directory = pathlib.Path(raw)
+            (directory / "database.kdbx").touch()
+            for command in ("command_show_zfs_key", "command_show_zfs_key_stdin"):
+                with self.subTest(command=command):
+                    script = (
+                        """
+set -euo pipefail
+database=database.kdbx
+key_file=''
+secret_group=fixture
+keepass_password=''
+password_from_stdin=false
+keepassxc-cli() {
+  local supplied
+  IFS= read -r supplied
+  [[ "$supplied" == fixture-password ]] || return 93
+  if [[ "$1" == show ]]; then printf 'ab%.0s' {1..32}; fi
+}
+"""
+                        + functions
+                        + f'\nkey="$({command})"\n'
+                        + """
+[[ "$key" =~ ^[A-Fa-f0-9]{64}$ ]]
+printf 'key-valid\n'
+"""
+                    )
+                    result = subprocess.run(
+                        ["bash", "-c", script],
+                        cwd=directory,
+                        input="fixture-password\n",
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, "key-valid\n")
+                    self.assertNotIn("fixture-password", result.stdout + result.stderr)
+
     def run_key_path(self, *, export: bool, fail_install: bool = False, terminal: bool = False, reader_status: int = 0):
         body = self.key_body(export=export)
         with tempfile.TemporaryDirectory() as raw:
