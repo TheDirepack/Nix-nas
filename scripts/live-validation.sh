@@ -197,6 +197,7 @@ syncoid_drill() (
   ! grep -Fxq -- "$target_dataset" <<< "$target_datasets" || fail "target dataset already exists: $target_dataset"
   ! grep -Fxq -- "$clone" <<< "$target_datasets" || fail "clone dataset already exists: $clone"
 
+  # shellcheck disable=SC2329 # invoked by EXIT trap
   cleanup_syncoid() {
     if "$cleanup_remote"; then
       if "$owned_clone"; then remote_zfs "$target_host" destroy "$clone" >/dev/null 2>&1 || true; fi
@@ -250,6 +251,7 @@ restic_drill() (
   [[ -d "$NAS_RESTIC_RESTORE_TARGET" ]] || fail "Restic restore parent is missing: $NAS_RESTIC_RESTORE_TARGET"
   # mktemp atomically claims a unique marker; never overwrite another run's file.
   marker=$(mktemp -- "$NAS_RESTIC_SOURCE/.nas-live-XXXXXXXX")
+  # shellcheck disable=SC2329 # invoked by EXIT trap
   cleanup_restic() {
     [[ -z "$marker" ]] || rm -f -- "$marker"
     [[ -z "$restore_root" ]] || rm -rf -- "$restore_root"
@@ -297,7 +299,7 @@ observability() {
   curl --fail --silent --show-error --data-binary "$metric" \
     http://127.0.0.1:8428/victoriametrics/write >/dev/null
   local observed=false
-  for attempt in {1..10}; do
+  for _ in {1..10}; do
     if curl --fail --silent --show-error \
       "http://127.0.0.1:8428/victoriametrics/api/v1/query?query=nas_live_validation_value%7Brun%3D%22$stamp%22%7D" \
       | jq -e '.status == "success" and (.data.result | length) == 1' >/dev/null; then
