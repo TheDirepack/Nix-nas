@@ -33,14 +33,8 @@ class V2RestoreWiringTests(unittest.TestCase):
 
     def test_recovery_substrate_checks_use_restored_paths_and_literal_dollars(self):
         storage = (ROOT / "modules/nas/config/storage-monitoring.nix").read_text(encoding="utf-8")
-        secret_check = next(
-            line.strip() for line in storage.splitlines()
-            if '[[ -s "$restore_root"' in line
-        )
-        control_check = next(
-            line.strip() for line in storage.splitlines()
-            if '[[ -d "$restore_root"' in line
-        )
+        secret_check = next(line.strip() for line in storage.splitlines() if '[[ -s "$restore_root"' in line)
+        control_check = next(line.strip() for line in storage.splitlines() if '[[ -d "$restore_root"' in line)
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             zfs_root = root / "nas$archive"
@@ -69,9 +63,7 @@ class V2RestoreWiringTests(unittest.TestCase):
             self.assertNotIn("${lib.escapeShellArg", checks)
             command = "set -euo pipefail\nrestore_root=" + shlex.quote(str(restore_root)) + "\n" + checks
             # Live paths exist but the recovered payload is absent: must fail.
-            missing = subprocess.run(
-                ["bash", "-c", command], check=False, capture_output=True, text=True, timeout=5
-            )
+            missing = subprocess.run(["bash", "-c", command], check=False, capture_output=True, text=True, timeout=5)
             self.assertNotEqual(missing.returncode, 0)
 
             recovered_control = pathlib.Path(str(restore_root) + str(live_control))
@@ -79,9 +71,7 @@ class V2RestoreWiringTests(unittest.TestCase):
             recovered_control.mkdir(parents=True)
             recovered_secret.parent.mkdir(parents=True, exist_ok=True)
             recovered_secret.write_bytes(b"restored")
-            present = subprocess.run(
-                ["bash", "-c", command], check=False, capture_output=True, text=True, timeout=5
-            )
+            present = subprocess.run(["bash", "-c", command], check=False, capture_output=True, text=True, timeout=5)
             self.assertEqual(present.returncode, 0, present.stdout + present.stderr)
 
     def test_verifier_has_no_application_name_branches(self):
