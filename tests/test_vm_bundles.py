@@ -30,6 +30,10 @@ printf '%s\\n' "$*" >> "$NAS_TEST_NIX_LOG"
 case "$1" in
   eval)
     ref=${3%.outPath}
+    if [[ ${NAS_TEST_FAIL_REF:-} == "$ref" ]]; then
+      printf 'simulated root evaluation failure: %s\\n' "$ref" >&2
+      exit 42
+    fi
     case "$ref" in
       .#checks.x86_64-linux.nas-vm.driver) name=nas-vm-driver ;;
       .#checks.x86_64-linux.nas-vm-encrypted.driver) name=nas-vm-encrypted-driver ;;
@@ -37,7 +41,11 @@ case "$1" in
         name=${ref##*.x86_64-linux.}
         ;;
     esac
-    printf '/nix/store/aaaaaaaaaa-%s' "$name"
+    hash=aaaaaaaaaa
+    if [[ "$name" == identity ]]; then
+      hash=${NAS_TEST_IDENTITY_HASH:-aaaaaaaaaa}
+    fi
+    printf '/nix/store/%s-%s' "$hash" "$name"
     ;;
   path-info)
     shift 2
@@ -48,7 +56,13 @@ case "$1" in
         printf '%s\\n' /nix/store/aaaaaaaaaa-driver-shared
         printf '%s\\n' /nix/store/aaaaaaaaaa-identity
         ;;
-      *-core) ;;
+      *-core)
+        if [[ ${NAS_TEST_LARGE_CORE:-0} == 1 ]]; then
+          for ((i = 0; i < 1600; i++)); do
+            printf '/nix/store/%032d-%070d\\n' "$i" "$i"
+          done
+        fi
+        ;;
       *-vm-drivers)
         printf '%s\\n' /nix/store/aaaaaaaaaa-core
         printf '%s\\n' /nix/store/aaaaaaaaaa-identity
@@ -148,7 +162,7 @@ class VmBundleScriptTests(unittest.TestCase):
         for name in EXPECTED_BUNDLES:
             expected_hash = {
                 "core": "aaaaaaaaaa",
-                "vm-drivers": "aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa",
+                "vm-drivers": "-".join(["aaaaaaaaaa"] * 7),
             }.get(name, "aaaaaaaaaa-aaaaaaaaaa")
             expected = f"key_{name.replace('-', '_')}={expected_hash}"
             self.assertIn(expected, lines)
@@ -168,7 +182,65 @@ class VmBundleScriptTests(unittest.TestCase):
             "eval --raw .#checks.x86_64-linux.nas-vm-encrypted.driver.outPath",
             calls,
         )
-        self.assertIn("key_vm_drivers=aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa", result.stdout.splitlines())
+        self.assertIn(f"key_vm_drivers={'-'.join(['aaaaaaaaaa'] * 7)}", result.stdout.splitlines())
+
+    def test_failing_nix_eval_emits_no_partial_keys_or_key_files(self) -> None:
+        env, _, _ = self._fake_environment()
+        env["NAS_TEST_FAIL_REF"] = ".#checks.x86_64-linux.nas-vm-encrypted.driver"
+        output = self._root / "keys"
+        result = self._run("keys", str(output), env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "", "do not publish a partial GitHub Actions cache key set")
+        self.assertIn("failed to compute bundle key for vm-drivers", result.stderr)
+        self.assertFalse(output.exists(), "a failed key evaluation must not write any .key files")
+
+    def test_vm_drivers_key_changes_with_every_application_dependency(self) -> None:
+        env, _, _ = self._fake_environment()
+        before = self._run("keys", env=env)
+        self.assertEqual(before.returncode, 0, before.stderr)
+        updated = dict(env)
+        updated["NAS_TEST_IDENTITY_HASH"] = "bbbbbbbbbb"
+        after = self._run("keys", env=updated)
+        self.assertEqual(after.returncode, 0, after.stderr)
+
+        def keys(output: str) -> dict[str, str]:
+            return dict(line.split("=", 1) for line in output.splitlines())
+
+        old_keys, new_keys = keys(before.stdout), keys(after.stdout)
+        self.assertEqual(old_keys["key_core"], new_keys["key_core"])
+        self.assertNotEqual(old_keys["key_identity"], new_keys["key_identity"])
+        self.assertNotEqual(old_keys["key_vm_drivers"], new_keys["key_vm_drivers"])
+        # Unrelated application archives retain the same independent keys.
+        self.assertEqual(old_keys["key_storage"], new_keys["key_storage"])
+
+    def test_save_fails_before_export_if_driver_root_evaluation_fails(self) -> None:
+        env, _, store_log = self._fake_environment()
+        env["NAS_TEST_FAIL_REF"] = ".#checks.x86_64-linux.nas-vm-encrypted.driver"
+        output = self._root / "bundles"
+        result = self._run("save", str(output), env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not evaluate Nix root", result.stderr)
+        self.assertFalse((output / "bundle-handoff.sha256").exists())
+        self.assertFalse(store_log.exists(), "no export should run with partial driver closure roots")
+
+    def test_large_bundle_uses_one_export_stream_not_xargs_shards(self) -> None:
+        env, _, store_log = self._fake_environment()
+        env["NAS_TEST_LARGE_CORE"] = "1"
+        output = self._root / "bundles"
+        result = self._run("save", str(output), env=env)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        calls = [line for line in store_log.read_text(encoding="utf-8").splitlines() if line.startswith("--export")]
+        self.assertEqual(
+            len(calls),
+            len(EXPECTED_BUNDLES),
+            "each bundle must be exported in exactly one nix-store invocation",
+        )
+        core_export = next(line for line in calls if "-core" in line)
+        self.assertIn("/nix/store/00000000000000000000000000000000-", core_export)
+        self.assertIn("/nix/store/00000000000000000000000000001599-", core_export)
+        with gzip.open(output / "core.nar.gz", "rb") as stream:
+            records = stream.read().splitlines()
+        self.assertEqual(len(records), 1601, "complete core closure must be present in one archive")
 
     def test_build_builds_every_bundle_root_including_both_drivers(self) -> None:
         env, nix_log, _ = self._fake_environment()

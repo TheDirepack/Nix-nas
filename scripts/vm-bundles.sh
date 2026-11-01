@@ -85,33 +85,57 @@ bundle_refs() {
 }
 
 bundle_out_paths() {
-  local ref
+  # Do not emit a partial set of roots if any evaluation fails.
+  local ref out
+  local -a outs=()
   while IFS= read -r ref; do
-    "$NIX" eval --raw "${ref}.outPath"
-    printf '\n'
+    if ! out="$("$NIX" eval --raw "${ref}.outPath")"; then
+      printf '%s: could not evaluate Nix root %s\n' "$PROG" "$ref" >&2
+      return 1
+    fi
+    if [[ -z $out || $out != /* || $out == *$'\n'* ]]; then
+      printf '%s: invalid Nix store root for %s\n' "$PROG" "$ref" >&2
+      return 1
+    fi
+    outs+=("$out")
   done < <(bundle_refs "$1")
+  (("${#outs[@]}" > 0)) || return 1
+  printf '%s\n' "${outs[@]}"
 }
 
 bundle_hash() {
-  local name=$1 out
-  local -a hashes=()
-  if [[ $name != core ]]; then
-    while IFS= read -r out; do
-      if [[ -n $out ]]; then
-        hashes+=("$(basename "$out" | cut -d- -f1)")
-        break
-      fi
-    done < <(bundle_out_paths core)
+  local name=$1 dep out paths store_name
+  local -a hashes=() dependencies=()
+  # vm-drivers is a delta against core plus every application closure, so
+  # every root influencing that subtraction must be in its cache key.
+  if [[ $name == vm-drivers ]]; then
+    dependencies=(core identity observability storage vm-drivers)
+  elif [[ $name == core ]]; then
+    dependencies=(core)
+  else
+    dependencies=(core "$name")
   fi
-  while IFS= read -r out; do
-    hashes+=("$(basename "$out" | cut -d- -f1)")
-  done < <(bundle_out_paths "$name")
+  for dep in "${dependencies[@]}"; do
+    paths="$(bundle_out_paths "$dep")" || return 1
+    while IFS= read -r out; do
+      store_name="${out##*/}"
+      if [[ $store_name != *-* || -z ${store_name%%-*} ]]; then
+        printf '%s: invalid Nix store root name for %s: %s\n' "$PROG" "$dep" "$out" >&2
+        return 1
+      fi
+      hashes+=("${store_name%%-*}")
+    done <<< "$paths"
+  done
+  (("${#hashes[@]}" > 0)) || return 1
   (IFS=-; printf '%s\n' "${hashes[*]}")
 }
 
 closure() {
+  local paths
   local -a outs=()
-  mapfile -t outs < <(bundle_out_paths "$1")
+  paths="$(bundle_out_paths "$1")" || die "failed to evaluate bundle roots for $1"
+  mapfile -t outs <<< "$paths"
+  (("${#outs[@]}" > 0)) || die "empty Nix bundle roots for $1"
   "$NIX" path-info -r "${outs[@]}" | sort -u
 }
 
@@ -128,14 +152,22 @@ build_bundles() {
 }
 
 keys() {
-  local dir=${1:-} name
+  local dir=${1:-} name hash i
+  local -a names=() hashes=()
+  # Resolve every key before publishing any cache output; partial keys are unsafe.
   while IFS= read -r name; do
-    printf 'key_%s=%s\n' "${name//-/_}" "$(bundle_hash "$name")"
-    if [[ -n "$dir" ]]; then
-      mkdir -p "$dir"
-      printf '%s\n' "$(bundle_hash "$name")" > "$dir/$name.key"
-    fi
+    hash="$(bundle_hash "$name")" || die "failed to compute bundle key for $name"
+    [[ -n "$hash" ]] || die "empty bundle key for $name"
+    names+=("$name")
+    hashes+=("$hash")
   done < <(list_bundles)
+  [[ -z "$dir" ]] || mkdir -p "$dir"
+  for i in "${!names[@]}"; do
+    name="${names[i]}"
+    hash="${hashes[i]}"
+    printf 'key_%s=%s\n' "${name//-/_}" "$hash"
+    [[ -z "$dir" ]] || printf '%s\n' "$hash" > "$dir/$name.key"
+  done
 }
 
 save() {
@@ -177,14 +209,20 @@ save() {
     while IFS= read -r manifest_name; do
       case "$manifest_name" in
         core) closure_cached core > "$dir/.manifest.paths" ;;
-        vm-drivers) comm -23 <(closure_cached vm-drivers) "$base_file" > "$dir/.manifest.paths" ;;
-        *) comm -23 <(closure_cached "$manifest_name") "$core_file" > "$dir/.manifest.paths" ;;
+        vm-drivers)
+          closure_cached vm-drivers > "$dir/.manifest.full.paths"
+          comm -23 "$dir/.manifest.full.paths" "$base_file" > "$dir/.manifest.paths"
+          ;;
+        *)
+          closure_cached "$manifest_name" > "$dir/.manifest.full.paths"
+          comm -23 "$dir/.manifest.full.paths" "$core_file" > "$dir/.manifest.paths"
+          ;;
       esac
       while IFS= read -r manifest_path; do
         [[ -n "$manifest_path" ]] && printf '%s\t%s\n' "$manifest_name" "$manifest_path" >> "$manifest"
       done < "$dir/.manifest.paths"
     done < <(list_bundles)
-    rm -f "$dir/.manifest.paths"
+    rm -f "$dir/.manifest.paths" "$dir/.manifest.full.paths"
   }
 
   if [[ $only_missing == 1 ]]; then
@@ -237,8 +275,15 @@ save() {
     local export_name=$1 export_paths=$2 export_archive=$3 export_tmp=$4
     local path_count
     local heartbeat_pid
-    local -a export_status
-    path_count="$(wc -l < "$export_paths")"
+    local -a export_status store_paths=()
+    # Each nix-store --export invocation emits a complete terminated NAR
+    # stream. xargs splitting creates concatenated streams, which are not one
+    # importable archive. Keep all paths in one argv; fail closed on E2BIG.
+    mapfile -t store_paths < "$export_paths"
+    path_count="${#store_paths[@]}"
+    for store_path in "${store_paths[@]}"; do
+      [[ -n "$store_path" && "$store_path" == /* ]] || die "invalid export store path for $export_name"
+    done
     printf '%s: exporting %s bundle (%s store paths)\n' \
       "$PROG" "$export_name" "$path_count" >&2
     # The heartbeat is a separate process group so its sleep child cannot
@@ -255,7 +300,7 @@ save() {
     # These archives are disposable cache transport, not release artifacts.
     # Fast deterministic compression keeps a cold handoff from spending most
     # of its time compressing data that Nix will checksum and cache again.
-    xargs --no-run-if-empty "$NIX_STORE_CMD" --export < "$export_paths" | gzip -1 -n > "$export_tmp"
+    "$NIX_STORE_CMD" --export "${store_paths[@]}" | gzip -1 -n > "$export_tmp"
     export_status=("${PIPESTATUS[@]}")
     set -e
     kill -- "-$heartbeat_pid" 2>/dev/null || kill -KILL "$heartbeat_pid" 2>/dev/null || true
@@ -279,9 +324,11 @@ save() {
     archive="$dir/$name.nar.gz"
     tmp="$archive.tmp.$$"
     if [[ $name == vm-drivers ]]; then
-      comm -23 <(closure_cached "$name") "$base_file" > "$dir/.export.paths"
+      closure_cached "$name" > "$dir/.export.full.paths"
+      comm -23 "$dir/.export.full.paths" "$base_file" > "$dir/.export.paths"
     else
-      comm -23 <(closure_cached "$name") "$core_file" > "$dir/.export.paths"
+      closure_cached "$name" > "$dir/.export.full.paths"
+      comm -23 "$dir/.export.full.paths" "$core_file" > "$dir/.export.paths"
     fi
     export_bundle "$name" "$dir/.export.paths" "$archive" "$tmp"
   done < <(list_bundles)
@@ -289,7 +336,7 @@ save() {
   write_manifest
   verify_manifest "$dir"
   write_handoff_checksum "$dir"
-  rm -f "$core_file" "$application_file" "$base_file" "$dir/.export.paths"
+  rm -f "$core_file" "$application_file" "$base_file" "$dir/.export.paths" "$dir/.export.full.paths"
   rm -rf -- "$closure_cache"
   SAVE_CLOSURE_CACHE=
   trap - EXIT
@@ -407,7 +454,6 @@ main() {
       [[ $# -eq 1 ]] || die "save requires exactly one directory argument"
       need "$NIX"
       need "$NIX_STORE_CMD"
-      need xargs
       need sha256sum
       save "$1"
       ;;
@@ -415,7 +461,6 @@ main() {
       [[ $# -eq 1 ]] || die "save-missing requires exactly one directory argument"
       need "$NIX"
       need "$NIX_STORE_CMD"
-      need xargs
       need sha256sum
       save "$1" 1
       ;;
