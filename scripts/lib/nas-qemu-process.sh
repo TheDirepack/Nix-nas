@@ -6,13 +6,13 @@
 nas_qemu_acquire_shared_state_lock() {
   local lock_path=$1
   command -v flock >/dev/null 2>&1 || {
-    printf 'error: flock is required for shared QEMU state ownership\\n' >&2
+    printf 'error: flock is required for shared QEMU state ownership\n' >&2
     return 1
   }
   exec {NAS_QEMU_SHARED_LOCK_FD}> "$lock_path" || return 1
   if ! flock -n -x "$NAS_QEMU_SHARED_LOCK_FD"; then
     exec {NAS_QEMU_SHARED_LOCK_FD}>&-
-    printf 'error: shared QEMU state is already owned by another operation: %s\\n' "$lock_path" >&2
+    printf 'error: shared QEMU state is already owned by another operation: %s\n' "$lock_path" >&2
     return 1
   fi
 }
