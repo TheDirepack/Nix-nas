@@ -349,6 +349,11 @@ def _normalize_service(service: dict[str, Any]) -> None:
         sandbox.setdefault("noNewPrivileges", True)
     service.setdefault("storage", [])
     service.setdefault("credentials", [])
+    # Absent files must not change the effective representation of older specs.
+    for managed_file in service.get("files", []):
+        managed_file.setdefault("delivery", "generation")
+        managed_file.setdefault("mode", "0444")
+        managed_file.setdefault("onChange", "restart")
     service.setdefault("routes", {})
     service.setdefault("listeners", {})
 
@@ -547,6 +552,95 @@ def _routes_conflict(first: str, second: str) -> bool:
     first_parts = first.strip("/").split("/")
     second_parts = second.strip("/").split("/")
     return first_parts[: len(second_parts)] == second_parts or second_parts[: len(first_parts)] == first_parts
+
+
+def _validate_managed_files(service_id: str, service: dict[str, Any]) -> None:
+    """Validate future non-secret file declarations without pretending to apply them.
+
+    Targets describe paths inside the service runtime. Their lowering must
+    create an isolated mount/namespace before enabling this feature.
+    """
+    entries = service.get("files", [])
+    if not entries:
+        return
+    seen_ids: set[str] = set()
+    destinations: list[pathlib.PurePosixPath] = []
+    reserved = (
+        pathlib.PurePosixPath("/proc"),
+        pathlib.PurePosixPath("/sys"),
+        pathlib.PurePosixPath("/dev"),
+        pathlib.PurePosixPath("/nix/store"),
+        pathlib.PurePosixPath("/run/nas-control"),
+        pathlib.PurePosixPath("/run/credentials"),
+        pathlib.PurePosixPath("/var/lib/nas-control"),
+    )
+
+    for index, entry in enumerate(entries):
+        prefix = f"$.services.{service_id}.files[{index}]"
+        file_id = entry["id"]
+        if file_id in seen_ids:
+            raise ManagedServicesV2Error(
+                f"Duplicate managed file ID {file_id!r}",
+                path=f"{prefix}.id",
+                code="managed-file-conflict",
+            )
+        seen_ids.add(file_id)
+        destination = entry["destination"]
+        target = _safe_absolute_path(destination, path=f"{prefix}.destination")
+        if str(target) != destination or destination.startswith("//"):
+            raise ManagedServicesV2Error(
+                "Managed file destination must be a canonical absolute path",
+                path=f"{prefix}.destination",
+                code="managed-file-path",
+            )
+        if target == pathlib.PurePosixPath("/") or any(_under(root, target) for root in reserved):
+            raise ManagedServicesV2Error(
+                "Managed file destination overlaps a reserved runtime path",
+                path=f"{prefix}.destination",
+                code="managed-file-path",
+            )
+        for previous in destinations:
+            if _under(previous, target) or _under(target, previous):
+                raise ManagedServicesV2Error(
+                    f"Overlapping managed file destination {destination!r}",
+                    path=f"{prefix}.destination",
+                    code="managed-file-conflict",
+                )
+        destinations.append(target)
+        payload = entry["content"]["literal"]
+        if "\x00" in payload or len(payload.encode("utf-8")) > 65536:
+            raise ManagedServicesV2Error(
+                "Managed file literal contains NUL or exceeds 64 KiB",
+                path=f"{prefix}.content.literal",
+                code="managed-file-content",
+            )
+
+        for attachment in service["storage"]:
+            mount = pathlib.PurePosixPath(attachment["mountPath"])
+            if _under(mount, target) or _under(target, mount):
+                raise ManagedServicesV2Error(
+                    "Managed file destination overlaps a storage attachment",
+                    path=f"{prefix}.destination",
+                    code="managed-file-conflict",
+                )
+        for attachment in service["credentials"]:
+            if attachment["use"] != "file" or "mountPath" not in attachment:
+                continue
+            mount = pathlib.PurePosixPath(attachment["mountPath"])
+            if _under(mount, target) or _under(target, mount):
+                raise ManagedServicesV2Error(
+                    "Managed file destination overlaps a credential attachment",
+                    path=f"{prefix}.destination",
+                    code="managed-file-conflict",
+                )
+
+    # This initial PR establishes the contract only. Do not accept files as
+    # configured until generation staging and native service delivery exist.
+    raise ManagedServicesV2Error(
+        "Managed file delivery is not implemented; declarations cannot be applied yet",
+        path=f"$.services.{service_id}.files",
+        code="managed-file-unavailable",
+    )
 
 
 def semantic_validate(
@@ -771,6 +865,8 @@ def semantic_validate(
                     path=f"$.services.{service_id}.credentials[{index}].target",
                     code="compose-target",
                 )
+
+        _validate_managed_files(service_id, service)
 
         accelerator_entries = service["resources"]["accelerators"]
         for index, accelerator in enumerate(accelerator_entries):
