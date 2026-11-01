@@ -75,7 +75,7 @@ The full QEMU system closure contains thousands of store paths. Fetching those p
 
 The action imports restored fragments and builds/exports only missing roots with `scripts/vm-bundles.sh save-missing`. These six granular caches remain cross-run acceleration only.
 
-After those reusable roots are available, `scripts/system-handoff.sh save` builds the exact `nas-ci-ready` and `nas-qemu` `system.build.toplevel` outputs, enumerates their complete Nix store closure, exports the closure as `system-closures.nar.gz`, and records both a path manifest and strict SHA-256 checksum. The producer verifies the package handoff and exact system handoff before publication.
+After those reusable roots are available, `scripts/system-handoff.sh save` builds the exact `nas-ci-ready` and `nas-qemu` `system.build.toplevel` outputs, enumerates their complete Nix store closure, exports bounded, individually importable Nix store streams (`system-closures.nar.gz` and, for large deltas, numbered `system-closures.part-*.nar.gz` shards), records their order in `system-closures.exports`, and checksums every archive and manifest. Never concatenate multiple `nix-store --export` terminators into one import stream. The producer verifies the package handoff and exact system handoff before publication.
 
 The action then publishes one `vm-bundle-handoff` artifact for the current workflow run containing both the reusable bundle fragments and exact system closure export. Downstream integration, installer, and installed-security runners verify and import **both** layers before executing. They do not independently restore the six package caches or cold-build the full system closure again; their remaining Nix work is limited to the test/configuration delta needed by that consumer.
 
