@@ -290,6 +290,22 @@ async function installCockpitMock(page, behavior = {}) {
           return promise;
         },
       };
+      if (configuredBehavior.holdSystemdAfterFirstStart) {
+        const pendingSystemd = [];
+        globalThis.__nas_systemd_pending = 0;
+        globalThis.__nas_release_systemd = () => {
+          pendingSystemd.splice(0).forEach((resolve) => resolve([[]]));
+          globalThis.__nas_systemd_pending = 0;
+        };
+        globalThis.cockpit.dbus = () => ({
+          call() {
+            if (!firstStartJob) return Promise.resolve([[]]);
+            globalThis.__nas_systemd_pending += 1;
+            return new Promise((resolve) => pendingSystemd.push(resolve));
+          },
+          close() {},
+        });
+      }
     },
     {payload: data, configuredBehavior: behavior},
   );
@@ -639,6 +655,57 @@ test("first-start form cannot submit twice while pending and does not report com
   await expect(job.locator("pre")).not.toContainText('"status": "complete"');
   expect(await countCalls()).toBe(1);
   await expect(page.getByText("Operation completed.")).toHaveCount(0);
+});
+
+test("accepted first-start job is tracked while systemd refresh remains pending", async ({
+  page,
+}) => {
+  const payload = overview();
+  payload.setup.firstStart = {
+    status: "ready",
+    message: "Ready for initial setup",
+    planDigest: "a".repeat(64),
+    storage: {devices: []},
+  };
+  payload.setup.setupState = {status: "ready"};
+  const jobId = "c".repeat(24);
+  await openApp(page, {
+    payload,
+    holdSystemdAfterFirstStart: true,
+    firstStartResponses: [{value: {status: "submitted", jobId}}],
+  });
+  await page.locator(".pf-v6-c-nav").getByText("First start", {exact: true}).click();
+  await page.getByLabel("KeePassXC database password", {exact: true}).fill("test-keystore-key");
+  await page.getByLabel("Confirm KeePassXC database password").fill("test-keystore-key");
+  await page.getByLabel("Administrator username").fill("operator");
+  await page.getByLabel("Administrator name").fill("Operator");
+  await page.getByLabel("Administrator email").fill("operator@example.invalid");
+  await page.getByLabel("Administrator password").fill("long-test-password");
+  const start = page.getByRole("button", {name: "Start", exact: true});
+  await start.click();
+  await expect.poll(() => page.evaluate(() => globalThis.__nas_systemd_pending)).toBeGreaterThan(0);
+  try {
+    const job = page.locator(".pf-v6-c-card").filter({
+      has: page.getByText("First-start job", {exact: true}),
+    });
+    await expect(job).toBeVisible();
+    await expect(job.locator("pre")).toContainText(`"jobId": "${jobId}"`);
+    await expect(job.locator("pre")).toContainText('"status": "running"');
+    await expect(page.getByLabel("KeePassXC database password", {exact: true})).toHaveValue("");
+    await expect(page.getByLabel("Confirm KeePassXC database password")).toHaveValue("");
+    await expect(page.getByLabel("Administrator password")).toHaveValue("");
+    await expect(start).toBeDisabled();
+    await start.dispatchEvent("click");
+    expect(
+      await page.evaluate(
+        () => globalThis.__nas_spawn_calls.filter((args) => args[1] === "first-start").length,
+      ),
+    ).toBe(1);
+    expect(await page.evaluate(() => globalThis.__nas_systemd_pending)).toBeGreaterThan(0);
+    await expect(page.getByText("Operation completed.")).toHaveCount(0);
+  } finally {
+    await page.evaluate(() => globalThis.__nas_release_systemd());
+  }
 });
 
 test("failed first-start submission reports its error and allows a retry", async ({page}) => {

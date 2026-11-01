@@ -43,20 +43,22 @@ export function SetupPage({data, mutate, busy}) {
 
   const submit = async () => {
     try {
-      const value = await mutate(
-        () =>
-          startFirstRun(password, administrator, {
+      await mutate(
+        async () => {
+          const value = await startFirstRun(password, administrator, {
             planDigest: model.planDigest,
             devices: selectedDevices,
             allowDestructiveStorage: allowDestructive,
             confirmPasswordReapply,
-          }),
+          });
+          setPassword("");
+          setPasswordConfirm("");
+          setAdministrator({...administrator, password: ""});
+          setJob(value);
+          return value;
+        },
         {successNotice: null},
       );
-      setPassword("");
-      setPasswordConfirm("");
-      setAdministrator({...administrator, password: ""});
-      setJob(value);
     } catch (_reason) {
       // useMutation already presents the failure and clears busy state.
     }
