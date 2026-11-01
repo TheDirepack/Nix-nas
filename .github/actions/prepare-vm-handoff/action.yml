@@ -45,12 +45,6 @@ runs:
       with:
         path: ${{ runner.temp }}/vm-bundles/storage.nar.gz
         key: ${{ inputs.cache-schema }}-vm-bundle-storage-${{ steps.keys.outputs.key_storage }}${{ inputs.cache-suffix }}
-    - name: "Restore bundle cache: ai"
-      id: ai
-      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-      with:
-        path: ${{ runner.temp }}/vm-bundles/ai.nar.gz
-        key: ${{ inputs.cache-schema }}-vm-bundle-ai-${{ steps.keys.outputs.key_ai }}${{ inputs.cache-suffix }}
     - name: "Restore bundle cache: VM drivers"
       id: vm_drivers
       uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -111,12 +105,6 @@ runs:
       with:
         path: ${{ runner.temp }}/vm-bundles/storage.nar.gz
         key: ${{ inputs.cache-schema }}-vm-bundle-storage-${{ steps.keys.outputs.key_storage }}${{ inputs.cache-suffix }}
-    - name: "Save bundle cache: ai"
-      if: steps.ai.outputs.cache-hit != 'true'
-      uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-      with:
-        path: ${{ runner.temp }}/vm-bundles/ai.nar.gz
-        key: ${{ inputs.cache-schema }}-vm-bundle-ai-${{ steps.keys.outputs.key_ai }}${{ inputs.cache-suffix }}
     - name: "Save bundle cache: VM drivers"
       if: steps.vm_drivers.outputs.cache-hit != 'true'
       uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5

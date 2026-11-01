@@ -21,7 +21,7 @@ SYSTEM_HANDOFF = ROOT / "scripts" / "system-handoff.sh"
 
 
 class CiWorkflowGraphTests(unittest.TestCase):
-    BUNDLES = ("core", "identity", "observability", "storage", "ai", "vm-drivers")
+    BUNDLES = ("core", "identity", "observability", "storage", "vm-drivers")
     PARALLEL = {"static-code", "static-shell", "static-nix", "unit", "security", "nonroot", "cockpit"}
     JOBS = {
         "prerequisites",
