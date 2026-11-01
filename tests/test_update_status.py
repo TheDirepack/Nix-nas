@@ -119,6 +119,8 @@ class UpdateStatusTests(unittest.TestCase):
             ["init", "-b", "fixture"],
             [
                 "-c",
+                "maintenance.auto=false",
+                "-c",
                 "user.name=Test",
                 "-c",
                 "user.email=test@example.invalid",
