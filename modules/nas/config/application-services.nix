@@ -357,6 +357,7 @@ in
         ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${authentikDataDir}/data";
         ExecStart = "${authentikPackage}/bin/ak server";
         TimeoutStartSec = "4min";
+        TimeoutStopSec = "30s";
         ExecStartPost = pkgs.writeShellScript "authentik-ready" ''
           exec ${pkgs.coreutils}/bin/timeout 180s ${pkgs.curl}/bin/curl \
             --fail --silent --show-error \
