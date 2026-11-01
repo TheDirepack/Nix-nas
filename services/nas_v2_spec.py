@@ -617,7 +617,7 @@ def semantic_validate(
             )
 
     route_paths: dict[str, str] = {}
-    route_hostnames: dict[str, str] = {}
+    route_hostpaths: dict[tuple[str, str], str] = {}
     listener_owners: dict[tuple[str, int], str] = {}
 
     for service_id, service in services.items():
@@ -844,14 +844,26 @@ def semantic_validate(
                     route_paths[normalized] = f"{service_id}:{route_id}"
             else:
                 for hostname in exposure["hostnames"]:
-                    owner = route_hostnames.get(hostname)
-                    if owner is not None:
-                        raise ManagedServicesV2Error(
-                            f"Duplicate route hostname {hostname!r}; already used by {owner}",
-                            path=f"$.services.{service_id}.routes.{route_id}.exposure.hostnames",
-                            code="route-conflict",
-                        )
-                    route_hostnames[hostname] = f"{service_id}:{route_id}"
+                    route_path = exposure.get("path", "/")
+                    normalized = route_path.rstrip("/") or "/"
+                    host = hostname.lower()
+                    for (registered_host, registered_path), owner in route_hostpaths.items():
+                        if registered_host != host or not _routes_conflict(normalized, registered_path):
+                            continue
+                        if normalized == registered_path:
+                            raise ManagedServicesV2Error(
+                                f"Duplicate route hostname+path {hostname!r} {normalized!r}; already used by {owner}",
+                                path=f"$.services.{service_id}.routes.{route_id}.exposure.hostnames",
+                                code="route-conflict",
+                            )
+                        if normalized == "/" or registered_path == "/":
+                            raise ManagedServicesV2Error(
+                                f"Route hostname {hostname!r} path {normalized!r} overlaps "
+                                f"{registered_path!r} already used by {owner}",
+                                path=f"$.services.{service_id}.routes.{route_id}.exposure.path",
+                                code="route-overlap",
+                            )
+                    route_hostpaths[(host, normalized)] = f"{service_id}:{route_id}"
 
         for listener_id, listener in service["listeners"].items():
             exposure = listener["exposure"]
