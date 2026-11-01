@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import pathlib
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services"))
@@ -66,6 +68,14 @@ def inventory() -> dict[str, object]:
 
 
 class PlatformProbeTests(unittest.TestCase):
+    def test_nixos_generates_uuid_cdi_after_toolkit_generator(self) -> None:
+        host = (ROOT / "modules/nas/config/host-platform.nix").read_text(encoding="utf-8")
+        managed = (ROOT / "modules/nas/config/managed-services.nix").read_text(encoding="utf-8")
+        self.assertIn('device-name-strategy = "uuid";', host)
+        self.assertIn('"nvidia-container-toolkit-cdi-generator.service"', managed)
+        self.assertIn('"--nvidia-ctk-bin"', managed)
+        self.assertIn('config.hardware.nvidia-container-toolkit.package "nvidia-ctk"', managed)
+
     def test_probe_discovers_drm_nvidia_device_set_and_cdi(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -79,6 +89,10 @@ class PlatformProbeTests(unittest.TestCase):
             (dev / "nvidia0").touch()
             (dev / "nvidiactl").touch()
             (dev / "nvidia-uvm").touch()
+            proc = root / "proc-nvidia-gpus" / "0000:01:00.0"
+            proc.mkdir(parents=True)
+            uuid = "GPU-12345678-1234-1234-1234-123456789abc"
+            (proc / "information").write_text(f"GPU UUID: {uuid}\nDevice Minor: 0\n", encoding="ascii")
             base = {
                 "schemaVersion": 1,
                 "capabilities": {
@@ -88,7 +102,13 @@ class PlatformProbeTests(unittest.TestCase):
                     "gpu-nvidia-cdi": True,
                 },
             }
-            result = platform_probe.probe_inventory(base, sys_class_drm=sys_drm, dev_root=dev)
+            result = platform_probe.probe_inventory(
+                base,
+                sys_class_drm=sys_drm,
+                dev_root=dev,
+                proc_nvidia_gpus=proc.parent,
+                cdi_device_names={f"nvidia.com/gpu={uuid}", "nvidia.com/gpu=all"},
+            )
             self.assertEqual(
                 [{"type": "devices", "values": [str(dev / "dri" / "renderD128")]}],
                 result["accelerators"]["AMD"]["selectors"],
@@ -101,13 +121,139 @@ class PlatformProbeTests(unittest.TestCase):
                 result["accelerators"]["NVIDIA"]["selectors"],
             )
             self.assertIn(
-                {"type": "cdi", "value": "nvidia.com/gpu=0"},
+                {"type": "cdi", "value": f"nvidia.com/gpu={uuid}"},
                 result["accelerators"]["NVIDIA"]["selectors"],
             )
             self.assertEqual(
                 {"type": "cdi", "value": "nvidia.com/gpu=all"},
                 result["accelerators"]["NVIDIA"]["allSelector"],
             )
+
+    def test_nonmatching_minors_never_generate_index_based_cdi_selectors(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            dev = root / "dev"
+            dev.mkdir()
+            (dev / "nvidia0").touch()
+            (dev / "nvidia2").touch()
+            proc = root / "nvidia-gpus"
+            first = proc / "0000:01:00.0"
+            second = proc / "0000:02:00.0"
+            first.mkdir(parents=True)
+            second.mkdir(parents=True)
+            uuid_a = "GPU-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+            uuid_b = "GPU-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+            (first / "information").write_text(f"GPU UUID: {uuid_a}\nDevice Minor: 2\n", encoding="ascii")
+            (second / "information").write_text(f"GPU UUID: {uuid_b}\nDevice Minor: 0\n", encoding="ascii")
+            result = platform_probe.probe_inventory(
+                {"capabilities": {"gpu-nvidia": True, "gpu-nvidia-cdi": True}},
+                sys_class_drm=root / "no-drm",
+                dev_root=dev,
+                proc_nvidia_gpus=proc,
+                cdi_device_names={
+                    "nvidia.com/gpu=0",
+                    "nvidia.com/gpu=1",
+                    f"nvidia.com/gpu={uuid_a}",
+                    f"nvidia.com/gpu={uuid_b}",
+                    "nvidia.com/gpu=all",
+                },
+            )
+            selectors = result["accelerators"]["NVIDIA"]["selectors"]
+            self.assertEqual(
+                [entry["value"] for entry in selectors if entry["type"] == "cdi"],
+                [f"nvidia.com/gpu={uuid_b}", f"nvidia.com/gpu={uuid_a}"],
+            )
+            self.assertEqual(
+                [entry["values"][0] for entry in selectors if entry["type"] == "devices"],
+                [str(dev / "nvidia0"), str(dev / "nvidia2")],
+            )
+
+    def test_missing_or_stale_uuid_cdi_does_not_guess_device_index(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            dev = root / "dev"
+            dev.mkdir()
+            (dev / "nvidia3").touch()
+            proc = root / "proc"
+            info = proc / "0000:03:00.0"
+            info.mkdir(parents=True)
+            uuid = "GPU-cccccccc-cccc-cccc-cccc-cccccccccccc"
+            (info / "information").write_text(f"GPU UUID: {uuid}\nDevice Minor: 3\n", encoding="ascii")
+            base = {"capabilities": {"gpu-nvidia": True, "gpu-nvidia-cdi": True}}
+            for directory, available in (
+                (root / "missing-proc", {"nvidia.com/gpu=3", "nvidia.com/gpu=all"}),
+                (proc, {"nvidia.com/gpu=3", "nvidia.com/gpu=all"}),
+                (proc, set()),
+            ):
+                with self.subTest(directory=directory, available=available):
+                    result = platform_probe.probe_inventory(
+                        base,
+                        sys_class_drm=root / "no-drm",
+                        dev_root=dev,
+                        proc_nvidia_gpus=directory,
+                        cdi_device_names=available,
+                    )
+                    selectors = result["accelerators"]["NVIDIA"]["selectors"]
+                    self.assertEqual(
+                        selectors,
+                        [{"type": "devices", "values": [str(dev / "nvidia3")]}],
+                    )
+                    self.assertEqual(
+                        "allSelector" in result["accelerators"]["NVIDIA"],
+                        "nvidia.com/gpu=all" in available,
+                    )
+
+    def test_cdi_names_must_be_reported_by_toolkit(self) -> None:
+        good = subprocess.CompletedProcess(
+            args=["nvidia-ctk", "cdi", "list"],
+            returncode=0,
+            stdout=(
+                "INFO NVIDIA devices\n"
+                "nvidia.com/gpu=0\n"
+                "nvidia.com/gpu=GPU-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\n"
+                "nvidia.com/gpu=all\n"
+            ),
+            stderr="",
+        )
+        with mock.patch.object(platform_probe.subprocess, "run", return_value=good) as run:
+            listed = platform_probe._listed_nvidia_cdi_devices("nvidia-ctk")
+        self.assertIn("nvidia.com/gpu=all", listed)
+        self.assertIn("nvidia.com/gpu=GPU-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", listed)
+        self.assertNotIn("INFO NVIDIA devices", listed)
+        run.assert_called_once_with(
+            ["nvidia-ctk", "cdi", "list"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+
+        failed = subprocess.CompletedProcess(args=[], returncode=1, stdout="nvidia.com/gpu=all", stderr="error")
+        with mock.patch.object(platform_probe.subprocess, "run", return_value=failed):
+            self.assertEqual(platform_probe._listed_nvidia_cdi_devices("nvidia-ctk"), set())
+        with mock.patch.object(platform_probe.subprocess, "run", side_effect=FileNotFoundError()):
+            self.assertEqual(platform_probe._listed_nvidia_cdi_devices("nvidia-ctk"), set())
+
+    def test_conflicting_driver_minors_or_uuids_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            dev = root / "dev"
+            dev.mkdir()
+            (dev / "nvidia0").touch()
+            proc = root / "proc"
+            uuid = "GPU-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+            for device in ("0000:01:00.0", "0000:02:00.0"):
+                info = proc / device
+                info.mkdir(parents=True)
+                (info / "information").write_text(f"GPU UUID: {uuid}\nDevice Minor: 0\n", encoding="ascii")
+            with self.assertRaisesRegex(platform_probe.PlatformProbeError, "duplicate NVIDIA GPU"):
+                platform_probe.probe_inventory(
+                    {"capabilities": {"gpu-nvidia": True, "gpu-nvidia-cdi": True}},
+                    sys_class_drm=root / "no-drm",
+                    dev_root=dev,
+                    proc_nvidia_gpus=proc,
+                    cdi_device_names={"nvidia.com/gpu=0", f"nvidia.com/gpu={uuid}"},
+                )
 
 
 class AcceleratorResolutionTests(unittest.TestCase):
