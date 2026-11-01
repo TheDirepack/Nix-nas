@@ -169,6 +169,29 @@ def repack_classes(source: pathlib.Path, destination: pathlib.Path, classes: pat
                 result.writestr(info, replacements.get(info.filename, original.read(info)))
 
 
+def publish_source_built_addons(
+    lock: dict[str, Any],
+    compiled: pathlib.Path,
+    source_plugins: pathlib.Path,
+    output: pathlib.Path,
+    installation: pathlib.Path,
+) -> None:
+    """Install verified patched add-ons ahead of ZAP's equal-version stock copies."""
+    outputs = lock["sourceBuild"]["outputs"]
+    output.mkdir(parents=True, exist_ok=True)
+    for row in lock["addons"]:
+        archive = row["archive"]
+        rebuilt = archive in outputs
+        source = compiled / archive if rebuilt else source_plugins / archive
+        shutil.copyfile(source, output / archive)
+        if rebuilt:
+            # Equal-version installation add-ons take precedence over ZAP_HOME.
+            installed = installation / "plugin" / archive
+            installed.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, installed)
+            verify_hash(installed, outputs[archive])
+
+
 def build_sources(lock: dict[str, Any], installation: pathlib.Path, output: pathlib.Path) -> None:
     recipe = lock["sourceBuild"]
     if recipe is None:
@@ -235,10 +258,7 @@ def build_sources(lock: dict[str, Any], installation: pathlib.Path, output: path
         print("ZAP source-build output SHA256: " + json.dumps(hashes, sort_keys=True), flush=True)
         for name, digest in recipe["outputs"].items():
             verify_hash(compiled / name, digest)
-        output.mkdir(parents=True, exist_ok=True)
-        for row in lock["addons"]:
-            source = compiled / row["archive"] if row["archive"] in hashes else directory / "plugin" / row["archive"]
-            shutil.copyfile(source, output / row["archive"])
+        publish_source_built_addons(lock, compiled, directory / "plugin", output, installation)
         shutil.copyfile(compiled / core.name, core)
 
 
@@ -301,7 +321,12 @@ def verify_artifacts(lock: dict[str, Any], home: pathlib.Path, installation: pat
     if recipe is not None:
         verify_hash(installation / recipe["core"]["archive"], outputs[recipe["core"]["archive"]])
     for row in lock["addons"]:
-        verify_hash(home / "plugin" / row["archive"], outputs.get(row["archive"], row["sha256"]))
+        digest = outputs.get(row["archive"], row["sha256"])
+        verify_hash(home / "plugin" / row["archive"], digest)
+        if row["archive"] in outputs:
+            # A matching home artifact is insufficient if the installation
+            # still contains an equally versioned upstream implementation.
+            verify_hash(installation / "plugin" / row["archive"], digest)
 
 
 def verify_evidence(lock_path: pathlib.Path, evidence_path: pathlib.Path, image: str, runtime_image: str) -> None:
