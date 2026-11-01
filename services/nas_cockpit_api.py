@@ -1095,37 +1095,24 @@ def _first_start_worker_live(job_id: str) -> bool:
 
 
 def _storage_host_units_active() -> bool:
-    """Return True if any detached nas-storage-host-*.service is still active.
-
-    run_storage_host() launches an independent transient systemd unit that can
-    outlive the first-start worker. Before admitting a replacement submission,
-    confirm no storage-host unit is still running so wipefs/zpool create on the
-    same devices cannot overlap.
-    """
-    # A detached transient unit may be activating or shutting down when the
-    # first-start worker dies. A queued systemd start job must also block
-    # replacement, even before ActiveState becomes 'activating'.
+    """Block replacement while detached storage units or their queued jobs remain."""
+    # Unfiltered list-units includes units with pending jobs. Separate state-
+    # filtered and job queries can both miss a job that starts between them.
     command = [
-        "systemctl", "list-units", "--state=activating,active,reloading,deactivating",
-        "--plain", "--no-legend", "--no-pager", "nas-storage-host-*.service",
+        "systemctl",
+        "list-units",
+        "--plain",
+        "--no-legend",
+        "--no-pager",
+        "nas-storage-host-*.service",
     ]
-    jobs_command = ["systemctl", "list-jobs", "--plain", "--no-legend", "--no-pager"]
     try:
         result = run(command, check=False, timeout_seconds=10)
         if result.returncode != 0:
             raise SetupApiError("Unable to verify whether storage-host work is still active", status=503)
-        if result.stdout.strip():
-            return True
-        jobs = run(jobs_command, check=False, timeout_seconds=10)
+        return bool(result.stdout.strip())
     except OSError as exc:
         raise SetupApiError("Unable to verify whether storage-host work is still active", status=503) from exc
-    if jobs.returncode != 0:
-        raise SetupApiError("Unable to verify whether storage-host work is still active", status=503)
-    for row in jobs.stdout.splitlines():
-        fields = row.split()
-        if len(fields) >= 2 and re.fullmatch(r"nas-storage-host-[0-9a-f]+\.service", fields[1]):
-            return True
-    return False
 
 
 def clear_active_setup_job() -> None:

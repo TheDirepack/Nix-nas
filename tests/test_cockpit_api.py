@@ -907,39 +907,54 @@ class SetupApiCapabilityTests(unittest.TestCase):
             self.assertFalse(api._storage_host_units_active())
 
     def test_storage_host_start_job_blocks_replacement_before_unit_is_active(self) -> None:
-        responses = [
-            mock.Mock(returncode=0, stdout=""),
-            mock.Mock(
-                returncode=0,
-                stdout="43 nas-storage-host-deadbeef.service start waiting\n",
-            ),
+        command = [
+            "systemctl",
+            "list-units",
+            "--plain",
+            "--no-legend",
+            "--no-pager",
+            "nas-storage-host-*.service",
         ]
-        with mock.patch.object(api, "run", side_effect=responses) as query:
-            self.assertTrue(api._storage_host_units_active())
-        self.assertEqual(query.call_count, 2)
-        self.assertIn("--state=activating,active,reloading,deactivating", query.call_args_list[0].args[0])
-        self.assertIn("list-jobs", query.call_args_list[1].args[0])
+        for state in (
+            "inactive dead start",
+            "activating start",
+            "active running",
+            "reloading reload",
+            "deactivating stop",
+        ):
+            with self.subTest(state=state):
+                row = f"nas-storage-host-deadbeef.service loaded {state}\n"
 
-    def test_storage_host_queued_job_query_fails_closed(self) -> None:
+                def snapshot(arguments, **_kwargs):
+                    missed_queued_unit = state.startswith("inactive") and any(
+                        argument.startswith("--state=") for argument in arguments
+                    )
+                    output = "" if "list-jobs" in arguments or missed_queued_unit else row
+                    return mock.Mock(returncode=0, stdout=output)
+
+                with mock.patch.object(api, "run", side_effect=snapshot) as query:
+                    self.assertTrue(api._storage_host_units_active())
+                query.assert_called_once_with(command, check=False, timeout_seconds=10)
+
+    def test_storage_host_snapshot_query_fails_closed(self) -> None:
         for result in (mock.Mock(returncode=1, stdout=""), OSError("bus unavailable")):
-            with self.subTest(result=result):
-                def respond(command, **_kwargs):
-                    if "list-units" in command:
-                        return mock.Mock(returncode=0, stdout="")
-                    if isinstance(result, Exception):
-                        raise result
-                    return result
-                with mock.patch.object(api, "run", side_effect=respond):
-                    with self.assertRaisesRegex(api.SetupApiError, "storage-host work is still active"):
-                        api._storage_host_units_active()
+            with self.subTest(result=result), mock.patch.object(api, "run") as query:
+                if isinstance(result, Exception):
+                    query.side_effect = result
+                else:
+                    query.return_value = result
+                with self.assertRaisesRegex(api.SetupApiError, "storage-host work is still active"):
+                    api._storage_host_units_active()
+                self.assertEqual(query.call_count, 1)
 
-    def test_storage_host_job_list_ignores_unrelated_units(self) -> None:
-        responses = [
-            mock.Mock(returncode=0, stdout=""),
-            mock.Mock(returncode=0, stdout="45 unrelated.service start waiting\nNo jobs running.\n"),
-        ]
-        with mock.patch.object(api, "run", side_effect=responses):
+    def test_storage_host_absence_uses_one_snapshot_not_a_later_job_query(self) -> None:
+        with mock.patch.object(api, "run", return_value=mock.Mock(returncode=0, stdout="")) as query:
             self.assertFalse(api._storage_host_units_active())
+        query.assert_called_once_with(
+            ["systemctl", "list-units", "--plain", "--no-legend", "--no-pager", "nas-storage-host-*.service"],
+            check=False,
+            timeout_seconds=10,
+        )
 
     def test_storage_host_units_active_raises_on_query_failure(self) -> None:
         with mock.patch.object(api, "run", side_effect=OSError("bus unavailable")):
