@@ -227,7 +227,13 @@ async function installCockpitMock(page, behavior = {}) {
             const next = firstStartResponses.shift();
             if (next.error) return rejected(next.error);
             const output = JSON.stringify(next.value || {status: "submitted", jobId: "a".repeat(24)});
-            const promise = new Promise((resolve) => setTimeout(() => resolve(output), next.delayMs || 0));
+            const promise = new Promise((resolve) => {
+              if (next.hold) {
+                globalThis.__nas_release_first_start = () => resolve(output);
+              } else {
+                setTimeout(() => resolve(output), next.delayMs || 0);
+              }
+            });
             promise.input = () => {};
             promise.stream = () => promise;
             return promise;
@@ -584,7 +590,7 @@ test("first-start form cannot submit twice while pending and does not report com
   payload.setup.setupState = {status: "ready"};
   await openApp(page, {
     payload,
-    firstStartResponses: [{delayMs: 350, value: {status: "submitted", jobId: "a".repeat(24)}}],
+    firstStartResponses: [{hold: true, value: {status: "submitted", jobId: "a".repeat(24)}}],
   });
   await page.locator(".pf-v6-c-nav").getByText("First start", {exact: true}).click();
   await page.getByLabel("KeePassXC database password", {exact: true}).fill("test-keystore-key");
@@ -598,13 +604,20 @@ test("first-start form cannot submit twice while pending and does not report com
   await start.click();
   await expect(start).toBeDisabled();
   await expect(page.getByText("Operation completed.")).toHaveCount(0);
-  await expect(page.getByRole("heading", {name: "First-start job"})).toBeVisible();
-  const calls = await page.evaluate(() =>
+  await expect(page.getByRole("heading", {name: "First-start job"})).toHaveCount(0);
+  const countCalls = () => page.evaluate(() =>
     globalThis.__nas_spawn_calls.filter((parts) =>
       parts[0] === "nas-cockpit-api" && parts[1] === "first-start"
     ).length
   );
-  expect(calls).toBe(1);
+  expect(await countCalls()).toBe(1);
+  // Even a second dispatched activation must not submit while the first
+  // promise is pending. The button remains disabled in normal UI interaction.
+  await start.dispatchEvent("click");
+  expect(await countCalls()).toBe(1);
+  await page.evaluate(() => globalThis.__nas_release_first_start());
+  await expect(page.getByRole("heading", {name: "First-start job"})).toBeVisible();
+  expect(await countCalls()).toBe(1);
   await expect(page.getByText("Operation completed.")).toHaveCount(0);
 });
 
