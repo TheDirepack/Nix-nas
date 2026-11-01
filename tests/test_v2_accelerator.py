@@ -68,6 +68,14 @@ def inventory() -> dict[str, object]:
 
 
 class PlatformProbeTests(unittest.TestCase):
+    def test_nixos_generates_uuid_cdi_after_toolkit_generator(self) -> None:
+        host = (ROOT / "modules/nas/config/host-platform.nix").read_text(encoding="utf-8")
+        managed = (ROOT / "modules/nas/config/managed-services.nix").read_text(encoding="utf-8")
+        self.assertIn('device-name-strategy = "uuid";', host)
+        self.assertIn('"nvidia-container-toolkit-cdi-generator.service"', managed)
+        self.assertIn('"--nvidia-ctk-bin"', managed)
+        self.assertIn('config.hardware.nvidia-container-toolkit.package "nvidia-ctk"', managed)
+
     def test_probe_discovers_drm_nvidia_device_set_and_cdi(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
