@@ -143,7 +143,7 @@ class V2SystemdReconcileTests(unittest.TestCase):
             units.mkdir(parents=True)
             unit = "nas-v2-session-agent.target"
             source = units / unit
-            source.write_text("[Unit]\\nDescription=Agent\\n", encoding="utf-8")
+            source.write_text("[Unit]\nDescription=Agent\n", encoding="utf-8")
             manifest = projection / "manifest.json"
             runtime = root / "systemd"
             runtime.mkdir()
@@ -164,9 +164,9 @@ class V2SystemdReconcileTests(unittest.TestCase):
             # Simulate an orphaned active unit after the disabled generation,
             # even though the manifest contains no previous target link.
             systemctl.write_text(
-                '#!/bin/sh\\nprintf "%s\\\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\\n'
-                'if [ "$1" = is-active ]; then printf "active\\\\n"; fi\\n'
-                'exit 0\\n',
+                '#!/bin/sh\nprintf "%s\\\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\n'
+                'if [ "$1" = is-active ]; then printf "active\\\\n"; fi\n'
+                'exit 0\n',
                 encoding="utf-8",
             )
             log.write_text("", encoding="utf-8")
