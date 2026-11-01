@@ -121,6 +121,19 @@ configuration file; it collects the KeePassXC database password and the
 administrator account, submits the guarded first-start job, and reports
 progress until the appliance is complete.
 
+Only one first-start submission can own the wizard's active-job tracking at a
+time. A second submission while a job is pending, running, or in an unknown
+tracked state returns HTTP 409 without replacing that job or its capability.
+Resume the existing job through the reauthorized wizard rather than submit it
+again. Submission, resume and reboot requests also return HTTP 409 while
+another tracking transition is in progress.
+
+The setup API gives clients 30 seconds to send the complete request headers and
+body. After a valid request arrives, status preparation and job submission use
+their existing command timeouts; the request-read deadline does not discard a
+legitimate processing response. A disconnected browser still does not cancel
+the detached worker. Refresh and resume to recover its progress.
+
 The browser path is the only first-start execution surface. `nas-setup` on the
 recovery plane stays read-only for this workflow: use
 `nas-setup prepare-first-start` to review the published `ready` state and plan
