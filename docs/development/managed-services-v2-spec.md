@@ -1029,7 +1029,7 @@ If a generated application config file is needed, prefer a generic file/material
 
 ### 23.1 Managed file contract (schema-only foundation)
 
-The V3 schema now reserves an optional per-service \`files:\` array for **non-secret literal** application configuration. This is a validation contract only: **nonempty declarations fail reconciliation with \`managed-file-unavailable\` until a subsequent PR implements generation staging and native runtime delivery**. No user should assume the files are being created yet.
+The V3 schema now reserves an optional per-service `files:` array for **non-secret literal** application configuration. This is a validation contract only: **nonempty declarations fail reconciliation with `managed-file-unavailable` until a subsequent PR implements generation staging and native runtime delivery**. No user should assume the files are being created yet.
 
 Illustrative future declaration:
 
@@ -1051,13 +1051,13 @@ services:
         onChange: restart
 ```
 
-The \`destination\` is a service-runtime path, **not authorization for the compiler to overwrite a host path**. The forthcoming projector must stage bytes in the unpublished generation and deliver them using runtime-specific native mount/credential facilities, with isolation and rollback. This stage does not yet promise \`reload\` or \`restart\` behavior.
+The `destination` is a service-runtime path, **not authorization for the compiler to overwrite a host path**. The forthcoming projector must stage bytes in the unpublished generation and deliver them using runtime-specific native mount/credential facilities, with isolation and rollback. This stage does not yet promise `reload` or `restart` behavior.
 
-The contract intentionally permits **literal UTF-8 content only**, with a maximum of 64 KiB; no shell expansion, templating, credential lookups, or secret-bearing mode exists. \`sensitivity: non-secret\` is mandatory because the contents remain in \`services.yaml\` and its Git history and would become visible in a generated plan once the feature is enabled. Never put secrets here.
+The contract intentionally permits **literal UTF-8 content only**, with a maximum of 64 KiB; no shell expansion, templating, credential lookups, or secret-bearing mode exists. `sensitivity: non-secret` is mandatory because the contents remain in `services.yaml` and its Git history and would become visible in a generated plan once the feature is enabled. Never put secrets here.
 
-IDs are unique per service. Destinations must be canonical absolute paths, cannot overlap each other or declared storage/file-credential mounts, and cannot target host-sensitive runtime trees such as \`/proc\`, \`/dev\`, \`/nix/store\`, or \`/run/nas-control\`. An empty or omitted \`files\` list remains valid and has no effect.
+IDs are unique per service. Destinations must be canonical absolute paths, cannot overlap each other or declared storage/file-credential mounts, and cannot target host-sensitive runtime trees such as `/proc`, `/dev`, `/nix/store`, or `/run/nas-control`. An empty or omitted `files` list remains valid and has no effect.
 
-**Future implementation gate:** remove \`managed-file-unavailable\` only in the same change that tests deterministic staging, symlink/TOCTOU-safe delivery, native runtime mounts, change-triggered restarts, and rollback. Secret materialization is a separate feature, not an extension of \`literal\` without credential isolation.
+**Future implementation gate:** remove `managed-file-unavailable` only in the same change that tests deterministic staging, symlink/TOCTOU-safe delivery, native runtime mounts, change-triggered restarts, and rollback. Secret materialization is a separate feature, not an extension of `literal` without credential isolation.
 
 ## 24. Host/platform capabilities
 
