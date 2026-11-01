@@ -224,9 +224,14 @@ test("refreshing an identical storage plan still invalidates destructive consent
 }) => {
   let refreshes = 0;
   const submissions = [];
+  let releaseRefresh;
+  const refreshedPlan = new Promise((resolve) => {
+    releaseRefresh = resolve;
+  });
   await mockSetupApi(page, async ({request, pathname}) => {
     if (request.method() === "GET" && pathname.endsWith("/first-start")) {
       refreshes += 1;
+      if (refreshes > 1) await refreshedPlan;
       return plan;
     }
     if (request.method() === "POST" && pathname.endsWith("/first-run")) {
@@ -243,6 +248,10 @@ test("refreshing an identical storage plan still invalidates destructive consent
   await expect(consent).toBeChecked();
   await page.getByRole("button", {name: "Refresh plan"}).click();
   await expect.poll(() => refreshes).toBeGreaterThanOrEqual(2);
+  await expect(page.getByText("Loading the storage plan...")).toBeVisible();
+  await expect(consent).toHaveCount(0);
+  releaseRefresh();
+  await expect(page.getByText("/dev/disk/by-id/disk-one")).toBeVisible();
   await expect(consent).not.toBeChecked();
   await page.getByRole("button", {name: "Next"}).click();
   await expect(page.getByText("No running setup job")).toBeVisible();
