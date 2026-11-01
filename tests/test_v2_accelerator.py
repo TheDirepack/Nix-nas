@@ -206,7 +206,12 @@ class PlatformProbeTests(unittest.TestCase):
         good = subprocess.CompletedProcess(
             args=["nvidia-ctk", "cdi", "list"],
             returncode=0,
-            stdout="INFO NVIDIA devices\nnvidia.com/gpu=0\nnvidia.com/gpu=GPU-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\nnvidia.com/gpu=all\n",
+            stdout=(
+                "INFO NVIDIA devices\n"
+                "nvidia.com/gpu=0\n"
+                "nvidia.com/gpu=GPU-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\n"
+                "nvidia.com/gpu=all\n"
+            ),
             stderr="",
         )
         with mock.patch.object(platform_probe.subprocess, "run", return_value=good) as run:
