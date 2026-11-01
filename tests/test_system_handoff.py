@@ -297,7 +297,8 @@ class SystemHandoffTests(unittest.TestCase):
             checksum = handoff / "system-closures.sha256"
             checksum.write_text(
                 "".join(
-                    line for line in checksum.read_text(encoding="utf-8").splitlines(keepends=True)
+                    line
+                    for line in checksum.read_text(encoding="utf-8").splitlines(keepends=True)
                     if "system-closures.part-000001.nar.gz" not in line
                 ),
                 encoding="utf-8",
@@ -319,9 +320,7 @@ class SystemHandoffTests(unittest.TestCase):
             fake_nix, fake_store = self.make_tools(root)
             env = self.environment(fake_nix, fake_store, export_log)
             self.run_handoff("save", handoff, env)
-            (handoff / "system-closures.exports").write_text(
-                "system-closures.part-000001.nar.gz\n", encoding="utf-8"
-            )
+            (handoff / "system-closures.exports").write_text("system-closures.part-000001.nar.gz\n", encoding="utf-8")
             invalid = self.run_handoff("verify", handoff, env, check=False)
             self.assertNotEqual(invalid.returncode, 0)
             self.assertIn("missing or out-of-order export stream", invalid.stderr)
