@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import pathlib
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services"))
@@ -199,6 +201,32 @@ class PlatformProbeTests(unittest.TestCase):
                         "allSelector" in result["accelerators"]["NVIDIA"],
                         "nvidia.com/gpu=all" in available,
                     )
+
+    def test_cdi_names_must_be_reported_by_toolkit(self) -> None:
+        good = subprocess.CompletedProcess(
+            args=["nvidia-ctk", "cdi", "list"],
+            returncode=0,
+            stdout="INFO NVIDIA devices\nnvidia.com/gpu=0\nnvidia.com/gpu=GPU-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\nnvidia.com/gpu=all\n",
+            stderr="",
+        )
+        with mock.patch.object(platform_probe.subprocess, "run", return_value=good) as run:
+            listed = platform_probe._listed_nvidia_cdi_devices("nvidia-ctk")
+        self.assertIn("nvidia.com/gpu=all", listed)
+        self.assertIn("nvidia.com/gpu=GPU-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", listed)
+        self.assertNotIn("INFO NVIDIA devices", listed)
+        run.assert_called_once_with(
+            ["nvidia-ctk", "cdi", "list"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+
+        failed = subprocess.CompletedProcess(args=[], returncode=1, stdout="nvidia.com/gpu=all", stderr="error")
+        with mock.patch.object(platform_probe.subprocess, "run", return_value=failed):
+            self.assertEqual(platform_probe._listed_nvidia_cdi_devices("nvidia-ctk"), set())
+        with mock.patch.object(platform_probe.subprocess, "run", side_effect=FileNotFoundError()):
+            self.assertEqual(platform_probe._listed_nvidia_cdi_devices("nvidia-ctk"), set())
 
     def test_conflicting_driver_minors_or_uuids_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
