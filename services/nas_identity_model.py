@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import pathlib
 from collections.abc import Sequence
@@ -140,13 +141,20 @@ def build_model(data: Mapping[str, Any]) -> IdentityModel:
     users: list[User] = []
     for raw in raw_users:
         username = raw.get("username")
-        if not isinstance(username, str):
+        if not isinstance(username, str) or raw.get("is_active") is not True:
             continue
-        uid = validate_uid(username)
+        # Upstream identity providers can create names that are not safe
+        # filesystem identifiers. Do not let an unmanaged/disabled account
+        # prevent reconciliation for all valid NAS users.
+        try:
+            uid = validate_uid(username)
+        except SyncError:
+            logging.getLogger(__name__).warning(
+                "Skipping Authentik account %r: not a valid managed folder identifier", username
+            )
+            continue
         user_groups = group_names(raw, groups_by_pk)
         user_groups.update(explicit_groups_by_uid.get(uid, set()))
-        if raw.get("is_active") is not True:
-            user_groups.add(DISABLED_GROUP)
         user = User(
             uid,
             str(raw.get("email") or f"{uid}@invalid.local"),
