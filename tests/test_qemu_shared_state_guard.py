@@ -31,8 +31,12 @@ class SharedQemuInstallStateTests(unittest.TestCase):
             )
             result = subprocess.run(
                 [
-                    "bash", "-c", script, "guard-fixture",
-                    str(HELPER), str(pidfile),
+                    "bash",
+                    "-c",
+                    script,
+                    "guard-fixture",
+                    str(HELPER),
+                    str(pidfile),
                     "1" if persistent else "0",
                     "1" if reuse else "0",
                     *(str(path) for path in paths),
@@ -59,9 +63,7 @@ class SharedQemuInstallStateTests(unittest.TestCase):
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
         for persistent, reuse, complete in ((True, False, True), (True, True, False)):
             with self.subTest(persistent=persistent, reuse=reuse, complete=complete):
-                rejected = self.guard(
-                    pid_exists=True, status=0, persistent=persistent, reuse=reuse, complete=complete
-                )
+                rejected = self.guard(pid_exists=True, status=0, persistent=persistent, reuse=reuse, complete=complete)
                 self.assertEqual(rejected.returncode, 1)
 
     def test_foreign_pid_must_not_be_treated_as_stale(self):
@@ -92,13 +94,20 @@ class SharedQemuInstallStateTests(unittest.TestCase):
             )
             holder = subprocess.Popen(
                 ["bash", "-c", holder_script, "holder", str(HELPER), str(lock), str(release)],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
             )
             try:
-                self.assertEqual(holder.stdout.readline().strip(), "locked")
+                holder_stdout = holder.stdout
+                assert holder_stdout is not None
+                self.assertEqual(holder_stdout.readline().strip(), "locked")
                 blocked = subprocess.run(
                     ["bash", "-c", contender_script, "contender", str(HELPER), str(lock)],
-                    capture_output=True, text=True, check=False, timeout=5,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=5,
                 )
                 self.assertNotEqual(blocked.returncode, 0)
                 self.assertIn("already owned", blocked.stderr)
