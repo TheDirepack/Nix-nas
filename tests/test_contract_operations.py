@@ -183,7 +183,11 @@ class ContractTests(unittest.TestCase):
         self.assertIn("--local-session", services)
         self.assertNotIn("settings.bearer", services)
         self.assertNotIn("nas-cockpit-oauth", services)
-        self.assertIn("--address 127.0.0.1", services)
+        self.assertNotIn("--address 127.0.0.1", services)
+        self.assertIn('ListenStream = "/run/nas-cockpit-sso/ws.sock";', services)
+        self.assertIn("SocketGroup = config.services.caddy.group;", services)
+        self.assertIn('SocketMode = "0660";', services)
+        self.assertIn('SocketBindDeny = "any";', services)
         self.assertIn("AllowUnencrypted = false", services)
         self.assertIn("activate-stdin)", secrets)
 

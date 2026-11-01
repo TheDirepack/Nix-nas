@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import io
 import pathlib
@@ -138,7 +139,29 @@ class SetupRebootE2eContracts(unittest.TestCase):
         self.assertIn('"--resolve"', source)
         self.assertIn('"nas-test.local:8443:127.0.0.1"', source)
         self.assertIn('"http://127.0.0.1:8222/vault/alive"', source)
-        self.assertIn('"http://127.0.0.1:9092/console/"', source)
+        cockpit_probes = [
+            node
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "wait_http"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == "Cockpit"
+        ]
+        self.assertEqual(len(cockpit_probes), 1)
+        self.assertEqual(
+            ast.literal_eval(cockpit_probes[0].args[0]),
+            (
+                "curl",
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--unix-socket",
+                "/run/nas-cockpit-sso/ws.sock",
+                "http://localhost/console/",
+            ),
+        )
         self.assertIn('"http://127.0.0.1:9010/outpost.goauthentik.io/ping"', source)
         self.assertIn('require(("zpool", "import", "-N", "tank"))', source)
         self.assertIn('input_text="nixos-nas-vm-test-password\\n"', source)

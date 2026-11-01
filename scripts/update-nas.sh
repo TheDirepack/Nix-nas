@@ -82,7 +82,6 @@ original_source_commit=""
 authentik_port="${NAS_AUTHENTIK_PORT:-9000}"
 authentik_path="${NAS_AUTHENTIK_PATH:-/identity/}"
 caddy_ca_file="${NAS_CADDY_CA_FILE:-/run/nas-caddy-ca/ca-bundle.crt}"
-cockpit_port="${NAS_COCKPIT_PORT:-9092}"
 firewall_enabled="${NAS_FIREWALL_ENABLED:-1}"
 firewall_zone="${NAS_FIREWALL_ZONE:-nas-lan}"
 lan_host="${NAS_LAN_HOST:-$(cat /proc/sys/kernel/hostname).local}"
@@ -298,7 +297,7 @@ health_check() {
       systemctl is-active --quiet "$unit" || { echo "$unit is not active" >&2; return 1; }
     done
     [[ -S /run/copyparty/http.sock ]]
-    listener_present "$cockpit_port" || { echo "Cockpit is not listening on $cockpit_port" >&2; return 1; }
+    [[ -S /run/nas-cockpit-sso/ws.sock ]] || { echo "Cockpit Unix listener is missing" >&2; return 1; }
     listener_present 443 || { echo "Caddy is not listening on 443" >&2; return 1; }
     curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:${authentik_port}${authentik_path}-/health/ready/" >/dev/null
     curl --fail --silent --show-error --max-time 10 --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null

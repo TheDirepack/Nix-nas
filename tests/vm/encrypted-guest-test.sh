@@ -111,8 +111,9 @@ run_as_admin_with_stdin() {
 log "Verify encrypted fixture starts locked"
 ! systemctl is-active --quiet cockpit.socket || fail "stock Cockpit socket must stay inactive while locked"
 wait_active nas-cockpit-sso.service
-ss -tln | grep -Eq '127\.0\.0\.1:9092[[:space:]]' || fail "Cockpit SSO session is not loopback-only while locked"
-! ss -tln | grep -Eq '(0\.0\.0\.0|\[::\]):9092[[:space:]]' || fail "Cockpit listener is exposed while locked"
+[[ -S /run/nas-cockpit-sso/ws.sock ]] || fail "Cockpit permissioned Unix listener is missing"
+! ss -ltnp | grep -F 'cockpit-ws' || fail "Unauthenticated Cockpit root bridge opened a TCP listener"
+! ss -tln | grep -Eq ':9092[[:space:]]' || fail "Unauthenticated root Cockpit TCP listener is exposed"
 [[ ! -e /run/nas-secrets/ready ]] || fail "runtime secrets were unexpectedly active"
 ! systemctl is-active --quiet nas-protected-services.target || fail "protected services started before unlock"
 [[ ! -e /run/nas-control/effective.json ]] || fail "managed state was compiled before unlock"

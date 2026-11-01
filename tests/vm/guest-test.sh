@@ -368,8 +368,9 @@ pass "nas-managed-services-control document returns the editable YAML authority"
 log "Locked-state and configuration checks"
 ! systemctl is-active --quiet cockpit.socket || fail "stock Cockpit socket must stay inactive while locked"
 wait_active nas-cockpit-sso.service
-ss -tln | grep -Eq '127\.0\.0\.1:9092[[:space:]]' || fail "Cockpit SSO session is not loopback-only while locked"
-! ss -tln | grep -Eq '(0\.0\.0\.0|\[::\]):9092[[:space:]]' || fail "Cockpit listener is exposed while locked"
+[[ -S /run/nas-cockpit-sso/ws.sock ]] || fail "Cockpit permissioned Unix listener is missing"
+! ss -ltnp | grep -F 'cockpit-ws' || fail "Unauthenticated Cockpit root bridge opened a TCP listener"
+! ss -tln | grep -Eq ':9092[[:space:]]' || fail "Unauthenticated root Cockpit TCP listener is exposed"
 wait_active nas-first-start.service
 systemctl show nas-first-start.service --property=RemainAfterExit --value | grep -qx yes
 jq -e '.schemaVersion == 2 and (.status | type == "string")' /var/lib/nas-first-start/status.json >/dev/null
@@ -1351,7 +1352,8 @@ wait_inactive authentik.service
 wait_inactive nas-zfs-mount-guard.service
 wait_active nas-cockpit-sso.service
 ! systemctl is-active --quiet cockpit.socket || fail "stock Cockpit socket started after setup"
-ss -tln | grep -Eq '127\.0\.0\.1:9092[[:space:]]' || fail "Cockpit SSO session is not loopback-only"
+[[ -S /run/nas-cockpit-sso/ws.sock ]] || fail "Cockpit permissioned Unix listener is missing"
+! ss -ltnp | grep -F 'cockpit-ws' || fail "Unauthenticated Cockpit root bridge opened a TCP listener"
 [[ ! -e /run/nas-secrets ]] || fail "runtime secret tree survived nas-secrets stop"
 
 activate_secrets

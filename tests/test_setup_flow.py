@@ -58,7 +58,7 @@ class TestCaddyConfig(unittest.TestCase):
         console = content[console_start:console_end]
         self.assertIn("${caddyForwardAuth}", console)
         self.assertIn("respond @missingCockpitAdmin 403", console)
-        self.assertIn("reverse_proxy 127.0.0.1:${toString cockpitPort}", console)
+        self.assertIn("reverse_proxy unix//run/nas-cockpit-sso/ws.sock", console)
 
         root = content[content.index("handle / {") : content.index("handle /setup {")]
         self.assertIn("redir * ${cfg.identity.authentikPath}if/user/ 303", root)
