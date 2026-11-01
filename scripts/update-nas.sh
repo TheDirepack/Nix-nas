@@ -247,7 +247,10 @@ external_management_probe() {
   mapfile -d '' -t probe < <(python3 - "$raw" <<'PY_EXTERNAL_PROBE'
 import json
 import sys
-value = json.loads(sys.argv[1])
+try:
+    value = json.loads(sys.argv[1])
+except json.JSONDecodeError:
+    raise SystemExit("external probe command must be valid JSON") from None
 if not isinstance(value, list) or not value or not all(isinstance(item, str) and item for item in value):
     raise SystemExit("external probe command must be a nonempty JSON string array")
 for item in value:
