@@ -791,16 +791,235 @@ class SetupApiCapabilityTests(unittest.TestCase):
                 api.record_active_setup_job("a" * 24)
                 with (
                     mock.patch.object(api, "first_start_job_status", return_value={"status": state}),
+                    mock.patch.object(api, "_first_start_worker_live", return_value=True) as worker,
                     mock.patch.object(
                         api, "start_first_start", return_value={"status": "submitted", "jobId": "b" * 24}
                     ) as submit,
                 ):
                     status, _ = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
                 self.assertIn(b"409", status)
+                worker.assert_called_once_with("a" * 24)
                 submit.assert_not_called()
                 self.assertEqual(api.read_active_setup_job(), "a" * 24)
                 with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
                     self.assertEqual(api.lookup_setup_capability(token), "a" * 24)
+
+    def test_setup_worker_state_checks_the_exact_transient_unit(self) -> None:
+        unit = "nas-first-start-" + "a" * 24 + ".service"
+        for load, active, expected in (
+            ("loaded", "active", True),
+            ("loaded", "activating", True),
+            ("loaded", "deactivating", True),
+            ("loaded", "inactive", False),
+            ("loaded", "failed", False),
+            ("not-found", "inactive", False),
+        ):
+            with self.subTest(load=load, active=active):
+                output = f"Id={unit}\nLoadState={load}\nActiveState={active}\n"
+                with mock.patch.object(api, "run", return_value=mock.Mock(returncode=0, stdout=output)) as query:
+                    self.assertIs(api._first_start_worker_live("a" * 24), expected)
+                query.assert_called_once_with(
+                    ["systemctl", "show", "--property=Id,LoadState,ActiveState", unit],
+                    check=False,
+                    timeout_seconds=10,
+                )
+
+    def test_setup_worker_query_failures_keep_the_claim(self) -> None:
+        unit = "nas-first-start-" + "a" * 24 + ".service"
+        for value in (
+            mock.Mock(returncode=1, stdout=f"Id={unit}\nLoadState=not-found\nActiveState=inactive\n"),
+            mock.Mock(returncode=0, stdout=""),
+            mock.Mock(returncode=0, stdout=f"Id={unit}\nLoadState=error\nActiveState=unknown\n"),
+            OSError("systemd unavailable"),
+        ):
+            with self.subTest(value=value), mock.patch.object(api, "run") as query:
+                if isinstance(value, OSError):
+                    query.side_effect = value
+                else:
+                    query.return_value = value
+                with self.assertRaises(api.SetupApiError) as caught:
+                    api._first_start_worker_live("a" * 24)
+                self.assertEqual(caught.exception.status, 503)
+
+    def test_collected_worker_not_found_can_be_recovered_only_after_confirmed_absence(self) -> None:
+        unit = "nas-first-start-" + "a" * 24 + ".service"
+        missing = mock.Mock(returncode=4, stdout="", stderr=f"Unit {unit} could not be found.")
+        list_args = ["systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager", unit]
+        with mock.patch.object(
+            api, "run", side_effect=[missing, mock.Mock(returncode=0, stdout="", stderr="")]
+        ) as query:
+            self.assertFalse(api._first_start_worker_live("a" * 24))
+        self.assertEqual(query.call_args_list[1], mock.call(list_args, check=False, timeout_seconds=10))
+
+        for listed in (
+            mock.Mock(returncode=1, stdout="", stderr="bus unavailable"),
+            mock.Mock(returncode=0, stdout=unit + " loaded failed failed", stderr=""),
+        ):
+            with self.subTest(listed=listed):
+                with mock.patch.object(api, "run", side_effect=[missing, listed]):
+                    with self.assertRaises(api.SetupApiError) as caught:
+                        api._first_start_worker_live("a" * 24)
+                self.assertEqual(caught.exception.status, 503)
+
+    def test_active_worker_requires_consistent_load_state(self) -> None:
+        unit = "nas-first-start-" + "a" * 24 + ".service"
+        for load in ("not-found", "error", ""):
+            output = f"Id={unit}\nLoadState={load}\nActiveState=active\n"
+            with (
+                self.subTest(load=load),
+                mock.patch.object(api, "run", return_value=mock.Mock(returncode=0, stdout=output)),
+            ):
+                with self.assertRaises(api.SetupApiError) as caught:
+                    api._first_start_worker_live("a" * 24)
+                self.assertEqual(caught.exception.status, 503)
+
+    def test_stale_running_job_can_be_resubmitted_after_worker_exits(self) -> None:
+        for state in ("running", "pending", "submitted", "unknown"):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as directory:
+                _, socket_path = self.live_server(directory)
+                api.record_active_setup_job("a" * 24)
+                with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+                    old_capability = api.issue_setup_capability("a" * 24)
+                with (
+                    mock.patch.object(api, "first_start_job_status", return_value={"status": state}),
+                    mock.patch.object(api, "_first_start_worker_live", return_value=False) as worker,
+                    mock.patch.object(
+                        api, "start_first_start", return_value={"status": "submitted", "jobId": "b" * 24}
+                    ) as submit,
+                ):
+                    status, response = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
+                self.assertIn(b"200", status)
+                worker.assert_called_once_with("a" * 24)
+                submit.assert_called_once_with({})
+                self.assertEqual(response["jobId"], "b" * 24)
+                self.assertEqual(api.read_active_setup_job(), "b" * 24)
+                with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+                    self.assertIsNone(api.lookup_setup_capability(old_capability))
+                    self.assertEqual(api.lookup_setup_capability(response["capability"]), "b" * 24)
+
+    def test_storage_host_units_active_detects_running_service(self) -> None:
+        output = "nas-storage-host-abcd1234.service active active running\n"
+        with mock.patch.object(api, "run", return_value=mock.Mock(returncode=0, stdout=output)):
+            self.assertTrue(api._storage_host_units_active())
+
+    def test_storage_host_units_active_false_when_no_units(self) -> None:
+        with mock.patch.object(api, "run", return_value=mock.Mock(returncode=0, stdout="")):
+            self.assertFalse(api._storage_host_units_active())
+
+    def test_storage_host_start_job_blocks_replacement_before_unit_is_active(self) -> None:
+        command = [
+            "systemctl",
+            "list-units",
+            "--plain",
+            "--no-legend",
+            "--no-pager",
+            "nas-storage-host-*.service",
+        ]
+        for state in (
+            "inactive dead start",
+            "activating start",
+            "active running",
+            "reloading reload",
+            "deactivating stop",
+        ):
+            with self.subTest(state=state):
+                row = f"nas-storage-host-deadbeef.service loaded {state}\n"
+
+                def snapshot(arguments, **_kwargs):
+                    missed_queued_unit = state.startswith("inactive") and any(
+                        argument.startswith("--state=") for argument in arguments
+                    )
+                    output = "" if "list-jobs" in arguments or missed_queued_unit else row
+                    return mock.Mock(returncode=0, stdout=output)
+
+                with mock.patch.object(api, "run", side_effect=snapshot) as query:
+                    self.assertTrue(api._storage_host_units_active())
+                query.assert_called_once_with(command, check=False, timeout_seconds=10)
+
+    def test_storage_host_snapshot_query_fails_closed(self) -> None:
+        for result in (mock.Mock(returncode=1, stdout=""), OSError("bus unavailable")):
+            with self.subTest(result=result), mock.patch.object(api, "run") as query:
+                if isinstance(result, Exception):
+                    query.side_effect = result
+                else:
+                    query.return_value = result
+                with self.assertRaisesRegex(api.SetupApiError, "storage-host work is still active"):
+                    api._storage_host_units_active()
+                self.assertEqual(query.call_count, 1)
+
+    def test_storage_host_absence_uses_one_snapshot_not_a_later_job_query(self) -> None:
+        with mock.patch.object(api, "run", return_value=mock.Mock(returncode=0, stdout="")) as query:
+            self.assertFalse(api._storage_host_units_active())
+        query.assert_called_once_with(
+            ["systemctl", "list-units", "--plain", "--no-legend", "--no-pager", "nas-storage-host-*.service"],
+            check=False,
+            timeout_seconds=10,
+        )
+
+    def test_storage_host_units_active_raises_on_query_failure(self) -> None:
+        with mock.patch.object(api, "run", side_effect=OSError("bus unavailable")):
+            with self.assertRaisesRegex(api.SetupApiError, "storage-host work is still active"):
+                api._storage_host_units_active()
+
+    def test_first_run_blocks_when_storage_host_is_active(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, socket_path = self.live_server(directory)
+            api.record_active_setup_job("a" * 24)
+            with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+                old_capability = api.issue_setup_capability("a" * 24)
+            with (
+                mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}),
+                mock.patch.object(api, "_first_start_worker_live", return_value=False),
+                mock.patch.object(api, "_storage_host_units_active", return_value=True),
+                mock.patch.object(api, "start_first_start") as submit,
+            ):
+                status, _ = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
+            self.assertIn(b"409", status)
+            submit.assert_not_called()
+            self.assertEqual(api.read_active_setup_job(), "a" * 24)
+            with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+                self.assertEqual(api.lookup_setup_capability(old_capability), "a" * 24)
+
+    def test_first_run_proceeds_when_no_storage_host_is_active(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, socket_path = self.live_server(directory)
+            api.record_active_setup_job("a" * 24)
+            with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+                api.issue_setup_capability("a" * 24)
+            with (
+                mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}),
+                mock.patch.object(api, "_first_start_worker_live", return_value=False),
+                mock.patch.object(api, "_storage_host_units_active", return_value=False),
+                mock.patch.object(
+                    api, "start_first_start", return_value={"status": "submitted", "jobId": "b" * 24}
+                ) as submit,
+            ):
+                status, response = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
+            self.assertIn(b"200", status)
+            submit.assert_called_once_with({})
+            self.assertEqual(response["jobId"], "b" * 24)
+            self.assertEqual(api.read_active_setup_job(), "b" * 24)
+
+    def test_unavailable_worker_state_never_overwrites_tracked_job(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, socket_path = self.live_server(directory)
+            api.record_active_setup_job("a" * 24)
+            with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+                token = api.issue_setup_capability("a" * 24)
+            with (
+                mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}),
+                mock.patch.object(
+                    api, "_first_start_worker_live", side_effect=api.SetupApiError("systemd unavailable", status=503)
+                ),
+                mock.patch.object(api, "start_first_start") as submit,
+            ):
+                status, response = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
+            self.assertIn(b"503", status)
+            self.assertIn("systemd unavailable", response["error"])
+            submit.assert_not_called()
+            self.assertEqual(api.read_active_setup_job(), "a" * 24)
+            with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+                self.assertEqual(api.lookup_setup_capability(token), "a" * 24)
 
     def test_submission_obeys_process_shared_claim_lock(self) -> None:
         lock_path = self.active_job.parent / ".submission.lock"
