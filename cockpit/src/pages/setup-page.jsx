@@ -43,12 +43,16 @@ export function SetupPage({data, mutate, busy}) {
 
   const submit = async () => {
     try {
-      const value = await mutate(() => startFirstRun(password, administrator, {
-        planDigest: model.planDigest,
-        devices: selectedDevices,
-        allowDestructiveStorage: allowDestructive,
-        confirmPasswordReapply,
-      }), {successNotice: null});
+      const value = await mutate(
+        () =>
+          startFirstRun(password, administrator, {
+            planDigest: model.planDigest,
+            devices: selectedDevices,
+            allowDestructiveStorage: allowDestructive,
+            confirmPasswordReapply,
+          }),
+        {successNotice: null},
+      );
       setPassword("");
       setPasswordConfirm("");
       setAdministrator({...administrator, password: ""});

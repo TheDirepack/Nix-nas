@@ -223,10 +223,16 @@ async function installCockpitMock(page, behavior = {}) {
           ) {
             return rejected(configuredBehavior.actionError);
           }
-          if (args[0] === "nas-cockpit-api" && args[1] === "first-start" && firstStartResponses.length) {
+          if (
+            args[0] === "nas-cockpit-api" &&
+            args[1] === "first-start" &&
+            firstStartResponses.length
+          ) {
             const next = firstStartResponses.shift();
             if (next.error) return rejected(next.error);
-            const output = JSON.stringify(next.value || {status: "submitted", jobId: "a".repeat(24)});
+            const output = JSON.stringify(
+              next.value || {status: "submitted", jobId: "a".repeat(24)},
+            );
             const promise = new Promise((resolve) => {
               if (next.hold) {
                 globalThis.__nas_release_first_start = () => resolve(output);
@@ -581,10 +587,14 @@ test("confirmation dialog supports keyboard cancellation", async ({page}) => {
   expect(actionCalls).toBe(0);
 });
 
-test("first-start form cannot submit twice while pending and does not report completion early", async ({page}) => {
+test("first-start form cannot submit twice while pending and does not report completion early", async ({
+  page,
+}) => {
   const payload = overview();
   payload.setup.firstStart = {
-    status: "ready", message: "Ready for initial setup", planDigest: "a".repeat(64),
+    status: "ready",
+    message: "Ready for initial setup",
+    planDigest: "a".repeat(64),
     storage: {devices: []},
   };
   payload.setup.setupState = {status: "ready"};
@@ -605,11 +615,13 @@ test("first-start form cannot submit twice while pending and does not report com
   await expect(start).toBeDisabled();
   await expect(page.getByText("Operation completed.")).toHaveCount(0);
   await expect(page.getByRole("heading", {name: "First-start job"})).toHaveCount(0);
-  const countCalls = () => page.evaluate(() =>
-    globalThis.__nas_spawn_calls.filter((parts) =>
-      parts[0] === "nas-cockpit-api" && parts[1] === "first-start"
-    ).length
-  );
+  const countCalls = () =>
+    page.evaluate(
+      () =>
+        globalThis.__nas_spawn_calls.filter(
+          (parts) => parts[0] === "nas-cockpit-api" && parts[1] === "first-start",
+        ).length,
+    );
   expect(await countCalls()).toBe(1);
   // Even a second dispatched activation must not submit while the first
   // promise is pending. The button remains disabled in normal UI interaction.
@@ -624,7 +636,9 @@ test("first-start form cannot submit twice while pending and does not report com
 test("failed first-start submission reports its error and allows a retry", async ({page}) => {
   const payload = overview();
   payload.setup.firstStart = {
-    status: "ready", message: "Ready for initial setup", planDigest: "a".repeat(64),
+    status: "ready",
+    message: "Ready for initial setup",
+    planDigest: "a".repeat(64),
     storage: {devices: []},
   };
   payload.setup.setupState = {status: "ready"};
@@ -649,9 +663,14 @@ test("failed first-start submission reports its error and allows a retry", async
   await start.click();
   await expect(page.getByRole("heading", {name: "First-start job"})).toBeVisible();
   await expect(page.getByText("Operation completed.")).toHaveCount(0);
-  expect(await page.evaluate(() => globalThis.__nas_spawn_calls.filter((args) =>
-    args[0] === "nas-cockpit-api" && args[1] === "first-start"
-  ).length)).toBe(2);
+  expect(
+    await page.evaluate(
+      () =>
+        globalThis.__nas_spawn_calls.filter(
+          (args) => args[0] === "nas-cockpit-api" && args[1] === "first-start",
+        ).length,
+    ),
+  ).toBe(2);
 });
 
 test("locked-screen Enter unlocks exactly once without navigating away", async ({page}) => {
@@ -662,8 +681,13 @@ test("locked-screen Enter unlocks exactly once without navigating away", async (
   await input.fill("unlock-on-enter");
   await input.press("Enter");
   await expect(page.getByText("Runtime secrets activated.")).toBeVisible();
-  expect(await page.evaluate(() => globalThis.__nas_spawn_calls.filter((args) =>
-    args[0] === "nas-secrets" && args[1] === "activate-stdin"
-  ).length)).toBe(1);
+  expect(
+    await page.evaluate(
+      () =>
+        globalThis.__nas_spawn_calls.filter(
+          (args) => args[0] === "nas-secrets" && args[1] === "activate-stdin",
+        ).length,
+    ),
+  ).toBe(1);
   expect(new URL(page.url()).pathname).toBe("/index.html");
 });
