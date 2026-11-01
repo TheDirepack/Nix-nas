@@ -168,6 +168,16 @@ class V2BackupTests(unittest.TestCase):
             self.assertIn(str(root / "backup-resources.json"), result["changedFiles"])
             self.assertIn(str(root / "backup-paths.txt"), result["changedFiles"])
 
+    def test_restic_profile_uses_stable_host_tag_identity_for_backups_and_retention(self):
+        source = (ROOT / "modules/nas/config/managed-services-backup-profile.nix").read_text(encoding="utf-8")
+        backup_section = source.split("      backup = {", 1)[1].split("      retention = {", 1)[0]
+        retention_section = source.split("      retention = {", 1)[1].split("      check = {", 1)[0]
+        self.assertIn('"group-by" = "host,tags";', backup_section)
+        self.assertIn('tag = [ "nas-boot-system" ];', backup_section)
+        self.assertIn('"group-by" = "host,tags";', retention_section)
+        self.assertIn("tag = true;", retention_section)
+        self.assertNotIn('"group-by" = "host,paths";', source)
+
     def test_nix_keeps_restic_native_and_preparation_application_agnostic(self):
         default_module = (ROOT / "modules/nas/default.nix").read_text(encoding="utf-8")
         storage = (ROOT / "modules/nas/config/storage-monitoring.nix").read_text(encoding="utf-8")
