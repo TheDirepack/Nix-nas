@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -145,6 +146,114 @@ class UpdateRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
         self.assertEqual(self.probe_args.read_bytes(), b"failure-control\0")
+
+    def test_preflight_rejects_embedded_nul_before_launch(self):
+        invalid = (
+            [str(self.probe), "bad\u0000tail"],
+            [str(self.probe), ""],
+            [],
+            {"not": "an argv"},
+        )
+        for args in invalid:
+            with self.subTest(args=args):
+                result = self.run_function(
+                    "validate_external_probe_configuration",
+                    inherited=("pkgs.python3",),
+                    NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON=json.dumps(args),
+                )
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertFalse(self.trace.exists(), "preflight must not run the probe")
+                self.assertFalse(self.probe_args.exists())
+                if isinstance(args, list) and any("\u0000" in arg for arg in args):
+                    self.assertIn("contains NUL", result.stderr)
+
+    def test_preflight_accepts_literal_backslash_x_without_running_probe(self):
+        result = self.run_function(
+            "validate_external_probe_configuration",
+            inherited=("pkgs.python3",),
+            NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON=json.dumps([str(self.probe), r"\\x00"]),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.trace.exists())
+        self.assertFalse(self.probe_args.exists())
+
+    def test_update_checks_probe_and_profile_before_any_snapshot_or_activation(self):
+        source = text("scripts/update-nas.sh")
+        preflight = source.index('if [[ -z "$old_profile_link" || -z "$old_profile" ]]')
+        probe = source.index("  validate_external_probe_configuration", preflight)
+        snapshot = source.index("  create_state_snapshot", probe)
+        activate = source.index("  nixos-rebuild test --flake", snapshot)
+        self.assertLess(preflight, probe)
+        self.assertLess(probe, snapshot)
+        self.assertLess(snapshot, activate)
+
+    def test_missing_profile_baseline_aborts_before_probe_preflight(self):
+        source = text("scripts/update-nas.sh")
+        section = (
+            "if $apply; then"
+            + source.split("# Check external probe *configuration*", 1)[1]
+            .split("if $apply; then", 1)[1]
+            .split('echo "Evaluating reviewed flake inputs', 1)[0]
+        )
+        script = (
+            "set -euo pipefail\n"
+            "apply=true\n"
+            "old_profile_link=''\n"
+            "old_profile=''\n"
+            "validate_external_probe_configuration() { echo PROBE_CALLED; }\n" + section
+        )
+        result = subprocess.run(
+            [self.bash, "--noprofile", "--norc", "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("rollback baseline", result.stderr)
+        self.assertNotIn("PROBE_CALLED", result.stdout)
+
+    def test_persistent_profile_rollback_uses_symlink_target_changes(self):
+        source = text("scripts/update-nas.sh")
+        rollback_source = (
+            "rollback() {" + source.split("rollback() {", 1)[1].split("\n}\n\ntrap rollback EXIT", 1)[0] + "\n}"
+        )
+        for changed in (False, True):
+            with self.subTest(changed=changed):
+                with tempfile.TemporaryDirectory() as folder:
+                    location = Path(folder)
+                    system_profile = location / "system"
+                    system_profile.symlink_to("generation-2" if changed else "generation-1")
+                    log = location / "rollback.log"
+                    command = (
+                        "set -euo pipefail\n"
+                        f"system_profile={shlex.quote(str(system_profile))}\n"
+                        f"trace={shlex.quote(str(log))}\n"
+                        'old_profile_link="generation-1"\n'
+                        'old_profile=""\n'
+                        "rollback_needed=true\n"
+                        "runtime_activation_attempted=false\n"
+                        "source_promoted=false\n"
+                        'original_source_commit=""\n'
+                        "cleanup_candidate() { :; }\n"
+                        'nixos-rebuild() { printf "%s\\n" "$*" >> "$trace"; ln -sfn generation-1 "$system_profile"; }\n'
+                        + rollback_source
+                        + "\nset +e\nfalse\nrollback\n"
+                    )
+                    result = subprocess.run(
+                        [self.bash, "--noprofile", "--norc", "-c", command],
+                        cwd=location,
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertEqual(system_profile.readlink(), Path("generation-1"))
+                    if changed:
+                        self.assertIn("--rollback switch", log.read_text(encoding="utf-8"))
+                    else:
+                        self.assertFalse(log.exists(), "unchanged profile must not trigger rollback")
 
     def test_invalid_probe_is_rejected_without_launch(self):
         # The Python validator fails first; wait propagates that failure before
