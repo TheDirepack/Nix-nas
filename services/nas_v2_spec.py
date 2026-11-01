@@ -349,8 +349,8 @@ def _normalize_service(service: dict[str, Any]) -> None:
         sandbox.setdefault("noNewPrivileges", True)
     service.setdefault("storage", [])
     service.setdefault("credentials", [])
-    service.setdefault("files", [])
-    for managed_file in service["files"]:
+    # Absent files must not change the effective representation of older specs.
+    for managed_file in service.get("files", []):
         managed_file.setdefault("delivery", "generation")
         managed_file.setdefault("mode", "0444")
         managed_file.setdefault("onChange", "restart")
@@ -561,7 +561,7 @@ def _validate_managed_files(service_id: str, service: dict[str, Any]) -> None:
     Targets describe paths inside the service runtime. Their lowering must
     create an isolated mount/namespace before enabling this feature.
     """
-    entries = service["files"]
+    entries = service.get("files", [])
     if not entries:
         return
     seen_ids: set[str] = set()
