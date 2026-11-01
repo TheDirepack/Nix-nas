@@ -31,7 +31,7 @@ import urllib.request
 from typing import Any, Mapping
 
 from nas_common import ADMIN_GROUP, DISABLED_GROUP
-from nas_operation_journal import JournalError, OperationJournal, load_json
+from nas_operation_journal import JournalError, OperationJournal, atomic_write_json, load_json
 from nas_operation_lock import (
     COORDINATION_TOKEN_ENV,
     OperationBusyError,
@@ -1240,6 +1240,84 @@ def journal_step(journal: OperationJournal, step: str, action: Any) -> Any:
     return result
 
 
+def account_journal_status() -> dict[str, Any]:
+    """Expose only recovery metadata, never account-plan results or passwords."""
+    try:
+        record = load_json(ACCOUNT_JOURNAL_PATH)
+    except (JournalError, UnicodeError) as exc:
+        raise SyncError(str(exc)) from exc
+    if record is None:
+        return {"exists": False, "path": str(ACCOUNT_JOURNAL_PATH)}
+    steps = record.get("steps", {})
+    if not isinstance(steps, dict):
+        raise SyncError("Account journal has malformed steps")
+    return {
+        "exists": True,
+        "path": str(ACCOUNT_JOURNAL_PATH),
+        "status": record.get("status"),
+        "fingerprint": record.get("fingerprint"),
+        "steps": {
+            name: item.get("status")
+            for name, item in sorted(steps.items())
+            if isinstance(name, str) and isinstance(item, dict)
+        },
+    }
+
+
+def cancel_failed_account_plan(*, fingerprint: str, note: str) -> dict[str, Any]:
+    """Explicitly abandon a failed plan without claiming its effects were undone.
+
+    This runs under both the identity operation lock and the local flock through
+    the CLI. Running, indeterminate and manual-recovery-required operations
+    cannot be abandoned. The original journal is archived before cancellation.
+    """
+    if not isinstance(note, str) or not note.strip() or len(note) > 1000:
+        raise SyncError("Cancellation requires a nonempty operator note of at most 1000 characters")
+    if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+        raise SyncError("Cancellation requires the exact 64-character account journal fingerprint")
+    try:
+        previous = load_json(ACCOUNT_JOURNAL_PATH)
+    except (JournalError, UnicodeError) as exc:
+        raise SyncError(str(exc)) from exc
+    if previous is None:
+        raise SyncError("No account journal exists to cancel")
+    if previous.get("schemaVersion") != 1 or previous.get("workflow") != "authentik-account-plan":
+        raise SyncError("Refusing to cancel a journal for a different workflow or schema")
+    if previous.get("fingerprint") != fingerprint:
+        raise SyncError("Account journal fingerprint changed; inspect the active journal before cancellation")
+    if previous.get("status") != "failed":
+        raise SyncError("Only failed account journals may be cancelled; running or uncertain work needs recovery")
+    steps = previous.get("steps")
+    if not isinstance(steps, dict) or any(
+        not isinstance(item, dict) or item.get("status") not in {"complete", "failed"}
+        for item in steps.values()
+    ):
+        raise SyncError("Account journal has unverified or running steps; manual recovery required")
+
+    history_dir = ACCOUNT_JOURNAL_PATH.parent / "account-plan-history"
+    try:
+        history_dir.mkdir(mode=0o700, exist_ok=True)
+        if history_dir.is_symlink() or not history_dir.is_dir() or history_dir.stat().st_mode & 0o077:
+            raise SyncError("Account journal history must be a private real directory")
+        archived_path = history_dir / (
+            f"{int(time.time())}-{fingerprint[:12]}-{secrets.token_hex(6)}.json"
+        )
+        atomic_write_json(archived_path, previous)
+        changed = dict(previous)
+        changed["status"] = "cancelled"
+        changed["cancelledAt"] = int(time.time())
+        changed["cancelNote"] = note.strip()
+        changed["cancelledArchive"] = str(archived_path)
+        OperationJournal(ACCOUNT_JOURNAL_PATH, changed).save()
+    except OSError as exc:
+        raise SyncError(f"Could not archive and cancel the failed account journal: {exc}") from exc
+    return {
+        "cancelled": True,
+        "archivedJournal": str(archived_path),
+        "warning": "The previously completed Authentik mutations were not rolled back; inspect current identities before applying a corrected plan.",
+    }
+
+
 def apply_account_plan(
     token: str,
     plan: Mapping[str, Any],
@@ -1557,6 +1635,7 @@ READ_ONLY_COMMANDS = frozenset(
         "capabilities",
         "export-account",
         "plan-accounts",
+        "account-journal",
         "status",
         "status-fixture",
         "verify-token",
@@ -1589,6 +1668,10 @@ def main() -> int:
     sub.add_parser("sync-syncthing", help="Reconcile only Authentik-owned Syncthing objects")
     sub.add_parser("status", help="Report the current Authentik identity model")
     sub.add_parser("capabilities", help="Report Authentik-owned Managed Services V2 application assignments")
+    sub.add_parser("account-journal", help="Inspect failed account-plan recovery metadata without credentials")
+    cancel_parser = sub.add_parser("cancel-failed-accounts", help="Acknowledge a failed account plan and archive its journal")
+    cancel_parser.add_argument("--fingerprint", required=True, help="Exact fingerprint printed by account-journal")
+    cancel_parser.add_argument("--note", required=True, help="Operator statement acknowledging possible partial account changes")
     apply_parser = sub.add_parser("apply-accounts", help="Create/update Authentik accounts from a transient JSON plan")
     apply_parser.add_argument("source", help="JSON file or - for stdin")
     apply_parser.add_argument(
@@ -1608,6 +1691,7 @@ def main() -> int:
             "bootstrap-runtime-token",
             "retire-bootstrap",
             "apply-accounts",
+            "cancel-failed-accounts",
             "sync",
             "sync-syncthing",
         }
@@ -1624,6 +1708,10 @@ def main() -> int:
                 result = provision_runtime_token(authentik_token(bootstrap=True))
             elif args.command == "retire-bootstrap":
                 result = retire_bootstrap_administrator(authentik_token(bootstrap=True), args.administrator)
+            elif args.command == "account-journal":
+                result = account_journal_status()
+            elif args.command == "cancel-failed-accounts":
+                result = cancel_failed_account_plan(fingerprint=args.fingerprint, note=args.note)
             elif args.command == "apply-accounts":
                 result = apply_account_plan(
                     authentik_token(),
