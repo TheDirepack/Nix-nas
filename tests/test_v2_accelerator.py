@@ -208,9 +208,9 @@ class AcceleratorResolutionTests(unittest.TestCase):
         resolved = accelerator.resolve_effective({"services": {"test": raw_service}, "derived": {}}, inventory())
         lines = attachment_lines(resolved, resolved["services"]["test"])
         self.assertEqual("DevicePolicy=closed", lines[0])
-        self.assertIn('DeviceAllow="/dev/nvidia0 rw"', lines)
-        self.assertIn('DeviceAllow="/dev/nvidiactl rw"', lines)
-        self.assertIn('DeviceAllow="/dev/nvidia-uvm rw"', lines)
+        self.assertIn('DeviceAllow="/dev/nvidia0" rw', lines)
+        self.assertIn('DeviceAllow="/dev/nvidiactl" rw', lines)
+        self.assertIn('DeviceAllow="/dev/nvidia-uvm" rw', lines)
 
     def test_quadlet_cdi_lowers_to_v2_owned_podman_device_arg(self) -> None:
         raw_service = service(
