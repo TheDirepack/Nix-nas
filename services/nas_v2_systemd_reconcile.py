@@ -474,6 +474,21 @@ def reconcile(
 
     all_units = previous_owned | owned | previous_start | start | stop | units_to_stop | changed_units
     active_snapshot = {unit: is_active(unit) for unit in sorted(all_units)}
+    # A session target can already be active after an interrupted or partially
+    # recorded apply, even if its previous manifest has no installed link.
+    # Stop that target before installing a changed descriptor: try-restart
+    # would relaunch its transient children with stale Podman arguments.
+    # A new inactive target, however, has nothing to stop.
+    active_unlinked_sessions = {
+        unit
+        for unit in changed_units
+        if _SESSION_TARGET.fullmatch(unit)
+        and unit not in previous_links_raw
+        and unit in current_links
+        and active_snapshot.get(unit) is True
+    }
+    changed_sessions.update(active_unlinked_sessions)
+    units_to_stop.update(active_unlinked_sessions)
 
     roots = _projection_roots(projection_root)
     systemd_targets = set(links) | stale_links
@@ -525,7 +540,9 @@ def reconcile(
             if _SESSION_TARGET.fullmatch(unit) and unit not in previous_links_raw and unit not in current_links:
                 # A disabled or retired session has no installed target to stop.
                 continue
-            if _SESSION_TARGET.fullmatch(unit) and unit in previous_owned:
+            if _SESSION_TARGET.fullmatch(unit) and (
+                unit in previous_owned or unit in active_unlinked_sessions
+            ):
                 # Stopping a target can terminate its transient instances.
                 # Record this before the call, including partial stop failures.
                 disrupted_sessions.add(unit)
