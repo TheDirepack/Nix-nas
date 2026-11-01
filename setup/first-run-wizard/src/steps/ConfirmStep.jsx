@@ -125,10 +125,15 @@ const ConfirmStep = ({
     if (!capability || !jobId || isTerminal) return undefined;
     let cancelled = false;
     let timer;
+    let inFlight;
     const poll = async () => {
+      const controller = new AbortController();
+      inFlight = controller;
+      const deadline = window.setTimeout(() => controller.abort(), 15000);
       try {
         const value = await fetchJson('api/first-start/job', {
           headers: { Accept: 'application/json', [CAPABILITY_HEADER]: capability },
+          signal: controller.signal,
         });
         const { job: polled } = splitJobDocument(value);
         if (!cancelled && polled && polled.jobId === jobId) {
@@ -138,6 +143,8 @@ const ConfirmStep = ({
       } catch (_reason) {
         if (!cancelled) setPollingInterrupted(true);
       } finally {
+        window.clearTimeout(deadline);
+        if (inFlight === controller) inFlight = undefined;
         if (!cancelled) timer = window.setTimeout(poll, 2000);
       }
     };
@@ -145,6 +152,7 @@ const ConfirmStep = ({
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      inFlight?.abort();
     };
   }, [capability, jobId, isTerminal]);
 

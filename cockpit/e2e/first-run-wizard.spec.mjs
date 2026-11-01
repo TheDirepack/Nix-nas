@@ -176,6 +176,89 @@ test("validates entries, refreshes the plan, and safely retries a failed job", a
   expect(submissions[1].confirmPasswordReapply).toBe(true);
 });
 
+test("refreshing an already approved destructive plan requires fresh consent", async ({page}) => {
+  const secondPlan = {
+    ...plan,
+    planDigest: "b".repeat(64),
+    storage: {...plan.storage, devices: ["/dev/disk/by-id/disk-three"]},
+  };
+  let requests = 0;
+  const submissions = [];
+  await mockSetupApi(page, async ({request, pathname}) => {
+    if (request.method() === "GET" && pathname.endsWith("/first-start")) {
+      requests += 1;
+      return requests === 1 ? plan : secondPlan;
+    }
+    if (request.method() === "POST" && pathname.endsWith("/first-run")) {
+      submissions.push(request.postDataJSON());
+      return {jobId: "a".repeat(24), status: "submitted", capability: "d".repeat(48)};
+    }
+    return {statusCode: 404, body: {error: "Not found"}};
+  });
+  await openWizard(page);
+  await fillAdministrator(page);
+  await page.getByRole("button", {name: "Next"}).click();
+
+  const consent = page.getByLabel("I understand the listed devices will be wiped");
+  await expect(page.getByText("/dev/disk/by-id/disk-one")).toBeVisible();
+  await consent.check();
+  await expect(consent).toBeChecked();
+  await page.getByRole("button", {name: "Refresh plan"}).click();
+  await expect(page.getByText("/dev/disk/by-id/disk-three")).toBeVisible();
+  await expect(consent).not.toBeChecked();
+
+  await page.getByRole("button", {name: "Next"}).click();
+  await expect(page.getByText("No running setup job")).toBeVisible();
+  await expect(page.getByRole("button", {name: "Run setup"})).toBeDisabled();
+  expect(submissions).toHaveLength(0);
+
+  await page.getByRole("button", {name: "Back"}).click();
+  await consent.check();
+  await page.getByRole("button", {name: "Next"}).click();
+  await expect(page.getByRole("button", {name: "Run setup"})).toBeEnabled();
+  expect(submissions).toHaveLength(0);
+});
+
+test("refreshing an identical storage plan still invalidates destructive consent", async ({
+  page,
+}) => {
+  let refreshes = 0;
+  const submissions = [];
+  let releaseRefresh;
+  const refreshedPlan = new Promise((resolve) => {
+    releaseRefresh = resolve;
+  });
+  await mockSetupApi(page, async ({request, pathname}) => {
+    if (request.method() === "GET" && pathname.endsWith("/first-start")) {
+      refreshes += 1;
+      if (refreshes > 1) await refreshedPlan;
+      return plan;
+    }
+    if (request.method() === "POST" && pathname.endsWith("/first-run")) {
+      submissions.push(request.postDataJSON());
+      return {jobId: "a".repeat(24), status: "submitted", capability: "d".repeat(48)};
+    }
+    return {statusCode: 404, body: {error: "Not found"}};
+  });
+  await openWizard(page);
+  await fillAdministrator(page);
+  await page.getByRole("button", {name: "Next"}).click();
+  const consent = page.getByLabel("I understand the listed devices will be wiped");
+  await consent.check();
+  await expect(consent).toBeChecked();
+  await page.getByRole("button", {name: "Refresh plan"}).click();
+  await expect.poll(() => refreshes).toBeGreaterThanOrEqual(2);
+  await expect(page.getByText("Loading the storage plan...")).toBeVisible();
+  await expect(consent).toHaveCount(0);
+  releaseRefresh();
+  await expect(page.getByText("/dev/disk/by-id/disk-one")).toBeVisible();
+  await expect(consent).not.toBeChecked();
+  await page.getByRole("button", {name: "Next"}).click();
+  await expect(page.getByText("No running setup job")).toBeVisible();
+  await expect(page.getByRole("button", {name: "Run setup"})).toBeDisabled();
+  expect(submissions).toHaveLength(0);
+});
+
 test("fits the viewport and has no serious accessibility violations", async ({page}) => {
   await mockSetupApi(page, async () => plan);
   await openWizard(page);

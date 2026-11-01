@@ -56,6 +56,8 @@ const App = () => {
     let cancelled = false;
     setPlan(null);
     setPlanError('');
+    // A refreshed plan may reference different disks; require fresh consent.
+    setAllowDestructive(false);
     fetchJson('api/first-start', { headers: { Accept: 'application/json' } })
       .then((value) => {
         if (cancelled) return;
