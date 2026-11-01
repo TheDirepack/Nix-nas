@@ -69,9 +69,7 @@ class AccountJournalCancellationTests(unittest.TestCase):
 
         # A corrected plan can now be started, without lying that prior
         # Authentik side effects were undone or deleting the archived evidence.
-        restarted = OperationJournal.open(
-            self.path, workflow="authentik-account-plan", fingerprint="b" * 64
-        )
+        restarted = OperationJournal.open(self.path, workflow="authentik-account-plan", fingerprint="b" * 64)
         self.assertEqual(restarted.value["status"], "pending")
         self.assertEqual(load_json(archived), original)
 
@@ -99,11 +97,21 @@ class AccountJournalCancellationTests(unittest.TestCase):
         self.write()
         stdout = io.StringIO()
         with (
-            mock.patch.object(sys, "argv", [
-                "nas-identity-sync", "cancel-failed-accounts",
-                "--fingerprint", FINGERPRINT, "--note", "Reviewed provider state",
-            ]),
-            mock.patch.object(identity, "identity_mutation_operation", return_value=contextlib.nullcontext()) as operation,
+            mock.patch.object(
+                sys,
+                "argv",
+                [
+                    "nas-identity-sync",
+                    "cancel-failed-accounts",
+                    "--fingerprint",
+                    FINGERPRINT,
+                    "--note",
+                    "Reviewed provider state",
+                ],
+            ),
+            mock.patch.object(
+                identity, "identity_mutation_operation", return_value=contextlib.nullcontext()
+            ) as operation,
             mock.patch.object(identity, "identity_command_lock", return_value=contextlib.nullcontext()) as lock,
             mock.patch.object(identity, "authentik_token", side_effect=AssertionError("token not needed")),
             mock.patch("sys.stdout", stdout),
