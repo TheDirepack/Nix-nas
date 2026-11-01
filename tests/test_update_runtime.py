@@ -149,7 +149,7 @@ class UpdateRuntimeTests(unittest.TestCase):
     def test_invalid_probe_is_rejected_without_launch(self):
         # The Python validator fails first; wait propagates that failure before
         # the later empty-argv safeguard, so it must not print both diagnostics.
-        invalid_commands = ({}, [], "", [""], ["echo", 3], [None])
+        invalid_commands = ({}, [], "", [""], ["echo", 3], [str(self.probe), 3], [None])
         for invalid in invalid_commands:
             with self.subTest(command=invalid):
                 result = self.run_function(

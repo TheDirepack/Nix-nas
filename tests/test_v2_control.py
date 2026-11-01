@@ -71,6 +71,88 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["status"], {"ok": True})
 
+    def test_committed_mutation_reports_post_commit_status_failure_separately(self):
+        for action in ("single", "many", "reconcile"):
+            with self.subTest(action=action):
+                with (
+                    mock.patch.object(control, "set_service_mode", return_value={"ok": True}) as single,
+                    mock.patch.object(control, "set_service_modes", return_value={"ok": True}) as many,
+                    mock.patch.object(control, "_reconcile") as reconciler,
+                    mock.patch.object(
+                        control,
+                        "desired_status",
+                        return_value={"services": [{"id": "demo", "units": [{"unit": "demo.service"}]}]},
+                    ),
+                    mock.patch.object(
+                        control,
+                        "run_command",
+                        return_value=mock.Mock(returncode=1, stderr="bus unavailable", stdout=""),
+                    ) as native,
+                ):
+                    if action == "single":
+                        result = control.set_mode("demo", "always")
+                        single.assert_called_once()
+                    elif action == "many":
+                        result = control.set_modes({"demo": "off"})
+                        many.assert_called_once()
+                    else:
+                        result = control.reconcile()
+                    reconciler.assert_called_once()
+                    native.assert_called_once()
+                    self.assertTrue(result["ok"])
+                    self.assertEqual(result["statusError"], "bus unavailable")
+                    self.assertEqual(result["status"], {"ok": False, "error": "bus unavailable"})
+
+    def test_failed_status_query_is_an_error_not_an_inactive_snapshot(self):
+        desired = {"services": [{"id": "demo", "units": [{"unit": "demo.service"}]}]}
+        with (
+            mock.patch.object(control, "desired_status", return_value=desired),
+            mock.patch.object(
+                control, "run_command", return_value=mock.Mock(returncode=1, stderr="bus unavailable", stdout="")
+            ),
+        ):
+            with self.assertRaisesRegex(control.ControlError, "bus unavailable"):
+                control.status()
+
+    def test_post_commit_systemctl_launch_error_preserves_completed_mutation(self):
+        desired = {
+            "services": [
+                {
+                    "id": "demo",
+                    "effective": True,
+                    "effectiveMode": "always",
+                    "units": [{"unit": "demo.service"}],
+                }
+            ]
+        }
+        for action in ("single", "many", "reconcile"):
+            with self.subTest(action=action):
+                with (
+                    mock.patch.object(control, "desired_status", return_value=desired),
+                    mock.patch.object(control, "run_command", side_effect=OSError("systemctl missing")) as native,
+                    mock.patch.object(control, "set_service_mode", return_value={"ok": True}) as setter,
+                    mock.patch.object(control, "set_service_modes", return_value={"ok": True}) as bulk,
+                    mock.patch.object(control, "_reconcile") as reconciler,
+                ):
+                    if action == "single":
+                        result = control.set_mode("demo", "always")
+                        setter.assert_called_once()
+                    elif action == "many":
+                        result = control.set_modes({"demo": "off"})
+                        bulk.assert_called_once()
+                    else:
+                        result = control.reconcile()
+                    reconciler.assert_called_once()
+                    native.assert_called_once()
+                    self.assertTrue(result["ok"])
+                    self.assertIn("systemctl missing", result["statusError"])
+                    self.assertEqual(result["status"]["ok"], False)
+
+    def test_empty_status_query_needs_no_systemd_bus(self):
+        with mock.patch.object(control, "run_command") as run:
+            self.assertEqual(control._unit_snapshot([]), {})
+        run.assert_not_called()
+
     def test_failed_reconcile_is_reported_without_a_second_editor_rollback(self):
         with tempfile.TemporaryDirectory() as tmp:
             desired_path = pathlib.Path(tmp) / "services.yaml"
