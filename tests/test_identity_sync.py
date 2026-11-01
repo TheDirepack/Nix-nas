@@ -390,7 +390,12 @@ class IdentityModelTests(unittest.TestCase):
             {
                 "users": [
                     {"pk": 1, "username": "akadmin", "is_active": True, "groups_obj": [{"name": "nas_admin"}]},
-                    {"pk": 2, "username": "alice@example.com", "is_active": True, "groups_obj": [{"name": "nas_users"}]},
+                    {
+                        "pk": 2,
+                        "username": "alice@example.com",
+                        "is_active": True,
+                        "groups_obj": [{"name": "nas_users"}],
+                    },
                     {"pk": 3, "username": "disabled@example.com", "is_active": False, "groups_obj": []},
                 ],
                 "groups": [
