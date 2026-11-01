@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shlex
 import sqlite3
-import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
@@ -67,7 +68,7 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             original_root = backup.BACKUP_STAGING_ROOT
             backup.BACKUP_STAGING_ROOT = staging
 
-            def unexpected_run(argv: list[str]) -> str:
+            def unexpected_run(argv: list[str], timeout: int = 60) -> str:
                 raise AssertionError(f"prepare must require cleanup before native work: {argv}")
 
             backup._run = unexpected_run
@@ -100,11 +101,13 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             original_root = backup.BACKUP_STAGING_ROOT
             backup.BACKUP_STAGING_ROOT = staging
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 if argv == ["/bin/systemctl", "restart", "nas-v2-database-dump.service"]:
                     artifact.mkdir(parents=True, exist_ok=True)
                     (artifact / "partial.dump").write_bytes(b"partial-sensitive-bytes")
                     raise backup.BackupRuntimeError("preparation unit failed")
+                if argv == ["/bin/systemctl", "stop", "nas-v2-database-dump.service"]:
+                    return ""
                 raise AssertionError(f"unexpected command: {argv}")
 
             backup._run = fake_run
@@ -141,11 +144,13 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             original_remove = backup._remove_staged_artifact
             backup.BACKUP_STAGING_ROOT = staging
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 if argv == ["/bin/systemctl", "restart", "nas-v2-database-dump.service"]:
                     artifact.mkdir(parents=True, exist_ok=True)
                     (artifact / "partial.dump").write_bytes(b"partial-sensitive-bytes")
                     raise backup.BackupRuntimeError("preparation unit failed")
+                if argv == ["/bin/systemctl", "stop", "nas-v2-database-dump.service"]:
+                    return ""
                 raise AssertionError(f"unexpected command: {argv}")
 
             def failing_remove(_path: str) -> None:
@@ -196,7 +201,7 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             original_run = backup._run
             calls: list[list[str]] = []
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 calls.append(argv)
                 if argv == ["/bin/zfs", "destroy", "tank/b@snap-bad"]:
                     raise backup.BackupRuntimeError("destroy failed")
@@ -237,7 +242,7 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             original_run = backup._run
             absence_probed: list[list[str]] = []
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 if argv == ["/bin/zfs", "destroy", "tank/a@snap-gone"]:
                     raise backup.BackupRuntimeError("dataset does not exist")
                 if argv[:3] == ["/bin/zfs", "list", "tank/a@snap-gone"] or (
@@ -280,7 +285,7 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             destroys: list[str] = []
             attempt = {"count": 0}
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 if len(argv) >= 2 and argv[0] == "/bin/zfs" and argv[1] == "destroy":
                     destroys.append(argv[2])
                     if argv[2] == "tank/a@snap-a":
@@ -329,7 +334,7 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             original_run = backup._run
             destroys: list[str] = []
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 if len(argv) >= 2 and argv[0] == "/bin/zfs" and argv[1] == "destroy":
                     destroys.append(argv[2])
                     if argv[2] == "tank/b@snap-b":
@@ -387,7 +392,7 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             original_run = backup._run
             snapshots: list[str] = []
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 if argv[:2] == ["/bin/zfs", "get"]:
                     dataset = argv[-1]
                     if dataset == "tank/c":
@@ -431,24 +436,35 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             zfs_fake = bin_dir / "zfs"
             zfs_fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             zfs_fake.chmod(0o755)
-            ctl_fake = bin_dir / "systemctl"
-            ctl_fake.write_text(
-                "#!/bin/sh\n"
-                f"mkdir -p {artifact}\n"
-                f"printf 'partial' > {artifact}/partial.dump\n"
-                "echo 'simulated preparation failure' >&2\n"
-                "exit 1\n",
-                encoding="utf-8",
-            )
-            ctl_fake.chmod(0o755)
             inventory_path = root / "inventory.json"
             paths_path = root / "paths.txt"
             state_path = root / "state.json"
+            log = root / "systemctl.jsonl"
+            ctl_fake = bin_dir / "systemctl"
+            ctl_fake.write_text(
+                f"#!{sys.executable}\n"
+                "import json, pathlib, sys\n"
+                f"artifact = pathlib.Path({str(artifact)!r})\n"
+                f"state = pathlib.Path({str(state_path)!r})\n"
+                f"log = pathlib.Path({str(log)!r})\n"
+                "args = sys.argv[1:]\n"
+                "if args == ['restart', 'nas-v2-database-dump.service']:\n"
+                "    (artifact / 'partial.dump').write_bytes(b'partial-sensitive-bytes')\n"
+                "elif args != ['stop', 'nas-v2-database-dump.service']:\n"
+                "    raise SystemExit('unexpected command')\n"
+                "with log.open('a') as handle:\n"
+                "    handle.write(json.dumps({'argv': args, 'state': json.loads(state.read_text()),\n"
+                "                             'partial': (artifact / 'partial.dump').read_text()}) + '\\n')\n"
+                "if args[0] == 'restart':\n"
+                "    raise SystemExit('simulated preparation failure')\n",
+                encoding="utf-8",
+            )
+            ctl_fake.chmod(0o755)
             inventory_path.write_text(json.dumps(_native_inventory(artifact)), encoding="utf-8")
             original_root = backup.BACKUP_STAGING_ROOT
             backup.BACKUP_STAGING_ROOT = staging
             try:
-                with self.assertRaises(backup.BackupRuntimeError):
+                with self.assertRaisesRegex(backup.BackupRuntimeError, "simulated preparation failure"):
                     backup.prepare(
                         inventory_path=inventory_path,
                         paths_path=paths_path,
@@ -458,9 +474,23 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
                     )
             finally:
                 backup.BACKUP_STAGING_ROOT = original_root
+            entry = {"source": "database", **_native_inventory(artifact)["resources"][0]["nativeDump"]}
+            self.assertEqual(
+                [json.loads(line) for line in log.read_text().splitlines()],
+                [
+                    {
+                        "argv": [operation, "nas-v2-database-dump.service"],
+                        "state": {"schemaVersion": 1, "snapshots": [], "nativeDumps": [entry]},
+                        "partial": "partial-sensitive-bytes",
+                    }
+                    for operation in ("restart", "stop")
+                ],
+            )
             self.assertFalse(paths_path.exists())
-            leftovers = [p for p in staging.rglob("*") if p.is_file()] if staging.exists() else []
-            self.assertEqual(leftovers, [])
+            self.assertFalse(state_path.exists())
+            self.assertFalse(artifact.exists())
+            self.assertFalse(artifact.is_symlink())
+            self.assertEqual(list(staging.rglob("*")), [])
 
     def test_native_sqlite_dump_roundtrip_through_staging(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -470,22 +500,32 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             bin_dir = root / "bin"
             bin_dir.mkdir()
             source_db = root / "source.db"
-            with sqlite3.connect(source_db) as handle:
+            with closing(sqlite3.connect(source_db)) as handle, handle:
                 handle.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, value TEXT)")
                 handle.execute("INSERT INTO t (value) VALUES ('hello')")
             zfs_fake = bin_dir / "zfs"
             zfs_fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             zfs_fake.chmod(0o755)
             ctl_fake = bin_dir / "systemctl"
+            log = root / "systemctl.log"
             ctl_fake.write_text(
                 "#!/bin/sh\n"
-                f"mkdir -p {artifact}\n"
-                f"{sys.executable} - {source_db} {artifact}/backup.db <<'PY'\n"
+                "set -eu\n"
+                f'printf \'%s %s\\n\' "$1" "$2" >> {shlex.quote(str(log))}\n'
+                'case "$1:$2" in\n'
+                "  stop:nas-v2-database-dump.service) exit 0 ;;\n"
+                "  restart:nas-v2-database-dump.service) ;;\n"
+                "  *) exit 93 ;;\n"
+                "esac\n"
+                f"mkdir -p {shlex.quote(str(artifact))}\n"
+                f"{shlex.quote(sys.executable)} - {shlex.quote(str(source_db))} "
+                f"{shlex.quote(str(artifact / 'backup.db'))} <<'PY'\n"
                 "import pathlib, sqlite3, sys\n"
+                "from contextlib import closing\n"
                 "source = pathlib.Path(sys.argv[1])\n"
                 "destination = pathlib.Path(sys.argv[2])\n"
-                "with sqlite3.connect(f'file:{source}?mode=ro', uri=True) as src:\n"
-                "    with sqlite3.connect(destination) as dst:\n"
+                "with closing(sqlite3.connect(f'file:{source}?mode=ro', uri=True)) as src:\n"
+                "    with closing(sqlite3.connect(destination)) as dst:\n"
                 "        src.backup(dst)\n"
                 "PY\n",
                 encoding="utf-8",
@@ -497,16 +537,6 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             inventory_path.write_text(json.dumps(_native_inventory(artifact)), encoding="utf-8")
             original_root = backup.BACKUP_STAGING_ROOT
             backup.BACKUP_STAGING_ROOT = staging
-            original_run_impl = backup._run
-
-            def native_run(argv: list[str], timeout: int = 60) -> str:
-                result = subprocess.run(argv, check=False, capture_output=True, text=True, timeout=timeout)
-                if result.returncode != 0:
-                    detail = result.stderr.strip() or result.stdout.strip() or f"exit status {result.returncode}"
-                    raise backup.BackupRuntimeError(f"native backup command failed: {detail}")
-                return result.stdout.strip()
-
-            backup._run = native_run  # type: ignore[assignment]
             try:
                 result = backup.prepare(
                     inventory_path=inventory_path,
@@ -518,14 +548,19 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
                 self.assertEqual(result["paths"], [str(artifact)])
                 dumped = artifact / "backup.db"
                 self.assertTrue(dumped.is_file())
-                with sqlite3.connect(f"file:{dumped}?mode=ro", uri=True) as handle:
+                with closing(sqlite3.connect(f"file:{dumped}?mode=ro", uri=True)) as handle:
                     rows = handle.execute("SELECT value FROM t").fetchall()
                 self.assertEqual(rows, [("hello",)])
-                cleanup_result = backup.cleanup(state_path=state_path, paths_path=paths_path, zfs_bin=str(zfs_fake))
+                cleanup_result = backup.cleanup(
+                    state_path=state_path, paths_path=paths_path, zfs_bin=str(zfs_fake), systemctl_bin=str(ctl_fake)
+                )
                 self.assertEqual(cleanup_result["destroyed"], [])
             finally:
-                backup._run = original_run_impl  # type: ignore[assignment]
                 backup.BACKUP_STAGING_ROOT = original_root
+            self.assertEqual(
+                log.read_text().splitlines(),
+                ["restart nas-v2-database-dump.service", "stop nas-v2-database-dump.service"],
+            )
             self.assertFalse(state_path.exists())
             self.assertFalse((artifact / "backup.db").exists())
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import pathlib
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -65,11 +66,21 @@ class V2BackupRuntimeTests(unittest.TestCase):
             sentinel.write_bytes(b"must not be backed up")
             inventory_path, paths_path, state_path = root / "inventory.json", root / "paths.txt", root / "state.json"
             inventory_path.write_text(json.dumps(self.inventory(artifact)))
+            calls = []
 
-            def replace_artifact(_argv):
-                shutil.rmtree(artifact)
-                artifact.symlink_to(outside, target_is_directory=True)
-                return ""
+            def replace_artifact(argv, **_kwargs):
+                calls.append(argv)
+                if argv == ["/bin/systemctl", "restart", "nas-v2-database-dump.service"]:
+                    shutil.rmtree(artifact)
+                    artifact.symlink_to(outside, target_is_directory=True)
+                    return ""
+                if argv == ["/bin/systemctl", "stop", "nas-v2-database-dump.service"]:
+                    self.assertTrue(artifact.is_symlink())
+                    self.assertEqual(
+                        json.loads(state_path.read_text())["nativeDumps"][0]["artifactPath"], str(artifact)
+                    )
+                    return ""
+                raise AssertionError(f"unexpected command: {argv}")
 
             with (
                 mock.patch.object(runtime, "BACKUP_STAGING_ROOT", staging),
@@ -81,9 +92,17 @@ class V2BackupRuntimeTests(unittest.TestCase):
                         paths_path=paths_path,
                         state_path=state_path,
                         zfs_bin="/bin/false",
-                        systemctl_bin="/bin/false",
+                        systemctl_bin="/bin/systemctl",
                     )
+            self.assertEqual(
+                calls,
+                [
+                    ["/bin/systemctl", "restart", "nas-v2-database-dump.service"],
+                    ["/bin/systemctl", "stop", "nas-v2-database-dump.service"],
+                ],
+            )
             self.assertEqual(sentinel.read_bytes(), b"must not be backed up")
+            self.assertFalse(artifact.exists())
             self.assertFalse(artifact.is_symlink())
             self.assertFalse(paths_path.exists())
             self.assertFalse(state_path.exists())
@@ -164,7 +183,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], **_kwargs) -> str:
                 commands.append(argv)
                 if argv == ["/bin/systemctl", "restart", "nas-v2-database-dump.service"]:
                     (artifact / "database.dump").write_bytes(b"fresh-dump")
@@ -204,7 +223,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             original_run = runtime._run
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
-            runtime._run = lambda _argv: ""
+            runtime._run = lambda _argv, **_kwargs: ""
             try:
                 with self.assertRaisesRegex(runtime.BackupRuntimeError, "completed without producing data"):
                     runtime.prepare(
@@ -235,7 +254,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
 
-            def fake_run(_argv: list[str]) -> str:
+            def fake_run(_argv: list[str], **_kwargs) -> str:
                 nonlocal called
                 called = True
                 return ""
@@ -271,7 +290,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             original_run = runtime._run
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
-            runtime._run = lambda _argv: ""
+            runtime._run = lambda _argv, **_kwargs: ""
             try:
                 with self.assertRaisesRegex(runtime.BackupRuntimeError, "completed without producing data"):
                     runtime.prepare(
@@ -300,7 +319,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
             original_run = runtime._run
-            runtime._run = lambda _argv: ""
+            runtime._run = lambda _argv, **_kwargs: ""
             try:
                 with self.assertRaisesRegex(runtime.BackupRuntimeError, "escapes staging root|must be.*staging"):
                     runtime.prepare(
@@ -334,7 +353,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
             original_run = runtime._run
-            runtime._run = lambda _argv: ""
+            runtime._run = lambda _argv, **_kwargs: ""
             try:
                 with self.assertRaisesRegex(runtime.BackupRuntimeError, "must not be a symlink|escapes staging"):
                     runtime.prepare(
@@ -363,7 +382,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             runtime.BACKUP_STAGING_ROOT = staging
             original_run = runtime._run
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], **_kwargs) -> str:
                 (artifact / "dump").write_bytes(b"data")
                 return ""
 
@@ -383,25 +402,23 @@ class V2BackupRuntimeTests(unittest.TestCase):
             # Replace artifact directory with symlink to outside
             outside = root / "outside"
             outside.mkdir()
-            # remove artifact and replace with symlink
-            # cleanup should handle symlink case
-            import shutil
-
+            sentinel = outside / "private.dump"
+            sentinel.write_bytes(b"outside data must survive")
             shutil.rmtree(artifact)
             artifact.symlink_to(outside)
             # Now cleanup should remove symlink without following
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
             original_run = runtime._run
-            runtime._run = lambda _argv: ""
+            runtime._run = lambda _argv, **_kwargs: ""
             try:
                 runtime.cleanup(state_path=state_path, paths_path=paths_path, zfs_bin="/bin/zfs")
             finally:
                 runtime._run = original_run
                 runtime.BACKUP_STAGING_ROOT = original_root
-            self.assertFalse(artifact.exists() and artifact.is_symlink() and artifact.resolve() == outside.resolve())
-            # symlink should be gone, outside should still exist
-            self.assertTrue(outside.exists())
+            self.assertFalse(artifact.exists())
+            self.assertFalse(artifact.is_symlink())
+            self.assertEqual(sentinel.read_bytes(), b"outside data must survive")
             self.assertFalse(state_path.exists())
             self.assertFalse(paths_path.exists())
 
@@ -419,7 +436,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             runtime.BACKUP_STAGING_ROOT = staging
             original_run = runtime._run
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], **_kwargs) -> str:
                 if argv == ["/bin/systemctl", "restart", "nas-v2-first-dump.service"]:
                     (artifact_a / "dump").write_bytes(b"first")
                     return ""
@@ -459,7 +476,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             runtime.BACKUP_STAGING_ROOT = staging
             original_run = runtime._run
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], **_kwargs) -> str:
                 (artifact / "dump").write_bytes(b"data")
                 return ""
 
@@ -479,7 +496,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             # Now cleanup
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
-            runtime._run = lambda _argv: ""
+            runtime._run = lambda _argv, **_kwargs: ""
             try:
                 runtime.cleanup(state_path=state_path, paths_path=paths_path, zfs_bin="/bin/zfs")
             finally:
@@ -517,7 +534,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
             original_run = runtime._run
-            runtime._run = lambda _argv: ""
+            runtime._run = lambda _argv, **_kwargs: ""
             # Make rmtree fail via mock
             with mock.patch("nas_v2_backup.shutil.rmtree", side_effect=OSError("permission denied")):
                 with self.assertRaisesRegex(
@@ -528,6 +545,170 @@ class V2BackupRuntimeTests(unittest.TestCase):
             self.assertTrue(state_path.exists())
             runtime.BACKUP_STAGING_ROOT = original_root
             runtime._run = original_run
+
+    def test_failed_native_stop_preserves_artifact_and_outstanding_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            staging = root / "backup-staging"
+            artifact = staging / "database-artifact"
+            artifact.mkdir(parents=True)
+            sentinel = artifact / "live-dump"
+            sentinel.write_bytes(b"writer must finish before deletion")
+            state_path, paths_path = root / "state.json", root / "paths.txt"
+            entry = {
+                "source": "database",
+                "preparationService": "database-dump",
+                "preparationUnit": "nas-v2-database-dump.service",
+                "artifactResource": "database-artifact",
+                "artifactPath": str(artifact),
+            }
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "snapshots": [],
+                        "nativeDumps": [entry],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            paths_path.write_text(str(artifact) + "\n", encoding="utf-8")
+            calls = []
+
+            def failing_stop(argv, **kwargs):
+                calls.append((argv, kwargs))
+                raise runtime.BackupRuntimeError("systemd stop timed out")
+
+            with (
+                mock.patch.object(runtime, "BACKUP_STAGING_ROOT", staging),
+                mock.patch.object(runtime, "_run", side_effect=failing_stop),
+            ):
+                with self.assertRaisesRegex(runtime.BackupRuntimeError, "systemd stop timed out"):
+                    runtime.cleanup(
+                        state_path=state_path,
+                        paths_path=paths_path,
+                        zfs_bin="/bin/zfs",
+                        systemctl_bin="/bin/systemctl",
+                    )
+            self.assertEqual(calls, [(["/bin/systemctl", "stop", "nas-v2-database-dump.service"], {})])
+            self.assertEqual(sentinel.read_bytes(), b"writer must finish before deletion")
+            self.assertEqual(json.loads(state_path.read_text())["nativeDumps"], [entry])
+            self.assertTrue(paths_path.exists())
+
+    def test_restic_cleanup_unit_preserves_inherited_stop_deadline(self):
+        source = (ROOT / "modules/nas/config/storage-monitoring.nix").read_text(encoding="utf-8")
+        unit = source.split("systemd.services.restic-backups-nas-boot-system = ", 1)[1]
+        unit = unit.split("systemd.services.nas-backup-authentik-dump", 1)[0]
+        self.assertNotIn("TimeoutStopSec", unit)
+
+    def test_native_client_timeouts_retain_pending_work_with_existing_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            staging = root / "backup-staging"
+            artifact = staging / "database-artifact"
+            inventory_path, paths_path, state_path = root / "inventory.json", root / "paths.txt", root / "state.json"
+            inventory_path.write_text(json.dumps(self.inventory(artifact)))
+            calls = []
+
+            def timeout_client(argv, **kwargs):
+                calls.append((argv, kwargs["timeout"]))
+                pending = json.loads(state_path.read_text())["nativeDumps"]
+                self.assertEqual(len(pending), 1)
+                self.assertEqual(pending[0]["artifactPath"], str(artifact))
+                if argv[1] == "restart":
+                    (artifact / "partial.dump").write_bytes(b"still being written")
+                raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+            with (
+                mock.patch.object(runtime, "BACKUP_STAGING_ROOT", staging),
+                mock.patch.object(runtime.subprocess, "run", side_effect=timeout_client),
+            ):
+                with self.assertRaisesRegex(runtime.BackupRuntimeError, "failed to clean.*timed out"):
+                    runtime.prepare(
+                        inventory_path=inventory_path,
+                        paths_path=paths_path,
+                        state_path=state_path,
+                        zfs_bin="/bin/zfs",
+                        systemctl_bin="/bin/systemctl",
+                    )
+            self.assertEqual(
+                calls,
+                [
+                    (["/bin/systemctl", "restart", "nas-v2-database-dump.service"], 60),
+                    (["/bin/systemctl", "stop", "nas-v2-database-dump.service"], 60),
+                ],
+            )
+            self.assertEqual((artifact / "partial.dump").read_bytes(), b"still being written")
+            retained = json.loads(state_path.read_text())
+            self.assertEqual(retained["snapshots"], [])
+            self.assertEqual(
+                retained["nativeDumps"],
+                [{"source": "database", **self.inventory(artifact)["resources"][0]["nativeDump"]}],
+            )
+            self.assertFalse(paths_path.exists())
+
+    def test_cleanup_interruption_during_stop_keeps_exact_pending_obligations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            staging = root / "backup-staging"
+            artifact = staging / "database-artifact"
+            artifact.mkdir(parents=True)
+            sentinel = artifact / "live.dump"
+            sentinel.write_bytes(b"unfinished dump")
+            entry = {"source": "database", **self.inventory(artifact)["resources"][0]["nativeDump"]}
+            state_path, paths_path = root / "state.json", root / "paths.txt"
+            state = {"schemaVersion": 1, "snapshots": [], "nativeDumps": [entry]}
+            state_path.write_text(json.dumps(state))
+            paths_path.write_text(str(artifact) + "\n")
+            with (
+                mock.patch.object(runtime, "BACKUP_STAGING_ROOT", staging),
+                mock.patch.object(runtime, "_run", side_effect=KeyboardInterrupt) as run,
+                mock.patch.object(runtime, "_remove_staged_artifact") as remove,
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    runtime.cleanup(
+                        state_path=state_path,
+                        paths_path=paths_path,
+                        zfs_bin="/bin/zfs",
+                        systemctl_bin="/bin/systemctl",
+                    )
+                self.assertEqual(run.call_args.args[0], ["/bin/systemctl", "stop", "nas-v2-database-dump.service"])
+                remove.assert_not_called()
+            self.assertEqual(json.loads(state_path.read_text()), state)
+            self.assertEqual(paths_path.read_text(), str(artifact) + "\n")
+            self.assertEqual(sentinel.read_bytes(), b"unfinished dump")
+
+    def test_prepare_interruption_during_restart_keeps_exact_pending_obligations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            staging = root / "backup-staging"
+            artifact = staging / "database-artifact"
+            inventory_path, paths_path, state_path = root / "inventory.json", root / "paths.txt", root / "state.json"
+            inventory_path.write_text(json.dumps(self.inventory(artifact)))
+            entry = {"source": "database", **self.inventory(artifact)["resources"][0]["nativeDump"]}
+            state = {"schemaVersion": 1, "snapshots": [], "nativeDumps": [entry]}
+
+            def interrupt_restart(argv):
+                self.assertEqual(argv, ["/bin/systemctl", "restart", "nas-v2-database-dump.service"])
+                self.assertEqual(json.loads(state_path.read_text()), state)
+                (artifact / "partial.dump").write_bytes(b"unfinished dump")
+                raise KeyboardInterrupt
+
+            with (
+                mock.patch.object(runtime, "BACKUP_STAGING_ROOT", staging),
+                mock.patch.object(runtime, "_run", side_effect=interrupt_restart),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    runtime.prepare(
+                        inventory_path=inventory_path,
+                        paths_path=paths_path,
+                        state_path=state_path,
+                        zfs_bin="/bin/zfs",
+                        systemctl_bin="/bin/systemctl",
+                    )
+            self.assertEqual(json.loads(state_path.read_text()), state)
+            self.assertEqual((artifact / "partial.dump").read_bytes(), b"unfinished dump")
+            self.assertFalse(paths_path.exists())
 
     def test_repeated_cleanup_is_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -542,7 +723,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             runtime.BACKUP_STAGING_ROOT = staging
             original_run = runtime._run
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], **_kwargs) -> str:
                 (artifact / "dump").write_bytes(b"data")
                 return ""
 
@@ -561,7 +742,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             # first cleanup
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
-            runtime._run = lambda _argv: ""
+            runtime._run = lambda _argv, **_kwargs: ""
             try:
                 runtime.cleanup(state_path=state_path, paths_path=paths_path, zfs_bin="/bin/zfs")
                 # second cleanup should be idempotent even though state gone
