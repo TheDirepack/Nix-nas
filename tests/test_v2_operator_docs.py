@@ -48,8 +48,8 @@ class V2OperatorDocumentationTests(unittest.TestCase):
                     self.assertIn(group, text)
 
     def test_no_retired_group_is_recommended(self) -> None:
-        # Historical mentions explaining that these groups are retired are
-        # fine; actionable grants, ACLs, and CLI examples are not.
+        # Explanatory mentions of retired groups are fine; actionable grants,
+        # ACLs, and CLI examples are not.
         unsafe = re.compile(
             r"(?:--group\s+nas_(?:allow|deny)_"
             r"|(?:^|\n)\s*[-|]\s*`nas_(?:allow|deny)_"
