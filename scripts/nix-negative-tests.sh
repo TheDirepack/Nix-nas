@@ -51,8 +51,15 @@ cases=(
   'tests/nixos/invalid/installation-ready-empty-trusted-interfaces.nix|Set nas.trustedInterfaces to the actual LAN interface before installation.'
   'tests/nixos/invalid/installation-ready-zero-host-id.nix|networking.hostId must be a unique stable eight-hex-digit value.'
   'tests/nixos/invalid/installation-ready-no-recovery.nix|installationReady requires an administrator SSH key with OpenSSH enabled'
+  'tests/nixos/invalid/installation-ready-ssh-group-denied.nix|installationReady requires an administrator SSH key with OpenSSH enabled'
   'tests/nixos/invalid/installation-ready-unencrypted.nix|ZFS encryption is disabled. Enable nas.zfsEncryption.enable or explicitly set nas.zfsEncryption.acknowledgeUnencrypted = true'
 )
+
+nix eval --impure --json --expr '
+  import ./tests/nixos/install-readiness-eval.nix {
+    lib = (builtins.getFlake (toString ./.)).inputs.nixpkgs.lib;
+  }
+'
 
 for row in "${cases[@]}"; do
   fixture=${row%%|*}

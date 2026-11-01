@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import pathlib
 import pty
+import select
 import subprocess
 import tempfile
+import time
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -34,6 +37,54 @@ class ZfsKeyStagingTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def run_secret_reader_terminal(self, script: str, directory: pathlib.Path):
+        master, slave = pty.openpty()
+        transcript = bytearray()
+        deadline = time.monotonic() + 10
+        try:
+            with tempfile.TemporaryFile() as output:
+                with subprocess.Popen(
+                    ["bash", "-c", "[[ -t 0 ]] || exit 94\n" + script],
+                    cwd=directory,
+                    stdin=slave,
+                    stdout=output,
+                    stderr=slave,
+                ) as process:
+                    os.close(slave)
+                    slave = None
+                    try:
+                        prompt = b"KeePass database password: "
+                        while prompt not in transcript:
+                            self.assertTrue(
+                                select.select([master], [], [], max(0, deadline - time.monotonic()))[0],
+                                f"password prompt was not displayed: {transcript!r}",
+                            )
+                            transcript.extend(os.read(master, 4096))
+                        os.write(master, b"fixture-password\n")
+                        process.wait(timeout=max(0, deadline - time.monotonic()))
+                    finally:
+                        if process.poll() is None:
+                            process.kill()
+                            process.wait()
+                    while select.select([master], [], [], 0)[0]:
+                        try:
+                            chunk = os.read(master, 4096)
+                        except OSError as error:
+                            if error.errno == errno.EIO:
+                                break
+                            raise
+                        if not chunk:
+                            break
+                        transcript.extend(chunk)
+                    output.seek(0)
+                    return subprocess.CompletedProcess(
+                        process.args, process.returncode, output.read().decode(), transcript.decode()
+                    )
+        finally:
+            os.close(master)
+            if slave is not None:
+                os.close(slave)
+
     def test_real_secret_reader_prompt_keeps_captured_zfs_key_clean(self):
         source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text()
         functions = (
@@ -47,8 +98,12 @@ class ZfsKeyStagingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             directory = pathlib.Path(raw)
             (directory / "database.kdbx").touch()
-            for command in ("command_show_zfs_key", "command_show_zfs_key_stdin"):
-                with self.subTest(command=command):
+            for command, terminal in (
+                ("command_show_zfs_key", False),
+                ("command_show_zfs_key", True),
+                ("command_show_zfs_key_stdin", False),
+            ):
+                with self.subTest(command=command, terminal=terminal):
                     script = (
                         """
 set -euo pipefail
@@ -71,15 +126,19 @@ keepassxc-cli() {
 printf 'key-valid\n'
 """
                     )
-                    result = subprocess.run(
-                        ["bash", "-c", script],
-                        cwd=directory,
-                        input="fixture-password\n",
-                        capture_output=True,
-                        text=True,
-                        timeout=10,
-                        check=False,
-                    )
+                    if terminal:
+                        result = self.run_secret_reader_terminal(script, directory)
+                        self.assertIn("KeePass database password: ", result.stderr)
+                    else:
+                        result = subprocess.run(
+                            ["bash", "-c", script],
+                            cwd=directory,
+                            input="fixture-password\n",
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
+                            check=False,
+                        )
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(result.stdout, "key-valid\n")
                     self.assertNotIn("fixture-password", result.stdout + result.stderr)
