@@ -374,6 +374,8 @@ class SystemHandoffTests(unittest.TestCase):
             paths = delta.read_text(encoding="utf-8").splitlines()
             paths.append("/nix/store/base-a")
             delta.write_text("\n".join(sorted(paths)) + "\n", encoding="utf-8")
+            order = handoff / "system-closures.delta.import-order"
+            order.write_text("/nix/store/base-a\n" + order.read_text(encoding="utf-8"), encoding="utf-8")
             self.rewrite_checksum(handoff)
 
             result = self.run_handoff("verify", handoff, env, check=False)
