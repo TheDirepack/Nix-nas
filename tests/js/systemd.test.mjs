@@ -101,6 +101,31 @@ test("readSystemdState hydrates named units and failed units over D-Bus", async 
   }
 });
 
+for (const [description, bytes, expected] of [
+  ["UINT64_MAX unavailable sentinel", Number(18446744073709551615n), null],
+  ["zero bytes", 0, 0],
+  ["fractional memory", 12.5, null],
+  ["unsafe integer", Number.MAX_SAFE_INTEGER + 1, null],
+  ["negative memory", -1, null],
+]) {
+  test(`readSystemdState validates ${description}`, async () => {
+    globalThis.systemdTestClient = {
+      call(_path, _iface, method) {
+        if (method === "Get") return Promise.resolve([{t: "t", v: bytes}]);
+        if (method === "ListUnitsByNames") return Promise.resolve([[unitRow("stopped.service")]]);
+        return Promise.resolve([[]]);
+      },
+      close() {},
+    };
+    try {
+      const state = await readSystemdState(["stopped.service"]);
+      assert.equal(state.units["stopped.service"].memoryBytes, expected);
+    } finally {
+      delete globalThis.systemdTestClient;
+    }
+  });
+}
+
 test("readSystemdState reports null memory when the property is unavailable", async () => {
   globalThis.systemdTestClient = {
     call(_path, _iface, method) {
