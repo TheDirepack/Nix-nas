@@ -67,6 +67,25 @@ class FirstRunCompletionGuardTests(unittest.TestCase):
         self.check(journal={"schemaVersion": 1, "workflow": "first-run-v2", "status": "resuming"}, should_block=False)
         self.check(should_block=False)
 
+    def test_existing_state_with_missing_unknown_or_nonstring_status_fails_closed(self):
+        for state in (
+            {"schemaVersion": 2},
+            {"schemaVersion": 2, "status": []},
+            {"schemaVersion": 2, "status": {}},
+            {"schemaVersion": 2, "status": None},
+            {"schemaVersion": 2, "status": 7},
+            {"schemaVersion": 2, "status": "pending"},
+            {"schemaVersion": 2, "status": "failed"},
+        ):
+            with self.subTest(state=state):
+                self.check(state=state, should_block=True)
+
+    def test_incomplete_journal_remains_resumable_when_state_is_absent(self):
+        self.check(
+            journal={"schemaVersion": 1, "workflow": "first-run-v2", "status": "pending"},
+            should_block=False,
+        )
+
     def test_corrupt_existing_state_cannot_authorize_database_recreation(self):
         self.check(corrupt_state=True, should_block=True)
 
