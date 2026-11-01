@@ -540,9 +540,7 @@ def reconcile(
             if _SESSION_TARGET.fullmatch(unit) and unit not in previous_links_raw and unit not in current_links:
                 # A disabled or retired session has no installed target to stop.
                 continue
-            if _SESSION_TARGET.fullmatch(unit) and (
-                unit in previous_owned or unit in active_unlinked_sessions
-            ):
+            if _SESSION_TARGET.fullmatch(unit) and (unit in previous_owned or unit in active_unlinked_sessions):
                 # Stopping a target can terminate its transient instances.
                 # Record this before the call, including partial stop failures.
                 disrupted_sessions.add(unit)

@@ -149,15 +149,25 @@ class V2SystemdReconcileTests(unittest.TestCase):
             runtime.mkdir()
             systemctl, log = self.make_systemctl(root)
             kwargs = dict(
-                manifest=manifest, projection=projection, runtime=runtime,
-                state=root / "state.json", systemctl=systemctl, log=log,
+                manifest=manifest,
+                projection=projection,
+                runtime=runtime,
+                state=root / "state.json",
+                systemctl=systemctl,
+                log=log,
             )
             manifest.write_text(
-                json.dumps({
-                    "schemaVersion": 1, "links": [], "quadletLinks": [],
-                    "ownedUnits": [unit], "startUnits": [], "stopUnits": [unit],
-                    "fingerprints": {},
-                }),
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "links": [],
+                        "quadletLinks": [],
+                        "ownedUnits": [unit],
+                        "startUnits": [],
+                        "stopUnits": [unit],
+                        "fingerprints": {},
+                    }
+                ),
                 encoding="utf-8",
             )
             self.run_reconcile(**kwargs)
@@ -166,18 +176,22 @@ class V2SystemdReconcileTests(unittest.TestCase):
             systemctl.write_text(
                 '#!/bin/sh\nprintf "%s\\\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\n'
                 'if [ "$1" = is-active ]; then printf "active\\\\n"; fi\n'
-                'exit 0\n',
+                "exit 0\n",
                 encoding="utf-8",
             )
             log.write_text("", encoding="utf-8")
             manifest.write_text(
-                json.dumps({
-                    "schemaVersion": 1,
-                    "links": [{"target": unit, "source": str(source)}],
-                    "quadletLinks": [], "ownedUnits": [unit],
-                    "startUnits": [], "stopUnits": [],
-                    "fingerprints": {unit: "new-descriptor"},
-                }),
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "links": [{"target": unit, "source": str(source)}],
+                        "quadletLinks": [],
+                        "ownedUnits": [unit],
+                        "startUnits": [],
+                        "stopUnits": [],
+                        "fingerprints": {unit: "new-descriptor"},
+                    }
+                ),
                 encoding="utf-8",
             )
             result = self.run_reconcile(**kwargs)
