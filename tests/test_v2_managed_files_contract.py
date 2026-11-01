@@ -84,7 +84,7 @@ class ManagedFileContractTests(unittest.TestCase):
     def test_schema_rejects_unsupported_content_and_secret_classes(self) -> None:
         for update in (
             {"sensitivity": "secret"},
-            {"content": {"template": "secret {{ credentials.api }}" }},
+            {"content": {"template": "secret {{ credentials.api }}"}},
             {"content": {"literal": "x", "credential": "api"}},
             {"id": "../bad"},
             {"delivery": "runtime"},
@@ -93,7 +93,9 @@ class ManagedFileContractTests(unittest.TestCase):
             {"unknown": True},
         ):
             with self.subTest(update=update):
-                self.assert_file_error(self.doc([self.item(**update)]), "schema-validation")
+                entry = self.item()
+                entry.update(update)
+                self.assert_file_error(self.doc([entry]), "schema-validation")
 
     def test_schema_bounds_file_count_and_individual_literal_size(self) -> None:
         files = [self.item(id=f"file-{i}", destination=f"/etc/demo/{i}") for i in range(129)]
