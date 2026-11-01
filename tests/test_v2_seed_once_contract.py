@@ -12,6 +12,16 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class V2SeedOnceContractTests(unittest.TestCase):
+    def test_vm_authority_reads_follow_the_completed_storage_setup(self) -> None:
+        guest = (ROOT / "tests/vm/guest-test.sh").read_text(encoding="utf-8")
+        setup_complete = guest.index('pass "GUI first start created the expected storage, accounts, and administrator"')
+        for command in (
+            "nas-managed-services-control status >/dev/null",
+            "nas-managed-services-control document >/dev/null",
+        ):
+            with self.subTest(command=command):
+                self.assertGreater(guest.index(command), setup_complete)
+
     def test_seed_marker_is_written_only_after_the_exact_dataset_check(self) -> None:
         source = (ROOT / "modules/nas/config/managed-services-lifecycle.nix").read_text(encoding="utf-8")
         script = source.split("preStart = lib.mkBefore ''", 1)[1].split("\n        '';", 1)[0]
