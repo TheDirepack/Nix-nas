@@ -160,6 +160,86 @@ class V2SourceWatchTests(unittest.TestCase):
                     [requirements.resolve()],
                 )
 
+    def test_managed_source_symlink_retargeted_release_keeps_stable_watch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            app_root = root / "apps"
+            service_root = app_root / "demo"
+            releases = service_root / "releases"
+            releases.mkdir(parents=True)
+            first = releases / "one.yaml"
+            second = releases / "two.yaml"
+            first.write_text("services: {}\n", encoding="utf-8")
+            second.write_text("services: {web: {}}\n", encoding="utf-8")
+            configured = service_root / "compose.yaml"
+            configured.symlink_to(first.relative_to(service_root))
+            effective = {
+                "services": {
+                    "demo": {
+                        "managed": True,
+                        "enabled": True,
+                        "runtime": {"type": "compose", "source": str(configured)},
+                    }
+                }
+            }
+
+            def projected_unit():
+                files = {}
+                with mock.patch.object(source_watch, "APP_ROOT", app_root):
+                    paths = source_watch.source_paths({}, "demo", effective["services"]["demo"])
+                    self.assertEqual(paths, [configured])
+                    source_watch.augment_projection(
+                        effective,
+                        output_dir=root / "projection",
+                        files=files,
+                        manifest=self.manifest(),
+                    )
+                return files[root / "projection/units/nas-v2-source-demo.path"].decode()
+
+            before = projected_unit()
+            self.assertIn(f"PathChanged={configured}\n", before)
+            self.assertIn(f"PathChanged={service_root}\n", before)
+            self.assertNotIn(f"PathChanged={first}\n", before)
+
+            replacement = service_root / ".compose.next"
+            replacement.symlink_to(second.relative_to(service_root))
+            replacement.replace(configured)
+            after = projected_unit()
+            self.assertEqual(before, after, "watch definition must survive release selector retargeting")
+            self.assertEqual(configured.resolve(), second)
+
+    def test_intermediate_symlink_watches_link_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            app_root = root / "apps"
+            service_root = app_root / "demo"
+            release = service_root / "releases" / "v1"
+            release.mkdir(parents=True)
+            (release / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+            current = service_root / "current"
+            current.symlink_to(release.relative_to(service_root), target_is_directory=True)
+            configured = current / "compose.yaml"
+            effective = {
+                "services": {
+                    "demo": {
+                        "managed": True,
+                        "enabled": True,
+                        "runtime": {"type": "compose", "source": str(configured)},
+                    }
+                }
+            }
+            files = {}
+            with mock.patch.object(source_watch, "APP_ROOT", app_root):
+                source_watch.augment_projection(
+                    effective,
+                    output_dir=root / "projection",
+                    files=files,
+                    manifest=self.manifest(),
+                )
+            unit = files[root / "projection/units/nas-v2-source-demo.path"].decode()
+            self.assertIn(f"PathChanged={configured}\n", unit)
+            self.assertIn(f"PathChanged={service_root}\n", unit)
+
     def test_source_symlink_escape_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
