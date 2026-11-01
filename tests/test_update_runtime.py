@@ -162,6 +162,16 @@ class UpdateRuntimeTests(unittest.TestCase):
                 self.assertFalse(self.trace.exists())
                 self.assertFalse(self.probe_args.exists())
 
+    def test_external_probe_rejects_nul_after_partial_decode_without_launch(self):
+        result = self.run_function(
+            "external_management_probe",
+            NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON=json.dumps([str(self.probe), "\0"]),
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("external probe argument contains NUL", result.stderr)
+        self.assertFalse(self.trace.exists())
+        self.assertFalse(self.probe_args.exists())
+
     def test_external_probe_is_required_without_explicit_override(self):
         result = self.run_function("external_management_probe")
         self.assertNotEqual(result.returncode, 0)
