@@ -203,7 +203,13 @@ def main(*, overrides: dict[str, str | None] | None = None) -> int:
                         # current switch. Never let cleanup delete that tree.
                         pass
                 raise
-            prune_generations(generation_root, current_link=current_link, retain=3)
+            # Publication already moved current to the new generation. A
+            # best-effort retention failure must not report that activation
+            # failed or provoke a second conflicting reconciliation.
+            try:
+                prune_generations(generation_root, current_link=current_link, retain=3)
+            except (GenerationError, OSError) as cleanup_error:
+                print(f"V2 generation pruning deferred: {cleanup_error}", file=sys.stderr)
             return 0
         raise GenerationError("desired state changed repeatedly during compilation; retry reconciliation")
     except Exception as exc:

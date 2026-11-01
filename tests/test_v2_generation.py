@@ -90,6 +90,39 @@ class ManagedServicesV2GenerationTests(unittest.TestCase):
             with self.assertRaisesRegex(generation.GenerationError, "beneath the generation root"):
                 generation.prune_generations(root, current_link=current)
 
+    def test_prune_rejects_zero_retention_before_touching_current(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp) / "generations"
+            active = generation.allocate_generation(root, REVISION)
+            current = pathlib.Path(tmp) / "current"
+            current.symlink_to(active)
+            with self.assertRaisesRegex(generation.GenerationError, "retention must be at least one"):
+                generation.prune_generations(root, current_link=current, retain=0)
+            self.assertEqual(current.resolve(strict=True), active)
+            self.assertTrue(active.is_dir())
+
+    def test_prune_before_the_first_generation_has_no_filesystem_effects(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = pathlib.Path(tmp)
+            root = runtime / "generations"
+            self.assertEqual(generation.prune_generations(root, current_link=runtime / "current"), [])
+            self.assertEqual(list(runtime.iterdir()), [])
+
+    def test_discard_ignores_non_directory_and_symlink_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = pathlib.Path(tmp)
+            target = runtime / "target"
+            target.mkdir()
+            payload = target / "file"
+            payload.write_bytes(b"must survive")
+            link = runtime / "linked-candidate"
+            link.symlink_to(target, target_is_directory=True)
+            for candidate in (runtime / "missing", payload, link):
+                with self.subTest(candidate=candidate.name):
+                    generation.discard_generation(candidate, current_link=runtime / "current")
+                    self.assertEqual(payload.read_bytes(), b"must survive")
+                    self.assertTrue(link.is_symlink())
+
     def test_prune_removes_sealed_nested_generations_without_unsealing_current(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = pathlib.Path(tmp)

@@ -94,9 +94,11 @@ class PublicationCleanupSeparationTests(unittest.TestCase):
                 mock.patch.object(entry, "_apply_once", side_effect=_fake_apply(EFFECTIVE_V2, REV2)),
                 mock.patch.object(entry, "prune_generations", side_effect=_flaky_prune),
                 mock.patch.object(entry, "discard_generation", side_effect=_spy_discard),
-                contextlib.redirect_stderr(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()) as diagnostics,
             ):
-                self.assertEqual(1, entry.main())
+                self.assertEqual(0, entry.main())
+            self.assertIn("V2 generation pruning deferred:", diagnostics.getvalue())
+            self.assertIn("injected post-publication prune failure", diagnostics.getvalue())
             published = generations / REV2
             self.assertTrue(published.is_dir(), "post-publication prune failure must not discard current output")
             self.assertNotIn(REV2, discarded)
@@ -109,6 +111,10 @@ class PublicationCleanupSeparationTests(unittest.TestCase):
             repo = pathlib.Path(tmp) / "repo"
             repo.mkdir()
             _seed_current(runtime, REV1, EFFECTIVE_V1)
+            generation_root = runtime / "generations"
+            older = [generation.allocate_generation(generation_root, char * 40) for char in "cd"]
+            for path in older:
+                os.utime(path, (1, 1))
 
             def _flaky_prune(*args: object, **kwargs: object) -> list[pathlib.Path]:
                 raise generation.GenerationError("injected post-publication prune failure")
@@ -123,11 +129,28 @@ class PublicationCleanupSeparationTests(unittest.TestCase):
             for patch in patches:
                 patch.start()
                 self.addCleanup(patch.stop)
-            with mock.patch.object(entry, "prune_generations", side_effect=_flaky_prune):
-                with contextlib.redirect_stderr(io.StringIO()):
-                    self.assertEqual(1, entry.main())
-            with contextlib.redirect_stderr(io.StringIO()):
-                self.assertEqual(0, entry.main())
+            with mock.patch.object(entry, "prune_generations", side_effect=_flaky_prune) as failed_prune:
+                with contextlib.redirect_stderr(io.StringIO()) as diagnostics:
+                    self.assertEqual(0, entry.main())
+            failed_prune.assert_called_once()
+            self.assertIn("V2 generation pruning deferred:", diagnostics.getvalue())
+            removed: list[pathlib.Path] = []
+
+            def _record_prune(
+                generation_root: pathlib.Path, *, current_link: pathlib.Path, retain: int = 3
+            ) -> list[pathlib.Path]:
+                paths = generation.prune_generations(generation_root, current_link=current_link, retain=retain)
+                removed.extend(paths)
+                return paths
+
+            with mock.patch.object(entry, "prune_generations", side_effect=_record_prune) as retried_prune:
+                with contextlib.redirect_stderr(io.StringIO()) as retry_diagnostics:
+                    self.assertEqual(0, entry.main())
+                retried_prune.assert_called_once()
+                self.assertNotIn("V2 generation pruning deferred:", retry_diagnostics.getvalue())
+            self.assertEqual(set(older), set(removed))
+            for old in older:
+                self.assertFalse(old.exists(), "deferred cleanup should remove older generations")
             self.assertEqual(EFFECTIVE_V2, (runtime / "effective.json").read_text(encoding="utf-8"))
             self.assertTrue((runtime / "current").resolve(strict=True).is_dir())
 
