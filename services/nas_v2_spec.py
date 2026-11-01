@@ -554,7 +554,6 @@ def _routes_conflict(first: str, second: str) -> bool:
     return first_parts[: len(second_parts)] == second_parts or second_parts[: len(first_parts)] == first_parts
 
 
-
 def _validate_managed_files(service_id: str, service: dict[str, Any]) -> None:
     """Validate future non-secret file declarations without pretending to apply them.
 
