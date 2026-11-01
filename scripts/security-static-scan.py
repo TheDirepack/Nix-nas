@@ -24,7 +24,9 @@ class Finding:
     detail: str
 
 
-SHELL_EVAL_RE = re.compile(r"(?:^|&&|\|\||[;|&()])\s*(?:(?:if|elif|while|until|then|do)\s+)?eval(?:\s|$)")
+SHELL_EVAL_RE = re.compile(
+    r"(?:^|&&|\|\||[;|&()])\s*(?:(?:if|elif|while|until|then|do)\s+)?(?:(?:builtin|command)\s+(?:(?:-p|--)\s+)*)?eval(?:\s|$)"
+)
 SHELL_XTRACE_RE = re.compile(
     r"(?:^|&&|\|\||[;|&()])\s*(?:set\s+(?:-[A-Za-z]*x[A-Za-z]*|-o\s+xtrace)(?:\s|$)|(?:bash|sh)\s+-[A-Za-z]*x[A-Za-z]*(?:\s|$))"
 )
@@ -248,6 +250,21 @@ def files(root: pathlib.Path, suffixes: set[str]) -> list[pathlib.Path]:
 
 def main() -> int:
     findings: list[Finding] = []
+    configured = (
+        (PYTHON_ROOTS, {".py"}),
+        (WEB_ROOTS, {".js", ".jsx", ".html"}),
+        (SHELL_ROOTS, {".sh"}),
+        (NIX_ROOTS, {".nix"}),
+    )
+    for roots, _suffixes in configured:
+        for root in roots:
+            if not root.is_dir():
+                findings.append(Finding(root, 1, "scan-root", "configured security scan root is missing"))
+    if findings:
+        print("Static security boundary scan failed:", file=sys.stderr)
+        for finding in findings:
+            print(f"- {finding.path}: {finding.rule}: {finding.detail}", file=sys.stderr)
+        return 1
     for root in PYTHON_ROOTS:
         for path in files(root, {".py"}):
             findings.extend(scan_python(path))

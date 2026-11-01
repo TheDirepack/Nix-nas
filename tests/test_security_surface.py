@@ -156,6 +156,36 @@ class SecuritySurfaceTests(unittest.TestCase):
                 2,
             )
 
+    def test_static_scanner_detects_command_eval_options_without_lookup_false_positives(self):
+        spec = importlib.util.spec_from_file_location(
+            "security_static_scan_command_eval", ROOT / "scripts" / "security-static-scan.py"
+        )
+        assert spec and spec.loader
+        scanner = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = scanner
+        spec.loader.exec_module(scanner)
+        executed = (
+            'eval "$payload"',
+            'builtin eval "$payload"',
+            'command eval "$payload"',
+            'command -p eval "$payload"',
+            'command -- eval "$payload"',
+            'command -p -- eval "$payload"',
+            'false || command -p eval "$payload"',
+        )
+        not_executed = (
+            "command -v eval",
+            "command -V eval",
+            'printf "eval is a string\\n"',
+            "nix eval --raw .#value",
+        )
+        for line in executed:
+            with self.subTest(executed=line):
+                self.assertTrue(scanner.shell_eval_in_command_position(line), line)
+        for line in not_executed:
+            with self.subTest(not_executed=line):
+                self.assertFalse(scanner.shell_eval_in_command_position(line), line)
+
     def test_static_scanner_detects_shell_format_and_tempfile_hazards(self):
         spec = importlib.util.spec_from_file_location(
             "security_static_scan_shell", ROOT / "scripts" / "security-static-scan.py"
