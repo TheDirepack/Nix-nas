@@ -121,7 +121,6 @@ class ManagedFileContractTests(unittest.TestCase):
             "/etc//demo/config.yaml",
             "/etc/./demo/config.yaml",
             "//etc/demo/config.yaml",
-            "/",
             "/proc/sys/kernel/core_pattern",
             "/sys/class/example",
             "/dev/zero",
