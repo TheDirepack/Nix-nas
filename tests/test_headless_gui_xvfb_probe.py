@@ -82,6 +82,8 @@ class PrivateDisplaySmokeTest(unittest.TestCase):
                 proc, path = server, directory
                 raise RuntimeError("injected failure")
         self.assertIsNotNone(proc)
+        assert proc is not None
+        assert path is not None
         self.assertIsNotNone(proc.poll(), "owned Xvfb must be reaped on exception")
         self.assertFalse(path.exists(), "private directory must be removed on exception")
 
