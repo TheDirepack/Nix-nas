@@ -1,4 +1,4 @@
-import React, {useMemo, useState} from "react";
+import React, {useId, useMemo, useRef, useState} from "react";
 import {
   Button,
   Checkbox,
@@ -41,13 +41,14 @@ function replaceObjectKey(value, oldKey, newKey) {
   return result;
 }
 
-function ScalarEditor({root, schema, value, onChange, id}) {
+function ScalarEditor({root, schema, value, onChange, id, label}) {
   const resolved = resolveSchema(root, schema);
   if (Object.hasOwn(resolved, "const")) return <code>{String(resolved.const)}</code>;
   if (Array.isArray(resolved.enum)) {
     return (
       <FormSelect
         id={id}
+        aria-label={label}
         value={value ?? ""}
         onChange={(event) => {
           const option = resolved.enum.find((entry) => String(entry) === event.target.value);
@@ -66,6 +67,7 @@ function ScalarEditor({root, schema, value, onChange, id}) {
     return (
       <Checkbox
         id={id}
+        aria-label={label}
         isChecked={value === true}
         onChange={(_event, checked) => onChange(checked)}
       />
@@ -75,6 +77,7 @@ function ScalarEditor({root, schema, value, onChange, id}) {
     return (
       <TextInput
         id={id}
+        aria-label={label}
         type="number"
         value={value ?? ""}
         min={resolved.minimum}
@@ -90,11 +93,20 @@ function ScalarEditor({root, schema, value, onChange, id}) {
   }
   const text = typeof value === "string" ? value : "";
   if ((resolved.maxLength || 0) > 256 || resolved.format === "textarea") {
-    return <TextArea id={id} value={text} onChange={(_event, next) => onChange(next)} rows={4} />;
+    return (
+      <TextArea
+        id={id}
+        aria-label={label}
+        value={text}
+        onChange={(_event, next) => onChange(next)}
+        rows={4}
+      />
+    );
   }
   return (
     <TextInput
       id={id}
+      aria-label={label}
       value={text}
       onChange={(_event, next) => onChange(next)}
       type="text"
@@ -144,6 +156,50 @@ function ArrayEditor({root, schema, value, onChange, path}) {
   );
 }
 
+function MapKeyInput({name, names, pattern, onRename}) {
+  const [draft, setDraft] = useState(name);
+  const [error, setError] = useState("");
+  const errorId = useId();
+  const commit = () => {
+    if (draft === name) return;
+    const next = draft.trim();
+    if (!next) return setError("A map key cannot be empty.");
+    if (next !== name && hasOwn(names, next)) return setError("That key already exists.");
+    if (pattern && !new RegExp(pattern).test(next)) {
+      return setError(`Key must match ${pattern}.`);
+    }
+    setError("");
+    setDraft(next);
+    if (next !== name) onRename(next);
+  };
+  return (
+    <>
+      <TextInput
+        value={draft}
+        aria-label={`Key for ${name}`}
+        aria-invalid={Boolean(error)}
+        aria-describedby={error ? errorId : undefined}
+        onChange={(_event, next) => {
+          setDraft(next);
+          setError("");
+        }}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            event.currentTarget.blur();
+          }
+        }}
+      />
+      {error ? (
+        <span id={errorId} className="nas-schema-error" role="alert">
+          {error}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
 function ObjectEditor({root, schema, value, onChange, path}) {
   const resolved = resolveSchema(root, schema);
   const object = value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -161,6 +217,12 @@ function ObjectEditor({root, schema, value, onChange, path}) {
   const [fieldToAdd, setFieldToAdd] = useState("");
   const [newKey, setNewKey] = useState("");
   const [keyError, setKeyError] = useState("");
+  const entryIds = useRef(new Map());
+  const nextEntryId = useRef(0);
+  const entryKey = (name) => {
+    if (!entryIds.current.has(name)) entryIds.current.set(name, nextEntryId.current++);
+    return entryIds.current.get(name);
+  };
   const namePattern = propertyNamePattern(root, resolved);
 
   const setProperty = (name, next) => {
@@ -240,19 +302,15 @@ function ObjectEditor({root, schema, value, onChange, path}) {
       ) : null}
 
       {dynamicEntries.map(([name, entry]) => (
-        <div className="nas-schema-map-entry" key={`${path}.${name}`}>
+        <div className="nas-schema-map-entry" key={`${path}.${entryKey(name)}`}>
           <div className="nas-schema-map-key">
-            <TextInput
-              value={name}
-              aria-label={`Key for ${name}`}
-              onChange={(_event, next) => {
-                if (
-                  !next ||
-                  hasOwn(object, next) ||
-                  (namePattern && !new RegExp(namePattern).test(next))
-                ) {
-                  return;
-                }
+            <MapKeyInput
+              name={name}
+              names={object}
+              pattern={namePattern}
+              onRename={(next) => {
+                entryIds.current.set(next, entryKey(name));
+                entryIds.current.delete(name);
                 onChange(replaceObjectKey(object, name, next));
               }}
             />
@@ -329,7 +387,14 @@ function SchemaNode({root, schema, value, onChange, path, label, required = fals
       ) : type === "array" ? (
         <ArrayEditor root={root} schema={active} value={value} onChange={onChange} path={path} />
       ) : (
-        <ScalarEditor root={root} schema={active} value={value} onChange={onChange} id={id} />
+        <ScalarEditor
+          root={root}
+          schema={active}
+          value={value}
+          onChange={onChange}
+          id={id}
+          label={titleFor(active, label)}
+        />
       )}
     </fieldset>
   );
