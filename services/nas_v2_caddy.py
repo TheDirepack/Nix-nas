@@ -11,7 +11,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import Any
+from typing import Any, TypeGuard
 
 from nas_common import ADMIN_GROUP
 from nas_v2_activation import ActivationProjectionError, socket_path
@@ -381,7 +381,8 @@ class PortalProjectionError(RuntimeError):
     """Raised when portal metadata cannot be projected safely."""
 
 
-def _safe_portal_path(value: Any) -> bool:
+
+def _safe_portal_path(value: Any) -> TypeGuard[str]:
     return (
         isinstance(value, str)
         and value.startswith("/")
