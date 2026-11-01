@@ -106,10 +106,10 @@ in
     };
     hardware.nvidia-container-toolkit = {
       enable = hasNvidiaGpu && cfg.hardware.nvidia.containerToolkit;
-      # The platform probe emits index selectors (nvidia.com/gpu=0); keep UUID
-      # selectors resolvable for existing service declarations. nvidia-ctk
-      # accepts repeated --device-name-strategy flags and generates one CDI
-      # device name per strategy.
+      # The probe prefers UUID selectors and falls back to index selectors when
+      # a GPU has no resolvable UUID. nvidia-ctk accepts repeated
+      # --device-name-strategy flags and generates one CDI device name per
+      # strategy, so both naming eras stay resolvable.
       device-name-strategy = lib.mkIf (hasNvidiaGpu && cfg.hardware.nvidia.containerToolkit) "index";
       extraArgs = lib.mkIf (hasNvidiaGpu && cfg.hardware.nvidia.containerToolkit) [
         "--device-name-strategy=uuid"
