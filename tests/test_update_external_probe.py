@@ -104,7 +104,8 @@ class ExternalProbeTests(unittest.TestCase):
     def test_late_unencodable_string_rejects_the_entire_probe(self):
         result = self.run_probe(json.dumps([str(self.probe), "accepted-prefix", "\ud800"]))
         self.assert_blocked(result, 1)
-        self.assertIn("UnicodeEncodeError", result.stderr)
+        self.assertIn("external probe argument must be UTF-8 encodable", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
 
     def test_decoder_failure_after_output_never_launches_prefix(self):
         result = self.run_probe(
