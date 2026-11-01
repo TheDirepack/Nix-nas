@@ -31,7 +31,7 @@ case "$1" in
   eval)
     ref=${3%.outPath}
     if [[ ${NAS_TEST_FAIL_REF:-} == "$ref" ]]; then
-      printf 'simulated root evaluation failure: %s\n' "$ref" >&2
+      printf 'simulated root evaluation failure: %s\\n' "$ref" >&2
       exit 42
     fi
     case "$ref" in
@@ -59,7 +59,7 @@ case "$1" in
       *-core)
         if [[ ${NAS_TEST_LARGE_CORE:-0} == 1 ]]; then
           for ((i = 0; i < 1600; i++)); do
-            printf '/nix/store/%032d-%070d\n' "$i" "$i"
+            printf '/nix/store/%032d-%070d\\n' "$i" "$i"
           done
         fi
         ;;
@@ -229,10 +229,14 @@ class VmBundleScriptTests(unittest.TestCase):
         output = self._root / "bundles"
         result = self._run("save", str(output), env=env)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
-        calls = [line for line in store_log.read_text(encoding="utf-8").splitlines()
-                 if line.startswith("--export")]
-        self.assertEqual(len(calls), len(EXPECTED_BUNDLES),
-                         "each bundle must be exported in exactly one nix-store invocation")
+        calls = [
+            line for line in store_log.read_text(encoding="utf-8").splitlines() if line.startswith("--export")
+        ]
+        self.assertEqual(
+            len(calls),
+            len(EXPECTED_BUNDLES),
+            "each bundle must be exported in exactly one nix-store invocation",
+        )
         core_export = next(line for line in calls if "-core" in line)
         self.assertIn("/nix/store/00000000000000000000000000000000-", core_export)
         self.assertIn("/nix/store/00000000000000000000000000001599-", core_export)
