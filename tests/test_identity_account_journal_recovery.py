@@ -63,6 +63,7 @@ class AccountJournalCancellationTests(unittest.TestCase):
         self.assertEqual(archived.stat().st_mode & 0o777, 0o600)
         self.assertEqual(archived.parent.stat().st_mode & 0o777, 0o700)
         changed = load_json(self.path)
+        assert changed is not None
         self.assertEqual(changed["status"], "cancelled")
         self.assertEqual(changed["cancelledArchive"], str(archived))
         self.assertEqual(changed["cancelNote"], "Reviewed the partially applied account changes.")
