@@ -87,7 +87,6 @@ def _listed_nvidia_cdi_devices(nvidia_ctk_bin: str) -> set[str]:
     }
 
 
-
 def _load_base(path: pathlib.Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -155,10 +154,12 @@ def probe_inventory(
     }
     shared_nvidia = [dev_root / name for name in _NVIDIA_SHARED_NODES if (dev_root / name).exists()]
     cdi_enabled = capabilities.get("gpu-nvidia-cdi") is True and bool(nvidia_indexes)
-    identities = _nvidia_gpu_uuids_by_minor(proc_nvidia_gpus) if cdi_enabled else {}
-    listed_cdi = (
-        _listed_nvidia_cdi_devices(nvidia_ctk_bin) if cdi_device_names is None else set(cdi_device_names)
-    ) if cdi_enabled else set()
+    if cdi_enabled:
+        identities = _nvidia_gpu_uuids_by_minor(proc_nvidia_gpus)
+        listed_cdi = _listed_nvidia_cdi_devices(nvidia_ctk_bin) if cdi_device_names is None else set(cdi_device_names)
+    else:
+        identities = {}
+        listed_cdi = set()
     for minor in sorted(set(nvidia_indexes)):
         gpu_node = dev_root / f"nvidia{minor}"
         selectors["NVIDIA"].append(_devices([gpu_node, *shared_nvidia]))
