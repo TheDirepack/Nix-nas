@@ -96,6 +96,12 @@ in
       description = "Seed Managed Services V2 desired state once";
       wantedBy = [ "multi-user.target" ];
       before = [ "nas-managed-services-reconcile.service" ];
+      # Pull the guard in so seeding is ordered behind it when it can run. Do
+      # not require it: the guard asserts that cfg.zfsRoot is already mounted
+      # and is condition-skipped before first-run storage exists, while the seed
+      # must still create the pre-setup desired state on that first boot.
+      wants = [ "nas-zfs-mount-guard.service" ];
+      after = [ "nas-zfs-mount-guard.service" ];
       serviceConfig = {
         Type = "oneshot";
         ExecStart = seedDesiredState;
@@ -129,6 +135,10 @@ in
         # reconcile after activating secrets, before publishing state.json.
         ConditionPathExists = [ "${nasInternal.secretRoot}/ready" ];
       };
+      # The NVIDIA toolkit is invoked by name by the probe; systemd composes
+      # PATH from this list, so the bare `nvidia-ctk` resolves without
+      # overriding the service's default PATH.
+      path = [ pkgs.nvidia-container-toolkit ];
       environment = {
         PYTHONPATH = "${v2Source}";
         NAS_V2_DESIRED = desiredPath;
@@ -146,6 +156,7 @@ in
         NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString authentikOutpostPort}";
         NAS_V2_AUTHENTIK_PATH = cfg.identity.authentikPath;
         NAS_V2_LAN_HOST = nasInternal.lanHost;
+        NAS_V2_NVIDIA_CTK_BIN = "${pkgs.nvidia-container-toolkit}/bin/nvidia-ctk";
         NAS_V2_SYSTEMD_ANALYZE_BIN = "${pkgs.systemd}/bin/systemd-analyze";
         NAS_V2_SYSTEMCTL_BIN = "${pkgs.systemd}/bin/systemctl";
         NAS_V2_PYTHON_BIN = "${v2Python}/bin/python";
@@ -158,6 +169,9 @@ in
         NAS_V2_LAN_ZONE = cfg.networking.firewall.zone;
         NAS_V2_COCKPIT_PORT = toString nasInternal.cockpitPort;
         NAS_V2_FIREWALLD_ENABLED = if firewalldEnabled then "1" else "0";
+        # Sealed generations must stay readable by the account group that
+        # imports the managed Caddyfile; follow the configured Caddy group.
+        NAS_V2_GENERATION_READER_GROUP = config.services.caddy.group;
       };
       preStart = ''
         ${v2Python}/bin/python ${lib.escapeShellArgs platformProbeArgs}

@@ -368,8 +368,9 @@ pass "nas-managed-services-control document returns the editable YAML authority"
 log "Locked-state and configuration checks"
 ! systemctl is-active --quiet cockpit.socket || fail "stock Cockpit socket must stay inactive while locked"
 wait_active nas-cockpit-sso.service
-ss -tln | grep -Eq '127\.0\.0\.1:9092[[:space:]]' || fail "Cockpit SSO session is not loopback-only while locked"
-! ss -tln | grep -Eq '(0\.0\.0\.0|\[::\]):9092[[:space:]]' || fail "Cockpit listener is exposed while locked"
+[[ -S /run/nas-cockpit-sso/ws.sock ]] || fail "Cockpit permissioned Unix listener is missing"
+! ss -ltnp | grep -F 'cockpit-ws' || fail "Unauthenticated Cockpit root bridge opened a TCP listener"
+! ss -tln | grep -Eq ':9092[[:space:]]' || fail "Unauthenticated root Cockpit TCP listener is exposed"
 wait_active nas-first-start.service
 systemctl show nas-first-start.service --property=RemainAfterExit --value | grep -qx yes
 jq -e '.schemaVersion == 2 and (.status | type == "string")' /var/lib/nas-first-start/status.json >/dev/null
@@ -399,15 +400,22 @@ systemctl restart nas-authentik-proxy-outpost.service
 wait_active nas-authentik-proxy-outpost.service
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
 expect <<'EXPECT_LINUX_BOOTSTRAP'
-set timeout 15
+set timeout 20
 spawn runuser -u admin -- su - akadmin -c {test "$(id -un)" = akadmin}
 expect "Password:"
 send "nas-admin-first-boot\r"
-expect eof
+# nas-bootstrap-administrator expires the bootstrap password (chage -d 0), so
+# the first login must complete the forced change before the command runs.
+expect {
+  -re {(?i)retype new password:?} { send "Rotated-VM-Password-2026\r"; exp_continue }
+  -re {(?i)new password:?} { send "Rotated-VM-Password-2026\r"; exp_continue }
+  -re {(?i)current password:?} { send "nas-admin-first-boot\r"; exp_continue }
+  eof
+}
 set status [lindex [wait] 3]
 exit $status
 EXPECT_LINUX_BOOTSTRAP
-pass "the initial Linux login uses the same akadmin development credential as Authentik"
+pass "the bootstrap Linux credential authenticates and its forced first-login password change succeeds"
 AUTHENTIK_BOOTSTRAP_TOKEN="$(< /run/nas-authentik/api-token)"
 verify_bootstrap_authentik_proxy
 [[ -f /var/lib/nas-control-plane/authentik/environment ]] || fail "first-boot Authentik environment is missing"
@@ -1351,7 +1359,8 @@ wait_inactive authentik.service
 wait_inactive nas-zfs-mount-guard.service
 wait_active nas-cockpit-sso.service
 ! systemctl is-active --quiet cockpit.socket || fail "stock Cockpit socket started after setup"
-ss -tln | grep -Eq '127\.0\.0\.1:9092[[:space:]]' || fail "Cockpit SSO session is not loopback-only"
+[[ -S /run/nas-cockpit-sso/ws.sock ]] || fail "Cockpit permissioned Unix listener is missing"
+! ss -ltnp | grep -F 'cockpit-ws' || fail "Unauthenticated Cockpit root bridge opened a TCP listener"
 [[ ! -e /run/nas-secrets ]] || fail "runtime secret tree survived nas-secrets stop"
 
 activate_secrets

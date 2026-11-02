@@ -116,11 +116,16 @@ let
     }
     trap term TERM INT
     while true; do
-      ${cockpitPatched}/libexec/cockpit-ws \
-        --address 127.0.0.1 \
-        --port ${toString cockpitPort} \
-        --no-tls \
-        --local-session ${cockpitPatched}/bin/cockpit-bridge &
+      # cockpit-ws inherits the permissioned Unix listener from systemd.
+      # Never expose the unauthenticated root bridge on a loopback TCP port.
+      (
+        # systemd sets LISTEN_PID for the supervisor, not its children.
+        # Exec keeps the background subshell's BASHPID stable for sd_listen_fds.
+        export LISTEN_PID="$BASHPID"
+        exec ${cockpitPatched}/libexec/cockpit-ws \
+          --no-tls \
+          --local-session ${cockpitPatched}/bin/cockpit-bridge
+      ) &
       WSPID=$!
       while kill -0 "$WSPID" 2>/dev/null; do
         sleep 2
@@ -189,12 +194,26 @@ in
       };
     };
 
+    systemd.sockets.nas-cockpit-sso = {
+      description = "Caddy-only Cockpit root session Unix listener";
+      wantedBy = [ "sockets.target" ];
+      socketConfig = {
+        ListenStream = "/run/nas-cockpit-sso/ws.sock";
+        SocketUser = "root";
+        SocketGroup = config.services.caddy.group;
+        SocketMode = "0660";
+        DirectoryMode = "0755";
+        Service = "nas-cockpit-sso.service";
+        RemoveOnStop = true;
+      };
+    };
+
     systemd.services.nas-cockpit-sso = {
       description = "Cockpit web service behind the Caddy Authentik gate";
       path = [ nasCockpitApi nasPythonApplication nasSecrets ];
       wantedBy = [ "multi-user.target" ];
-      after = [ "nas-first-start.service" ];
-      requires = [ "nas-first-start.service" ];
+      after = [ "nas-first-start.service" "nas-cockpit-sso.socket" ];
+      requires = [ "nas-first-start.service" "nas-cockpit-sso.socket" ];
       # NixOS activation restarts first-start while switching generations;
       # propagate that restart so the shared Cockpit bridge is not left dead.
       partOf = [ "nas-first-start.service" ];
@@ -202,6 +221,11 @@ in
       # Authentik gate; it needs a writable HOME for agent/ssh state.
       environment.HOME = "/var/lib/nas-cockpit-sso";
       serviceConfig = {
+        Sockets = [ "nas-cockpit-sso.socket" ];
+        # Fail closed if Cockpit loses its activation FD: it must never
+        # fall back to binding 0.0.0.0:9090 or another TCP listener.
+        # This restricts AF_INET/AF_INET6 binds, not the inherited AF_UNIX FD.
+        SocketBindDeny = "any";
         ExecStart = cockpitWebService;
         # A crashed shared bridge must never degrade into a second login
         # prompt; restarting ws respawns the local session within seconds.
@@ -550,7 +574,9 @@ in
           token="$(${pkgs.openssl}/bin/openssl rand -hex 32)"
           printf '%s\n' 'AUTHENTIK_SECRET_KEY='"$(${pkgs.openssl}/bin/openssl rand -hex 64)"
           printf '%s\n' 'AUTHENTIK_BOOTSTRAP_TOKEN='"$token"
-          printf '%s\n' 'AUTHENTIK_BOOTSTRAP_PASSWORD=${bootstrapPassword}'
+          # The bootstrap administrator password is not embedded in this store
+          # script: it would be recoverable from /nix/store. It is staged at
+          # runtime from KeePassXC by nas-secrets activate instead.
           printf '%s\n' 'AUTHENTIK_BOOTSTRAP_EMAIL=${cfg.identity.bootstrapEmail}'
         } > "$temporary"
         ${pkgs.coreutils}/bin/install -m 0640 -o root -g authentik "$temporary" "$environment"

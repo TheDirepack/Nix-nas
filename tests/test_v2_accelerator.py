@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import pathlib
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services"))
@@ -208,9 +210,22 @@ class AcceleratorResolutionTests(unittest.TestCase):
         resolved = accelerator.resolve_effective({"services": {"test": raw_service}, "derived": {}}, inventory())
         lines = attachment_lines(resolved, resolved["services"]["test"])
         self.assertEqual("DevicePolicy=closed", lines[0])
-        self.assertIn('DeviceAllow="/dev/nvidia0 rw"', lines)
-        self.assertIn('DeviceAllow="/dev/nvidiactl rw"', lines)
-        self.assertIn('DeviceAllow="/dev/nvidia-uvm rw"', lines)
+        self.assertIn('DeviceAllow="/dev/nvidia0" rw', lines)
+        self.assertIn('DeviceAllow="/dev/nvidiactl" rw', lines)
+        self.assertIn('DeviceAllow="/dev/nvidia-uvm" rw', lines)
+
+    def test_deviceallow_quotes_only_device_path_not_access_mode(self) -> None:
+        lines = attachment_lines(
+            {"storageResources": {}, "credentials": {}},
+            {
+                "runtime": {"type": "systemd"},
+                "storage": [],
+                "credentials": [],
+                "resources": {"accelerators": [{"device": "/dev/custom gpu", "mode": "shared"}]},
+            },
+        )
+        self.assertIn('DeviceAllow="/dev/custom gpu" rw', lines)
+        self.assertNotIn('DeviceAllow="/dev/custom gpu rw"', lines)
 
     def test_quadlet_cdi_lowers_to_v2_owned_podman_device_arg(self) -> None:
         raw_service = service(
@@ -240,6 +255,77 @@ class AcceleratorResolutionTests(unittest.TestCase):
             service_lines=[],
         ).decode()
         self.assertIn('PodmanArgs=--device="nvidia.com/gpu=0"', rendered)
+
+
+class CdiListHelperTests(unittest.TestCase):
+    def test_cdi_list_timeout_returns_empty_set(self) -> None:
+        with mock.patch.object(
+            platform_probe.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired("nvidia-ctk", 30),
+        ):
+            self.assertEqual(platform_probe._listed_nvidia_cdi_devices("nvidia-ctk"), set())
+
+    def test_cdi_list_missing_tool_returns_empty_set(self) -> None:
+        with mock.patch.object(platform_probe.subprocess, "run", side_effect=FileNotFoundError()):
+            self.assertEqual(platform_probe._listed_nvidia_cdi_devices("nvidia-ctk"), set())
+
+    def test_cdi_list_failed_invocation_returns_empty_set(self) -> None:
+        failed = subprocess.CompletedProcess(args=[], returncode=1, stdout="nvidia.com/gpu=all", stderr="error")
+        with mock.patch.object(platform_probe.subprocess, "run", return_value=failed):
+            self.assertEqual(platform_probe._listed_nvidia_cdi_devices("nvidia-ctk"), set())
+
+
+class DuplicateGpuIdentityTests(unittest.TestCase):
+    uuid_a = "nvidia.com/gpu=00000000-0000-0000-0000-000000000001"
+    uuid_b = "nvidia.com/gpu=00000000-0000-0000-0000-000000000002"
+
+    def test_no_duplicate_identities_passes(self) -> None:
+        selectors = [
+            {"type": "devices", "values": ["/dev/nvidia0"]},
+            {"type": "devices", "values": ["/dev/nvidia1"]},
+            {"type": "cdi", "value": self.uuid_a},
+            {"type": "cdi", "value": self.uuid_b},
+        ]
+        platform_probe._check_duplicate_gpu_identities(selectors)
+
+    def test_duplicate_minor_distinct_uuids_rejected(self) -> None:
+        selectors = [
+            {"type": "devices", "values": ["/dev/nvidia0"]},
+            {"type": "devices", "values": ["/dev/nvidia0"]},
+            {"type": "cdi", "value": self.uuid_a},
+            {"type": "cdi", "value": self.uuid_b},
+        ]
+        with self.assertRaisesRegex(platform_probe.PlatformProbeError, "duplicate NVIDIA GPU minor"):
+            platform_probe._check_duplicate_gpu_identities(selectors)
+
+    def test_distinct_minors_duplicate_uuid_rejected(self) -> None:
+        selectors = [
+            {"type": "devices", "values": ["/dev/nvidia0"]},
+            {"type": "devices", "values": ["/dev/nvidia1"]},
+            {"type": "cdi", "value": self.uuid_a},
+            {"type": "cdi", "value": self.uuid_a},
+        ]
+        with self.assertRaisesRegex(platform_probe.PlatformProbeError, "duplicate NVIDIA CDI UUID"):
+            platform_probe._check_duplicate_gpu_identities(selectors)
+
+
+class CdiNameStrategyContractTests(unittest.TestCase):
+    def test_nix_host_platform_generates_index_names_the_probe_emits(self) -> None:
+        # The probe emits index selectors (nvidia.com/gpu=<n>), so the CDI
+        # generator must keep index names. UUID names remain generated too for
+        # existing service declarations.
+        host_platform = (ROOT / "modules/nas/config/host-platform.nix").read_text(encoding="utf-8")
+        probe = (ROOT / "services/nas_v2_platform_probe.py").read_text(encoding="utf-8")
+        accelerator = (ROOT / "services/nas_v2_accelerator.py").read_text(encoding="utf-8")
+
+        self.assertIn(
+            'device-name-strategy = lib.mkIf (hasNvidiaGpu && cfg.hardware.nvidia.containerToolkit) "index";',
+            host_platform,
+        )
+        self.assertIn('"--device-name-strategy=uuid"', host_platform)
+        self.assertIn('_cdi(f"nvidia.com/gpu={index}")', probe)
+        self.assertIn("is_cdi_selector", accelerator)
 
 
 if __name__ == "__main__":

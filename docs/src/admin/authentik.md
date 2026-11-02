@@ -17,6 +17,8 @@ Authentik is the authority for human identities, passwords, MFA, groups, profile
 
 Matching deny groups take precedence. Application bindings in Authentik should mirror the same capability groups so the dashboard matches the policy enforced by Caddy and the application backend.
 
+Disabling an application binding removes its route, but the service's authorization group and existing memberships remain intact. Re-enabling the binding restores access without re-granting memberships. To revoke access, remove the group memberships explicitly; disabling alone is not sufficient.
+
 Use [Accounts and access](accounts.md) for the guarded NAS account CLI and [Account and permission model](../permissions.md) for the full authorization model.
 
 ## Service token

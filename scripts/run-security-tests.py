@@ -99,7 +99,7 @@ def main() -> int:
             result = run(check.command, timeout=args.timeout)
         except subprocess.TimeoutExpired as exc:
             print(f"security check timed out: {check.name} after {args.timeout}s", file=sys.stderr)
-            print_output_tails(exc.stdout, exc.stderr)
+            print_output_tails(getattr(exc, "stdout", exc.output), getattr(exc, "stderr", None))
             return 1
         if result.returncode != 0:
             print(f"security check failed: {check.name}", file=sys.stderr)

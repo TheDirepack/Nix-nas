@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import sys
 import tempfile
 import unittest
@@ -13,6 +14,44 @@ if str(SERVICES) not in sys.path:
 
 import nas_v2_apply as apply_mod  # noqa: E402
 import nas_v2_backup as backup  # noqa: E402
+
+
+def _nix_attrset(source: str, attribute: str) -> str:
+    """Return the balanced body of ``attribute = { ... }`` regardless of indentation."""
+    body = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
+    match = re.search(rf"\b{re.escape(attribute)}\s*=\s*\{{", body)
+    if match is None:
+        raise AssertionError(f"Nix attribute {attribute!r} is missing")
+    depth = 0
+    for index in range(match.end() - 1, len(body)):
+        if body[index] == "{":
+            depth += 1
+        elif body[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return body[match.end() : index]
+    raise AssertionError(f"Nix attribute {attribute!r} is not closed")
+
+
+def _nix_string(body: str, attribute: str) -> str:
+    match = re.search(rf'"{re.escape(attribute)}"\s*=\s*"([^"]*)"\s*;', body)
+    if match is None:
+        raise AssertionError(f"Nix string {attribute!r} is missing")
+    return match.group(1)
+
+
+def _nix_tag_list(body: str) -> list[str]:
+    match = re.search(r"\btag\s*=\s*\[(.*?)\]\s*;", body, re.DOTALL)
+    if match is None:
+        raise AssertionError("Nix tag list is missing")
+    return re.findall(r'"([^"]*)"', match.group(1))
+
+
+def _nix_bool(body: str, attribute: str) -> bool:
+    match = re.search(rf"\b{re.escape(attribute)}\s*=\s*(true|false)\s*;", body)
+    if match is None:
+        raise AssertionError(f"Nix boolean {attribute!r} is missing")
+    return match.group(1) == "true"
 
 
 class V2BackupTests(unittest.TestCase):
@@ -167,6 +206,46 @@ class V2BackupTests(unittest.TestCase):
             self.assertEqual(inventory["resources"][0]["id"], "data")
             self.assertIn(str(root / "backup-resources.json"), result["changedFiles"])
             self.assertIn(str(root / "backup-paths.txt"), result["changedFiles"])
+
+    def profile_identity(self, source: str) -> dict:
+        backup_section = _nix_attrset(source, "backup")
+        retention_section = _nix_attrset(source, "retention")
+        return {
+            "backupGroupBy": _nix_string(backup_section, "group-by"),
+            "backupTags": _nix_tag_list(backup_section),
+            "retentionGroupBy": _nix_string(retention_section, "group-by"),
+            "retentionTagFilter": _nix_bool(retention_section, "tag"),
+        }
+
+    def test_restic_profile_uses_stable_host_tag_identity_for_backups_and_retention(self):
+        source = (ROOT / "modules/nas/config/managed-services-backup-profile.nix").read_text(encoding="utf-8")
+
+        self.assertEqual(
+            self.profile_identity(source),
+            {
+                "backupGroupBy": "host,tags",
+                "backupTags": ["nas-boot-system"],
+                "retentionGroupBy": "host,tags",
+                "retentionTagFilter": True,
+            },
+        )
+        self.assertNotIn('"host,paths"', source)
+
+    def test_restic_profile_identity_survives_reindentation(self):
+        source = (ROOT / "modules/nas/config/managed-services-backup-profile.nix").read_text(encoding="utf-8")
+        reindented = "\n".join(f"  {line}" for line in source.splitlines()) + "\n"
+
+        self.assertNotEqual(source, reindented)
+        self.assertEqual(self.profile_identity(reindented), self.profile_identity(source))
+
+    def test_tag_filtered_retention_points_to_legacy_snapshot_migration(self):
+        source = (ROOT / "modules/nas/config/managed-services-backup-profile.nix").read_text(encoding="utf-8")
+        docs = (ROOT / "docs/src/admin/backups.md").read_text(encoding="utf-8")
+
+        self.assertIn("#migrating-pre-tag-restic-snapshots", source)
+        self.assertIn("## Migrating pre-tag Restic snapshots", docs)
+        self.assertIn("forget --dry-run", docs)
+        self.assertIn("--tag ''", docs)
 
     def test_nix_keeps_restic_native_and_preparation_application_agnostic(self):
         default_module = (ROOT / "modules/nas/default.nix").read_text(encoding="utf-8")

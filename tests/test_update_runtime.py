@@ -52,6 +52,15 @@ class UpdateRuntimeTests(unittest.TestCase):
         self.functions = (
             "listener_present() {" + source.split("listener_present() {", 1)[1].split("restart_protected() {", 1)[0]
         )
+        # The dangling-profile guard and the old_profile computation it depends on
+        # are executed verbatim from the updater rather than re-derived here.
+        self.old_profile_expression = 'old_profile="$(readlink -f "$system_profile" 2>/dev/null || true)"'
+        self.assertIn(self.old_profile_expression, source)
+        guard_start = source.index("# Reject a dangling system profile before activation")
+        guard_end = source.index(
+            'echo "Capturing mutable application state before candidate activation..."', guard_start
+        )
+        self.profile_guard = source[guard_start:guard_end]
 
     @staticmethod
     def host_tool(name: str) -> str:
@@ -162,6 +171,25 @@ class UpdateRuntimeTests(unittest.TestCase):
                 self.assertFalse(self.trace.exists())
                 self.assertFalse(self.probe_args.exists())
 
+    def test_invalid_probe_argument_cannot_reach_candidate_activation(self):
+        # A NUL byte is legal JSON and legal argv in the encoded document, so it
+        # must be rejected by the validator rather than silently truncated by
+        # exec(2) before any candidate activation phase starts.
+        before = {path.relative_to(self.root) for path in self.root.rglob("*")}
+        result = self.run_function(
+            "external_management_probe",
+            inherited=("pkgs.python3",),
+            NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON=json.dumps([str(self.probe), "bad\0arg"]),
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("external probe argument contains NUL", result.stderr)
+        # No probe execution, no snapshot, and no other updater artifact: the
+        # invalid probe returns before any phase that mutates the system.
+        self.assertFalse(self.trace.exists())
+        self.assertFalse(self.probe_args.exists())
+        self.assertEqual(sorted(self.root.rglob("pre-activation-*")), [])
+        self.assertEqual({path.relative_to(self.root) for path in self.root.rglob("*")}, before)
+
     def test_external_probe_is_required_without_explicit_override(self):
         result = self.run_function("external_management_probe")
         self.assertNotEqual(result.returncode, 0)
@@ -173,6 +201,50 @@ class UpdateRuntimeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("WARNING: persisting after local-only management checks by explicit override", result.stderr)
         self.assertFalse(self.trace.exists())
+
+    def run_profile_guard(self, system_profile: Path) -> subprocess.CompletedProcess[str]:
+        command = (
+            "set -Eeuo pipefail\n"
+            'system_profile="$1"\n'
+            + self.old_profile_expression
+            + "\n"
+            + self.profile_guard
+            + '\necho "guard-passed"\n'
+        )
+        return subprocess.run(
+            [self.bash, "--noprofile", "--norc", "-c", command, "--", str(system_profile)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+
+    def test_dangling_system_profile_is_detected_before_activation(self):
+        # A dangling system_profile link resolves via readlink -f to a nonempty
+        # path whose target does not exist, so the updater guard must refuse
+        # activation. -e follows the link; relative targets resolve from its dir.
+        dangling = self.root / "system-profile"
+        dangling.symlink_to(self.root / "missing-final-target")
+        result = self.run_profile_guard(dangling)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("refusing activation without a rollback baseline", result.stderr)
+        self.assertNotIn("guard-passed", result.stdout)
+
+        # An absent profile has no rollback baseline either.
+        result = self.run_profile_guard(self.root / "system-profile-absent")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("refusing activation without a rollback baseline", result.stderr)
+        self.assertNotIn("guard-passed", result.stdout)
+
+        # An existing, resolvable profile passes the guard.
+        real = self.root / "real-profile"
+        real.write_text("")
+        valid = self.root / "system-profile-valid"
+        valid.symlink_to(real)
+        result = self.run_profile_guard(valid)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("guard-passed", result.stdout)
 
 
 if __name__ == "__main__":

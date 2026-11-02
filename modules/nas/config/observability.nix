@@ -90,7 +90,7 @@ let
     [[ "$device" == /dev/* && "$device" != *".."* && "$device" != *$'\n'* ]] || die
     if [[ $# -eq 10 ]]; then
       [[ "$9" == "-d" ]] || die
-      [[ "$10" =~ ^[A-Za-z0-9_,:+.-]+$ ]] || die
+      [[ "''${10}" =~ ^[A-Za-z0-9_,:+.-]+$ ]] || die
     elif [[ $# -ne 8 ]]; then
       die
     fi
@@ -331,7 +331,11 @@ in
       systemd.services.telegraf = {
         after = [ "victoriametrics.service" ];
         requires = [ "victoriametrics.service" ];
-        path = [ pkgs.sudo ];
+        # SMART scans shell out through the setuid sudo wrapper in
+        # /run/wrappers/bin. A plain store package on PATH is not setuid, so the
+        # wrapper directory must be searched first. The path option keeps the
+        # default service PATH after it.
+        path = [ "/run/wrappers" ];
         serviceConfig = {
           AmbientCapabilities = lib.mkForce [ ];
           RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
@@ -373,15 +377,31 @@ in
           route = {
             receiver = if obs.ntfy.enable then "ntfy" else "discard";
             group_by = [ "..." ];
-            group_wait = "0s";
+            # Batch simultaneous firings so a warning is not delivered before
+            # its related critical alert has been observed by the same group.
+            group_wait = "30s";
             group_interval = "1m";
             repeat_interval = "4h";
           };
           inhibit_rules = [
             {
-              source_matchers = [ ''severity="critical"'' ];
-              target_matchers = [ ''severity="warning"'' ];
-              equal = [ "alertname" "instance" ];
+              # SMART failure supersedes the temperature warning for the same
+              # disk on the same host.
+              source_matchers = [ ''alertname="NasSmartHealthFailed"'' ];
+              target_matchers = [ ''alertname="NasDiskTemperatureHigh"'' ];
+              equal = [
+                "host"
+                "device"
+              ];
+            }
+            {
+              # Critical space supersedes the warning for the same filesystem.
+              source_matchers = [ ''alertname="NasFilesystemCriticalSpace"'' ];
+              target_matchers = [ ''alertname="NasFilesystemLowSpace"'' ];
+              equal = [
+                "host"
+                "path"
+              ];
             }
           ];
           receivers = [ { name = "discard"; } ] ++ lib.optional obs.ntfy.enable {
@@ -532,6 +552,10 @@ in
           NUTWG__UPSD__ADDRESS = cfg.power.ups.web.upsdAddress;
           NUTWG__UPSD__PORT = toString cfg.power.ups.web.upsdPort;
           NUTWG__UPSD__USERNAME = cfg.power.ups.monitorUser;
+          # nut_webgui reads an env value that names an existing file as that
+          # file's contents (v0.9.2 config/cfg_env.rs load_from_env). Point at
+          # the container-mounted secret so the password is read at runtime and
+          # never enters the Nix store.
           NUTWG__UPSD__PASSWORD = "/run/secrets/nut-password";
           NUTWG__UPSD__POLL_INTERVAL = "2";
           NUTWG__UPSD__POLL_FREQ = "30";

@@ -140,7 +140,11 @@ class V2SessionRuntimeTests(unittest.TestCase):
                 command,
                 "systemd owns stop/cleanup instead of a Python signal handler",
             )
-            self.assertEqual(command[-2:], ["--user", "alice"])
+            # The authenticated user selects naming and user-scoped storage;
+            # systemd-run --user would target the caller's user manager and
+            # takes no uid, so it must not be passed from the system helper.
+            self.assertNotIn("--user", command)
+            self.assertFalse(any(item.startswith("--uid=") for item in command))
             self.assertFalse(any("session.db" in item for item in command))
 
     def test_descriptor_path_is_derived_from_safe_service_id(self):

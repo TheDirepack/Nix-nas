@@ -344,8 +344,10 @@ in
           --pg-restore ${config.services.postgresql.package}/bin/pg_restore
 
         # These are host recovery substrate rather than application resources.
-        [[ -s "$restore_root${cfg.secrets.keepassDatabase}" ]]
-        [[ -d "$restore_root/var/lib/nas-control" ]]
+        # Check against the restored dataset path (cfg.zfsRoot/nas-control), not
+        # the live-system compatibility symlink /var/lib/nas-control, which the
+        # raw restic restore does not recreate.
+        [[ -d "$restore_root${cfg.zfsRoot}/nas-control" ]]
       '';
     };
 

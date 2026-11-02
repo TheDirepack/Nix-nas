@@ -376,7 +376,9 @@ def _zfs_snapshot_exists(zfs_bin: str, reference: str) -> bool:
     try:
         _run([zfs_bin, "list", reference])
     except BackupRuntimeError as exc:
-        # An execution failure says nothing about whether the snapshot exists.
+        # An execution failure (e.g. missing binary) says nothing about whether
+        # the snapshot exists; re-raise so the prepare failure handler keeps
+        # recording the failure and proceeds to the remaining cleanup steps.
         if isinstance(exc.__cause__, OSError):
             raise
         if any(marker in str(exc).lower() for marker in _ABSENCE_MARKERS):
@@ -462,7 +464,17 @@ def _native_dump_path(
     }
     if on_pending is not None:
         on_pending(pending)
-    _run([systemctl_bin, "restart", preparation_unit])
+    try:
+        _run([systemctl_bin, "restart", preparation_unit])
+    except BackupRuntimeError:
+        # A timed-out or failed preparation unit may still be running. Stop it
+        # before any artifact cleanup so in-flight dump writes cannot race with
+        # removal of the staged artifact.
+        try:
+            _run([systemctl_bin, "stop", preparation_unit])
+        except BackupRuntimeError:
+            pass
+        raise
     artifact = _validate_staged_artifact_path(resource_id, artifact_path, artifact_resource)
     try:
         produced = any(artifact.iterdir())
@@ -694,11 +706,12 @@ def build_verify_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
+    arguments = sys.argv[1:] if argv is None else argv
     # Allow verify sub-invocation via same entrypoint when invoked as backup-verify
-    if argv is not None and "--restore-root" in argv:
-        return verify_main(argv)
-    args = parser.parse_args(argv)
+    if "--restore-root" in arguments:
+        return verify_main(arguments)
+    parser = build_parser()
+    args = parser.parse_args(arguments)
     try:
         if args.command == "prepare":
             result = prepare(
@@ -952,3 +965,7 @@ __all__ = [
     "verify_main",
     "main",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

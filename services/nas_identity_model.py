@@ -102,6 +102,22 @@ def group_names(raw: Mapping[str, Any], groups_by_pk: Mapping[str, str]) -> set[
     return output
 
 
+def eligible_administrator(user: User) -> bool:
+    """Whether a user satisfies the enabled-administrator invariant.
+
+    Mirrors enabled_administrator_names: the account must be enabled and its
+    username safe for a managed folder ID. Unsafe accounts stay visible in
+    reports, but cannot satisfy or be reported by the administrator invariant.
+    """
+    if not user.enabled:
+        return False
+    try:
+        validate_uid(user.uid)
+    except SyncError:
+        return False
+    return True
+
+
 def build_model(data: Mapping[str, Any]) -> IdentityModel:
     raw_groups = [item for item in data.get("groups", []) if isinstance(item, Mapping)]
     raw_users = [item for item in data.get("users", []) if isinstance(item, Mapping)]
@@ -142,7 +158,23 @@ def build_model(data: Mapping[str, Any]) -> IdentityModel:
         username = raw.get("username")
         if not isinstance(username, str):
             continue
-        uid = validate_uid(username)
+        try:
+            uid = validate_uid(username)
+        except SyncError:
+            # Unsafe usernames cannot be used for managed folder IDs, but the
+            # account still appears in identity/capability reports so
+            # administrators are not blind to it. Mark as disabled/unsupported.
+            user_groups = group_names(raw, groups_by_pk)
+            user_groups.add(DISABLED_GROUP)
+            user = User(
+                username,
+                str(raw.get("email") or f"{username}@invalid.local"),
+                str(raw.get("name") or username),
+                frozenset(user_groups),
+                attrs_map(raw.get("attributes")),
+            )
+            users.append(user)
+            continue
         user_groups = group_names(raw, groups_by_pk)
         user_groups.update(explicit_groups_by_uid.get(uid, set()))
         if raw.get("is_active") is not True:
@@ -190,7 +222,9 @@ def build_model(data: Mapping[str, Any]) -> IdentityModel:
             )
         )
 
-    administrators = tuple(sorted(user.uid for user in users if ADMIN_GROUP in user.groups))
+    administrators = tuple(
+        sorted(user.uid for user in users if ADMIN_GROUP in user.groups and eligible_administrator(user))
+    )
     if not administrators:
         raise SyncError(
             f"No enabled members of {ADMIN_GROUP} were found. Authentik superuser status "
@@ -384,13 +418,19 @@ def enabled_administrator_names(
     users: Sequence[Mapping[str, Any]],
     groups: Sequence[Mapping[str, Any]],
 ) -> set[str]:
-    usernames_by_pk = {
-        str(item.get("pk", item.get("num_pk"))): str(item.get("username"))
-        for item in users
-        if item.get("pk", item.get("num_pk")) is not None
-        and isinstance(item.get("username"), str)
-        and item.get("is_active") is True
-    }
+    usernames_by_pk = {}
+    for item in users:
+        pk = item.get("pk", item.get("num_pk"))
+        username = item.get("username")
+        if pk is None or not isinstance(username, str) or item.get("is_active") is not True:
+            continue
+        try:
+            validate_uid(username)
+        except SyncError:
+            # Unsafe usernames cannot be managed folder IDs and must not count
+            # as enabled administrators.
+            continue
+        usernames_by_pk[str(pk)] = username
     active_names = set(usernames_by_pk.values())
     admin_group = next((item for item in groups if item.get("name") == ADMIN_GROUP), None)
     if not isinstance(admin_group, Mapping):
@@ -402,6 +442,10 @@ def enabled_administrator_names(
         for user in users:
             username = user.get("username")
             if user.get("is_active") is True and isinstance(username, str) and key in raw_group_pks(user):
+                try:
+                    validate_uid(username)
+                except SyncError:
+                    continue
                 administrators.add(username)
     raw_members = (
         admin_group.get("users_obj") if isinstance(admin_group.get("users_obj"), list) else admin_group.get("users")

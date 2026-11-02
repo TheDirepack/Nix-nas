@@ -55,6 +55,12 @@ class ContractTests(unittest.TestCase):
         self.assertIn("services.telegraf", observability)
         self.assertIn('path_smartctl = "${smartctlReadOnly}";', observability)
         self.assertIn("use_sudo = true", observability)
+        # The setuid sudo wrapper is only reachable through /run/wrappers.
+        self.assertIn('path = [ "/run/wrappers" ];', observability)
+        # The UPS monitor password is read by the container at runtime; the Nix
+        # store must never contain its value.
+        self.assertNotIn("builtins.readFile cfg.power.ups.passwordFile", observability)
+        self.assertIn('NUTWG__UPSD__PASSWORD = "/run/secrets/nut-password";', observability)
         self.assertIn("services.smartd.enable = lib.mkDefault false", storage)
         schedules = text("modules/nas/config/schedules.nix")
         self.assertIn("protectedServiceUnits", schedules)
@@ -112,7 +118,7 @@ class ContractTests(unittest.TestCase):
         )[0]
         protected = text("modules/nas/config/systemd-services.nix")
 
-        self.assertNotIn("nas-zfs-mount-guard.service", seed)
+        self.assertIn("nas-zfs-mount-guard.service", seed)
         self.assertNotIn("RequiresMountsFor", seed)
         self.assertIn("nas-zfs-mount-guard.service", reconcile)
         self.assertIn("systemd-tmpfiles --create --graceful --prefix", protected)
@@ -150,7 +156,9 @@ class ContractTests(unittest.TestCase):
         setup = text("services/nas_setup.py")
         self.assertIn("nas-bootstrap-authentik-secrets", applications)
         self.assertIn("openssl rand -hex 64", applications)
-        self.assertIn("AUTHENTIK_BOOTSTRAP_PASSWORD=${bootstrapPassword}", applications)
+        # The bootstrap administrator password is not embedded in this store
+        # script: it would be recoverable from /nix/store (CodeRabbit #62).
+        self.assertNotIn("AUTHENTIK_BOOTSTRAP_PASSWORD=", applications)
         self.assertIn('authentikRuntimeEnvironmentFile = "/run/nas-authentik/environment";', base)
         self.assertIn('authentikRuntimeApiTokenFile = "/run/nas-authentik/api-token";', base)
         self.assertIn("sudo systemctl reset-failed", secrets)
@@ -183,7 +191,9 @@ class ContractTests(unittest.TestCase):
         self.assertIn("--local-session", services)
         self.assertNotIn("settings.bearer", services)
         self.assertNotIn("nas-cockpit-oauth", services)
-        self.assertIn("--address 127.0.0.1", services)
+        self.assertNotIn("--address", services)
+        self.assertNotIn("--port", services)
+        self.assertIn('ListenStream = "/run/nas-cockpit-sso/ws.sock";', services)
         self.assertIn("AllowUnencrypted = false", services)
         self.assertIn("activate-stdin)", secrets)
 
@@ -230,6 +240,14 @@ class ContractTests(unittest.TestCase):
         self.assertIn("pkgs.nodejs_22", zfs)
         self.assertIn("cfg.observability.serviceGid", validation)
         self.assertIn('${if cfg.tftp.writable then "rw" else "r"}: *', text("modules/nas/config/system.nix"))
+
+    def test_legacy_podman_graphroot_fails_fast_instead_of_being_ignored(self) -> None:
+        virtualization = text("modules/nas/config/virtualization.nix")
+        check = virtualization.split("containersStorageCheck =", 1)[1].split("'';", 1)[0]
+        self.assertIn('[[ -L "$legacy" || ! -d "$legacy" ]]', check)
+        self.assertIn("exit 1", check)
+        self.assertIn('requires = [ "nas-containers-storage-check.service" ];', virtualization)
+        self.assertIn('after = [ "nas-containers-storage-check.service" ];', virtualization)
 
     def test_observability_consumes_compiled_v2_service_state(self) -> None:
         observability = text("modules/nas/config/observability.nix")

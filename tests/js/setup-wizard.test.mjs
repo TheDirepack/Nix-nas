@@ -134,6 +134,22 @@ test("setup job polling tolerates the expected protected-service reconnect windo
   assert.match(confirm, /isTerminal && \(/);
 });
 
+test("setup job polling issues exactly the declared number of requests", async () => {
+  const confirm = await wizard("src/steps/ConfirmStep.jsx");
+  const body = confirm.slice(confirm.indexOf("const poll = async () => {"));
+  const increment = body.indexOf("polls += 1");
+  const request = body.indexOf("api/first-start/job");
+  assert.ok(increment > -1, "the poll budget must be tracked");
+  assert.ok(increment < request, "the budget must be charged before the request is issued");
+  const finallyBlock = body.split("} finally {")[1].split("};")[0];
+  assert.doesNotMatch(
+    finallyBlock,
+    /polls\+\+/,
+    "charging the budget after the request issues one extra poll",
+  );
+  assert.match(confirm, /MAX_POLLS = 30; \/\/ 30 polls \* 2s = 60s maximum polling window/);
+});
+
 test("confirmation blocks invalid setup input and treats an absent resumable job as normal", async () => {
   const confirm = await wizard("src/steps/ConfirmStep.jsx");
   assert.match(confirm, /const problem = validate\(/);

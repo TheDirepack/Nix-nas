@@ -234,6 +234,9 @@ _WORLD_POLICY_PRIORITY = "50"
 
 
 def _remote_admin_ports() -> list[tuple[str, str]]:  # pragma: no cover - V2 integration
+    # The root Cockpit session is a loopback TCP listener (127.0.0.1:9092)
+    # behind Caddy, not a Caddy-group Unix socket. It is admitted by the
+    # remote-admin policy but is not a LAN-facing service port.
     cockpit_port = os.environ.get("NAS_V2_COCKPIT_PORT", "9092")
     try:
         port_int = int(cockpit_port)

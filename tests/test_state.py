@@ -14,6 +14,7 @@ import tarfile
 import tempfile
 import unittest
 from types import SimpleNamespace
+from typing import Any, Mapping
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -267,6 +268,99 @@ class StateBundleTests(unittest.TestCase):
                 self.assertEqual(
                     "drift", next(row["status"] for row in result["authorities"] if row["name"] == "public")
                 )
+
+    def test_hash_path_is_the_single_normalized_digest_for_capture_and_comparison(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary) / "authority.conf"
+            path.write_text("key=value\nother=one\n", encoding="utf-8")
+            baseline = state.hash_path(path)
+            self.assertEqual(baseline, state.hash_path(path))
+            # Capture and live comparison call the same function, so a line-ending
+            # rewrite normalizes identically on both sides instead of drifting.
+            path.write_bytes(b"key=value\r\nother=one   \r\n")
+            self.assertEqual(baseline, state.hash_path(path))
+            # Any other content change must still be detected.
+            path.write_text("key=value2\nother=one\n", encoding="utf-8")
+            self.assertNotEqual(baseline, state.hash_path(path))
+
+    def test_drift_and_restore_detect_content_change_that_survives_normalization(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            public = root / "public.txt"
+            sensitive = root / "sensitive.txt"
+            public.write_text("mode=one\n", encoding="utf-8")
+            sensitive.write_text("secret=one\n", encoding="utf-8")
+            bundle = root / "state.tar.gz"
+            registry = self.registry(public, sensitive, root / "missing")
+            with mock.patch.dict(os.environ, self.environment(registry), clear=False):
+                state.export_bundle(bundle, include_sensitive=True)
+                public.write_text("mode=two\n", encoding="utf-8")
+                result, drift = state.compare_bundle(bundle)
+                self.assertTrue(drift)
+                self.assertEqual(
+                    "drift", next(row["status"] for row in result["authorities"] if row["name"] == "public")
+                )
+                with (
+                    mock.patch.object(state, "DEFAULT_ROLLBACK_ROOT", root / "rollbacks"),
+                    mock.patch.object(
+                        state,
+                        "run_systemctl",
+                        side_effect=lambda *args, **kwargs: self.completed(
+                            1 if args[:2] == ("is-active", "--quiet") else 0
+                        ),
+                    ),
+                ):
+                    state.restore_bundle(
+                        bundle,
+                        confirm_host=socket.gethostname(),
+                        allow_partial=False,
+                        include_sensitive=True,
+                    )
+            self.assertEqual("mode=one\n", public.read_text(encoding="utf-8"))
+
+    def test_restore_precheck_tolerates_non_state_errors_and_still_restores(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            public = root / "public.txt"
+            sensitive = root / "sensitive.txt"
+            public.write_text("bundle-public\n", encoding="utf-8")
+            sensitive.write_text("bundle-sensitive\n", encoding="utf-8")
+            bundle = root / "state.tar.gz"
+            registry = self.registry(public, sensitive, root / "missing")
+            real_entries = state.canonical_apply_entries
+            calls = {"count": 0}
+
+            def flaky_entries(manifest):
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    raise OSError("lstat failed during the drift pre-check")
+                return real_entries(manifest)
+
+            with mock.patch.dict(os.environ, self.environment(registry), clear=False):
+                state.export_bundle(bundle, include_sensitive=True)
+                public.write_text("mutated-public\n", encoding="utf-8")
+                sensitive.write_text("mutated-sensitive\n", encoding="utf-8")
+                with (
+                    mock.patch.object(state, "DEFAULT_ROLLBACK_ROOT", root / "rollbacks"),
+                    mock.patch.object(state, "canonical_apply_entries", side_effect=flaky_entries),
+                    mock.patch.object(
+                        state,
+                        "run_systemctl",
+                        side_effect=lambda *args, **kwargs: self.completed(
+                            1 if args[:2] == ("is-active", "--quiet") else 0
+                        ),
+                    ),
+                ):
+                    result = state.restore_bundle(
+                        bundle,
+                        confirm_host=socket.gethostname(),
+                        allow_partial=False,
+                        include_sensitive=True,
+                    )
+            self.assertGreater(calls["count"], 1)
+            self.assertFalse(result.get("skipped"))
+            self.assertEqual("bundle-public\n", public.read_text(encoding="utf-8"))
+            self.assertEqual("bundle-sensitive\n", sensitive.read_text(encoding="utf-8"))
 
     def test_complete_bundle_restores_files_and_creates_rollback_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -779,6 +873,21 @@ class StateBundleTests(unittest.TestCase):
             with self.assertRaisesRegex(state.StateError, "nonempty JSON command array"):
                 state.database_command("TEST_DATABASE_COMMAND", ["x"], "{x}", "value")
 
+    def test_process_stdin_payload_cannot_block_timeout_or_leak_the_pipe(self) -> None:
+        payload = b"x" * (8 * 1024 * 1024)
+        started = __import__("time").monotonic()
+        with self.assertRaisesRegex(state.StateError, "Command timed out"):
+            state.run_process(
+                [sys.executable, "-c", "import time; time.sleep(5)"],
+                timeout=0.2,
+                input=payload,
+            )
+        self.assertLess(__import__("time").monotonic() - started, 4)
+
+        # A child that exits before reading the payload must not leak the pipe.
+        result = state.run_process([sys.executable, "-c", "raise SystemExit(3)"], timeout=4, input=payload)
+        self.assertEqual(result.returncode, 3)
+
     def test_database_dump_streams_into_root_opened_private_target(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -837,21 +946,24 @@ class StateBundleTests(unittest.TestCase):
                 sensitive.write_text("pre-restore-sensitive\n", encoding="utf-8")
                 journal = root / "journal.json"
 
-                corrupted = False
+                applies: list[str] = []
+                original_apply = state.apply_extracted
 
-                def corrupting_reapply(snapshot: object) -> None:
-                    nonlocal corrupted
-                    if not corrupted:
-                        state.run_systemctl("daemon-reload")
+                def corrupting_apply(
+                    staging: pathlib.Path, manifest: dict[str, Any], *, restore_absence: bool = False
+                ) -> None:
+                    applies.append("rollback" if restore_absence else "forward")
+                    original_apply(staging, manifest, restore_absence=restore_absence)
+                    if not restore_absence:
+                        # Post-restore verification runs between the forward apply and
+                        # the runtime-consumer reapply, so corruption is injected in the
+                        # apply pass where a rogue writer can still reach the path.
                         public.write_text("corrupted-after-apply\n", encoding="utf-8")
-                        corrupted = True
-                    else:
-                        # rollback path should not re-corrupt
-                        state.run_systemctl("daemon-reload")
 
                 with (
                     mock.patch.object(state, "DEFAULT_ROLLBACK_ROOT", root / "rollbacks"),
                     mock.patch.object(state, "RESTORE_JOURNAL", journal),
+                    mock.patch.object(state, "apply_extracted", side_effect=corrupting_apply),
                     mock.patch.object(
                         state,
                         "run_systemctl",
@@ -859,7 +971,6 @@ class StateBundleTests(unittest.TestCase):
                             1 if args[:2] == ("is-active", "--quiet") else 0
                         ),
                     ),
-                    mock.patch.object(state, "reapply_runtime_consumers", side_effect=corrupting_reapply),
                 ):
                     with self.assertRaisesRegex(state.StateError, "Post-restore validation failed"):
                         state.restore_bundle(
@@ -868,12 +979,125 @@ class StateBundleTests(unittest.TestCase):
                             allow_partial=False,
                             include_sensitive=True,
                         )
+                self.assertEqual(["forward", "rollback"], applies)
                 self.assertEqual("pre-restore-public\n", public.read_text(encoding="utf-8"))
                 self.assertEqual("pre-restore-sensitive\n", sensitive.read_text(encoding="utf-8"))
                 self.assertTrue(journal.is_file())
                 data = json.loads(journal.read_text(encoding="utf-8"))
                 self.assertNotEqual("committed", data.get("status"))
                 self.assertEqual("failed-rolled-back", data.get("status"))
+
+    def test_database_verification_failure_rolls_back_while_writers_are_running(self) -> None:
+        """A database digest mismatch after restore must still roll back with quiesced writers.
+
+        Path verification alone cannot catch a database authority that was restored
+        from a stale dump, so the post-restore pass re-hashes the database and the
+        rollback re-applies the pre-restore bundle while the quiesced units are
+        brought back.
+        """
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            public = root / "public.txt"
+            sensitive = root / "sensitive.txt"
+            public.write_text("bundle-public\n", encoding="utf-8")
+            sensitive.write_text("bundle-sensitive\n", encoding="utf-8")
+            bundle = root / "state.tar.gz"
+            registry = json.loads(self.registry(public, sensitive, root / "missing"))
+            registry.append(
+                {
+                    "name": "authentik-database",
+                    "source": "postgresql://authentik",
+                    "kind": "database",
+                    "sensitive": True,
+                    "optional": False,
+                    "restoreStrategy": "database-native",
+                    "owner": None,
+                    "group": None,
+                    "rootMode": None,
+                }
+            )
+            digests = iter(["a" * 64, "b" * 64, "b" * 64])
+
+            def comparison_digest() -> str:
+                # export, restore drift check, post-restore verification, rollback export
+                return next(digests, "c" * 64)
+
+            def fake_dump(target: pathlib.Path) -> None:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("-- dump\n", encoding="utf-8")
+
+            def fake_systemctl(*args: object, **kwargs: object) -> mock.Mock:
+                if args[:2] == ("is-active", "--quiet"):
+                    unit = args[2] if len(args) > 2 else ""
+                    return self.completed(0 if unit in {"postgresql.service", "firewalld.service"} else 1)
+                return self.completed(0)
+
+            with mock.patch.dict(os.environ, self.environment(json.dumps(registry)), clear=False):
+                with (
+                    mock.patch.object(state, "dump_database", side_effect=fake_dump),
+                    mock.patch.object(state, "database_comparison_digest", side_effect=comparison_digest),
+                ):
+                    state.export_bundle(bundle, include_sensitive=True)
+                public.write_text("pre-restore-public\n", encoding="utf-8")
+                sensitive.write_text("pre-restore-sensitive\n", encoding="utf-8")
+                journal = root / "journal.json"
+                events: list[str] = []
+                original_apply = state.apply_extracted
+                original_reapply = state.reapply_runtime_consumers
+
+                def tracking_apply(
+                    staging: pathlib.Path, manifest: dict[str, Any], *, restore_absence: bool = False
+                ) -> None:
+                    events.append("rollback-apply" if restore_absence else "forward-apply")
+                    original_apply(staging, manifest, restore_absence=restore_absence)
+
+                def tracking_restore_database(payload: pathlib.Path) -> None:
+                    events.append("restore-database")
+
+                def tracking_reapply(snapshot: Mapping[str, bool]) -> None:
+                    events.append("reapply-runtime-consumers")
+                    original_reapply(snapshot)
+
+                with (
+                    mock.patch.object(state, "DEFAULT_ROLLBACK_ROOT", root / "rollbacks"),
+                    mock.patch.object(state, "RESTORE_JOURNAL", journal),
+                    mock.patch.object(state, "dump_database", side_effect=fake_dump),
+                    mock.patch.object(state, "database_comparison_digest", side_effect=comparison_digest),
+                    mock.patch.object(state, "restore_database", side_effect=tracking_restore_database),
+                    mock.patch.object(state, "apply_extracted", side_effect=tracking_apply),
+                    mock.patch.object(state, "reapply_runtime_consumers", side_effect=tracking_reapply),
+                    mock.patch.object(state, "run_systemctl", side_effect=fake_systemctl),
+                ):
+                    with self.assertRaisesRegex(
+                        state.StateError, "Post-restore validation failed for authentik-database"
+                    ):
+                        state.restore_bundle(
+                            bundle,
+                            confirm_host=socket.gethostname(),
+                            allow_partial=False,
+                            include_sensitive=True,
+                        )
+
+                # Forward apply, database restore, then the rollback re-applies and
+                # restarts the runtime consumers of the restored files.
+                self.assertEqual(
+                    [
+                        "forward-apply",
+                        "restore-database",
+                        "rollback-apply",
+                        "restore-database",
+                        "reapply-runtime-consumers",
+                    ],
+                    events,
+                )
+                self.assertEqual("pre-restore-public\n", public.read_text(encoding="utf-8"))
+                self.assertEqual("pre-restore-sensitive\n", sensitive.read_text(encoding="utf-8"))
+                data = json.loads(journal.read_text(encoding="utf-8"))
+                self.assertEqual("failed-rolled-back", data.get("status"))
+                # The database restore ran while the firewalld writer was quiesced and
+                # was restarted by the rollback, i.e. rollback ran with writers running.
+                self.assertTrue(data["unitSnapshot"]["firewalld.service"])
 
     def test_rollback_snapshot_captured_before_quiesce(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -925,6 +1149,76 @@ class StateBundleTests(unittest.TestCase):
                 self.assertIn("stop", call_order)
                 self.assertLess(call_order.index("export"), call_order.index("stop"))
                 self.assertIn(False, quiesce_args)
+
+    def test_rollback_logs_apply_after_quiesce_before_rollback_writes(self) -> None:
+        # Wrap apply_extracted to label the forward and rollback passes separately,
+        # so the test proves that quiescing (stop-writers) happens before both the
+        # forward and the rollback apply write restored data.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            public = root / "public.txt"
+            sensitive = root / "sensitive.txt"
+            public.write_text("bundle-public\n", encoding="utf-8")
+            sensitive.write_text("bundle-sensitive\n", encoding="utf-8")
+            bundle = root / "state.tar.gz"
+            registry = self.registry(public, sensitive, root / "missing")
+            with mock.patch.dict(os.environ, self.environment(registry), clear=False):
+                state.export_bundle(bundle, include_sensitive=True)
+                public.write_text("mutated-public\n", encoding="utf-8")
+
+                events: list[str] = []
+                original_stop = state.stop_active_units
+                original_apply = state.apply_extracted
+                original_reapply = state.reapply_runtime_consumers
+
+                def record_stop(snapshot: Mapping[str, bool]) -> None:
+                    events.append("stop-writers")
+                    return original_stop(snapshot)
+
+                def record_apply(
+                    staging: pathlib.Path, manifest: dict[str, Any], *, restore_absence: bool = False
+                ) -> None:
+                    events.append("rollback-apply" if restore_absence else "forward-apply")
+                    return original_apply(staging, manifest, restore_absence=restore_absence)
+
+                def failing_verify(staging: pathlib.Path, manifest: dict[str, Any]) -> None:
+                    raise state.StateError("digest mismatch")
+
+                def record_reapply(snapshot: Mapping[str, bool]) -> None:
+                    events.append("restart-writers")
+                    return original_reapply(snapshot)
+
+                with (
+                    mock.patch.object(state, "DEFAULT_ROLLBACK_ROOT", root / "rollbacks"),
+                    mock.patch.object(state, "stop_active_units", side_effect=record_stop),
+                    mock.patch.object(state, "apply_extracted", side_effect=record_apply),
+                    mock.patch.object(state, "verify_restored_state", side_effect=failing_verify),
+                    mock.patch.object(state, "reapply_runtime_consumers", side_effect=record_reapply),
+                    mock.patch.object(
+                        state,
+                        "run_systemctl",
+                        side_effect=lambda *args, **kwargs: self.completed(
+                            1 if args[:2] == ("is-active", "--quiet") else 0
+                        ),
+                    ),
+                ):
+                    with self.assertRaisesRegex(state.StateError, "digest mismatch"):
+                        state.restore_bundle(
+                            bundle,
+                            confirm_host=socket.gethostname(),
+                            allow_partial=False,
+                            include_sensitive=True,
+                        )
+                # Every quiesce event must precede both apply passes, including the
+                # rollback pass: a rollback that writes restored data before the
+                # writers are stopped would be an ordering regression.
+                quiesce_idxs = [index for index, event in enumerate(events) if event == "stop-writers"]
+                self.assertTrue(quiesce_idxs, events)
+                forward_idx = events.index("forward-apply")
+                rollback_idx = events.index("rollback-apply")
+                self.assertGreater(forward_idx, quiesce_idxs[0], events)
+                self.assertGreater(rollback_idx, max(quiesce_idxs), events)
+                self.assertLess(forward_idx, rollback_idx, events)
 
 
 if __name__ == "__main__":

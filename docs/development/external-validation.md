@@ -1,6 +1,6 @@
 # External validation
 
-The QEMU tests cover appliance behavior with virtual disks and loopback services. `scripts/live-validation.sh` covers hardware, remote reachability, independent storage, and deployed credentials. Destructive drills require an exact `NAS_LIVE_CONFIRM` value.
+The QEMU tests cover appliance behavior with virtual disks and loopback services. `scripts/live-validation.sh` covers hardware, remote reachability, independent storage, and deployed credentials. Destructive drills require an exact `NAS_LIVE_CONFIRM` value. The value is matched against one drill name, so a confirmation prepared for one drill never authorizes another and a comma-separated list authorizes nothing. `./scripts/live-validation.sh all` runs every drill in sequence and does not consult a per-drill value.
 
 ## Locked boot and unlock
 
@@ -52,7 +52,7 @@ NAS_SOURCE_ROOT=/etc/nixos \
 
 ## Syncoid replication and clone restore
 
-The drill creates a disposable child dataset, replicates it, clones the replicated snapshot, verifies a marker through the clone, and removes the temporary source and clone.
+The drill creates a disposable child dataset, replicates it, clones the replicated snapshot, verifies a marker through the clone, and removes every temporary dataset. The destination is `$NAS_SYNCOID_TARGET/nas-live-<timestamp>`: that name must be free, and the drill takes it with an atomic `zfs create` before it replicates, so a dataset that appears there first makes the drill fail without touching it, and one that appears later cannot displace the drill's claim. Because Syncoid performs initial replication only into a non-existent dataset, the copy itself lands in `$NAS_SYNCOID_TARGET/nas-live-<timestamp>/replica`, and the clone restore is taken from the replica's `@validation` snapshot. `$NAS_SYNCOID_TARGET` must already exist on the receiving host. Cleanup destroys the source child, its snapshot, the clone, the replica, and the claim, all non-recursively. A failed replication leaves the claim and its partial replica in place for inspection rather than deleting them.
 
 ```bash
 sudo NAS_LIVE_CONFIRM=SYNCOID_DRILL \

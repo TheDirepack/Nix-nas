@@ -68,7 +68,7 @@ def main() -> int:
                     raise ValueError("schemaVersion schema must be a JSON object")
                 if version.get("const") != expected_versions[relative]:
                     raise ValueError(f"{relative} must require schemaVersion {expected_versions[relative]}")
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, json.JSONDecodeError, AttributeError) as exc:
             fail(path, exc)
             errors += 1
     return 1 if errors else 0

@@ -13,6 +13,7 @@ import json
 import os
 import pathlib
 import re
+import subprocess
 import sys
 import tempfile
 from typing import Any
@@ -29,6 +30,7 @@ _VENDOR_IDS = {
 }
 _NVIDIA_DEVICE_RE = re.compile(r"^nvidia([0-9]+)$")
 _NVIDIA_SHARED_NODES = ("nvidiactl", "nvidia-uvm", "nvidia-uvm-tools", "nvidia-modeset")
+_NVIDIA_CDI_RE = re.compile(r"^nvidia\.com/gpu=([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})$")
 
 
 def _load_base(path: pathlib.Path) -> dict[str, Any]:
@@ -52,6 +54,64 @@ def _cdi(value: str) -> dict[str, str]:
 
 def _devices(values: list[pathlib.Path]) -> dict[str, Any]:
     return {"type": "devices", "values": [str(path) for path in values]}
+
+
+def _listed_nvidia_cdi_devices(tool: str) -> set[str]:
+    """List NVIDIA CDI device names via `nvidia-ctk cdi list`.
+
+    Returns an empty set when the toolkit is absent, the command times out,
+    or the invocation fails — the caller decides how to treat an empty list.
+    """
+    try:
+        result = subprocess.run(
+            [tool, "cdi", "list", "--output", "json"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    if result.returncode != 0:
+        return set()
+    try:
+        data = json.loads(result.stdout)
+    except (ValueError, json.JSONDecodeError):
+        return set()
+    devices: set[str] = set()
+    if isinstance(data, dict):
+        for entry in data.get("devices", []):
+            if isinstance(entry, dict):
+                name = entry.get("name")
+                if isinstance(name, str):
+                    devices.add(name)
+    return devices
+
+
+def _check_duplicate_gpu_identities(selectors: list[dict[str, Any]]) -> None:
+    """Reject NVIDIA selectors that collide on minor number or CDI UUID.
+
+    Two records sharing the same device minor (or the same CDI UUID) denote
+    an ambiguous GPU identity and must fail closed rather than silently
+    selecting the wrong device.
+    """
+    seen_minors: set[int] = set()
+    seen_uuids: set[str] = set()
+    for sel in selectors:
+        if sel.get("type") == "devices":
+            for value in sel.get("values", []):
+                match = _NVIDIA_DEVICE_RE.fullmatch(pathlib.PurePosixPath(value).name)
+                if match is not None:
+                    minor = int(match.group(1))
+                    if minor in seen_minors:
+                        raise PlatformProbeError(f"duplicate NVIDIA GPU minor: nvidia{minor}")
+                    seen_minors.add(minor)
+        elif sel.get("type") == "cdi":
+            match = _NVIDIA_CDI_RE.fullmatch(sel.get("value", ""))
+            if match is not None:
+                uuid = match.group(1)
+                if uuid in seen_uuids:
+                    raise PlatformProbeError(f"duplicate NVIDIA CDI UUID: {uuid}")
+                seen_uuids.add(uuid)
 
 
 def probe_inventory(
@@ -101,6 +161,8 @@ def probe_inventory(
             selectors["NVIDIA"].append(_cdi(f"nvidia.com/gpu={index}"))
     if not nvidia_indexes:
         selectors["NVIDIA"].extend(drm_selectors["NVIDIA"])
+
+    _check_duplicate_gpu_identities(selectors["NVIDIA"])
 
     accelerators: dict[str, Any] = {}
     for vendor in ("NVIDIA", "AMD", "Intel"):

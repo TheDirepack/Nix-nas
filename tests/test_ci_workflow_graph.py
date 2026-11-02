@@ -203,6 +203,20 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertGreaterEqual(text.count("current-coverage.outcome == 'success'"), 4)
         self.assertNotIn("main-coverage-cache=", self.run_text(coverage))
 
+    def test_coverage_baseline_cache_is_keyed_by_the_resolved_main_revision(self) -> None:
+        step = next(step for step in self.jobs["coverage-diff"]["steps"] if step.get("id") == "main-coverage")
+        key = step["with"]["key"]
+        restore = step["with"]["restore-keys"]
+        # One baseline per main revision: PRs sharing a base commit reuse it, a
+        # new main commit cannot inherit an older measurement.
+        self.assertTrue(key.endswith("-${{ steps.main-baseline.outputs.sha }}"), key)
+        self.assertIn("${{ env.CI_CACHE_SCHEMA }}-coverage-main-", key)
+        self.assertNotIn("steps.main-baseline.outputs.sha", restore)
+        self.assertIn("${{ env.CI_CACHE_SCHEMA }}-coverage-main-", restore)
+        self.assertIn("main-coverage-revision.txt", step["with"]["path"])
+        drift = next(step for step in self.jobs["coverage-diff"]["steps"] if step.get("id") == "drift")
+        self.assertIn("main-coverage-revision.txt", str(drift))
+
     def test_coverage_baseline_uses_the_same_test_population_as_current(self) -> None:
         unit_script = self.qualification_script.split("  unit)\n", 1)[1].split("    # Invoked indirectly", 1)[0]
         baseline = next(step for step in self.jobs["coverage-diff"]["steps"] if step.get("id") == "baseline-build")

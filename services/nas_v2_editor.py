@@ -333,12 +333,15 @@ def status(
     try:
         desired_text = _read_text(desired_path)
         desired = parse_yaml_text(desired_text, source=str(desired_path))
+        services = desired.get("services")
+        if not isinstance(services, dict):
+            raise ManagedServicesEditorError("Managed Services V2 authority is missing its services mapping")
+        normalized = normalize(desired)
     except ManagedServicesV2Error as exc:
         raise ManagedServicesEditorError(str(exc)) from exc
-    services = desired.get("services")
-    if not isinstance(services, dict):
-        raise ManagedServicesEditorError("Managed Services V2 authority is missing its services mapping")
-    normalized_services = normalize(desired).get("services")
+    except (AttributeError, KeyError, TypeError) as exc:
+        raise ManagedServicesEditorError(f"Managed Services V2 authority is structurally invalid: {exc}") from exc
+    normalized_services = normalized.get("services")
     if not isinstance(normalized_services, dict):
         raise ManagedServicesEditorError("Managed Services V2 authority is missing its services mapping")
     effective_value = _load_effective_value(

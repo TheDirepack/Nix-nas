@@ -6,7 +6,6 @@ let
     authentikPort
     caddyForwardAuth
     cfg
-    cockpitPort
     firstRunWizardStatic
     lanHost
     secretRoot
@@ -101,9 +100,12 @@ https://${lanHost} {
   handle /console* {
     route {
       ${caddyForwardAuth}
-      @missingCockpitAdmin not header_regexp Remote-Groups (?i)(^|[|,][[:space:]]*)nas_admin([[:space:]]*[|,]|$)
+      # nas_admin stays accepted for existing installs; the seed's cockpit
+      # service declares the admin capability, which maps to the
+      # application.cockpit.admin group.
+      @missingCockpitAdmin not header_regexp Remote-Groups (?i)(^|[|,][[:space:]]*)(application[.]cockpit[.]admin|nas_admin)([[:space:]]*[|,]|$)
       respond @missingCockpitAdmin 403
-      reverse_proxy 127.0.0.1:${toString cockpitPort} {
+      reverse_proxy unix//run/nas-cockpit-sso/ws.sock {
         header_up X-Forwarded-Proto https
         header_up X-Forwarded-Prefix /console
       }

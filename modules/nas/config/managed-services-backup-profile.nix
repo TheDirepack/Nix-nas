@@ -4,6 +4,11 @@ let
   cfg = config.nas;
   profilePath = pkgs.writeText "nas-resticprofile.json" (builtins.toJSON {
     version = "1";
+    # resticprofile 0.31.0 has no --restic-binary command-line flag; the binary
+    # path is read only from the global configuration section.
+    global = {
+      "restic-binary" = "${pkgs.restic}/bin/restic";
+    };
     "nas-boot-system" = {
       # This local lock covers the complete backup/check/retention chain in
       # addition to Restic's repository lock.  The V2 systemd timer remains the
@@ -11,9 +16,20 @@ let
       lock = "/run/restic-backups-nas-boot-system/resticprofile.lock";
       backup = {
         "files-from" = [ "/run/restic-backups-nas-boot-system/includes" ];
+        # V2 snapshot mount paths carry unique snapshot names. Selecting the
+        # parent by hostname and this stable profile tag prevents the path
+        # list from fragmenting parent selection between runs.
+        "group-by" = "host,tags";
+        tag = [ "nas-boot-system" ];
         "check-after" = true;
       };
       retention = {
+        # Match backup's stable identity, not ephemeral ZFS snapshot paths.
+        "group-by" = "host,tags";
+        # Tag-filtered retention never expires untagged snapshots; migrate
+        # existing snapshots before enabling this filter:
+        # docs/src/admin/backups.md#migrating-pre-tag-restic-snapshots
+        tag = true;
         "after-backup" = true;
         "before-backup" = false;
         prune = true;

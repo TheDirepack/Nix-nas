@@ -1,10 +1,13 @@
 import {createReadStream, readFileSync, statSync} from "node:fs";
 import {createServer} from "node:http";
 import {extname, isAbsolute, join, relative, resolve} from "node:path";
+import {fileURLToPath} from "node:url";
 
-const cockpitRoot = resolve(import.meta.dirname, "..", "dist");
-const wizardRoot = resolve(import.meta.dirname, "..", "..", "setup", "first-run-wizard", "dist");
-const runtimeStub = readFileSync(join(import.meta.dirname, "cockpit-runtime-stub.js"));
+// import.meta.dirname requires Node 20.11+; this project builds on Node 18.
+const here = fileURLToPath(new URL(".", import.meta.url));
+const cockpitRoot = resolve(here, "..", "dist");
+const wizardRoot = resolve(here, "..", "..", "setup", "first-run-wizard", "dist");
+const runtimeStub = readFileSync(join(here, "cockpit-runtime-stub.js"));
 const port = Number(process.env.PORT || 4173);
 const types = {
   ".css": "text/css; charset=utf-8",

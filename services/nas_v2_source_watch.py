@@ -28,16 +28,55 @@ def _path_value(value: str) -> str:
 
 def _managed_source(service_id: str, value: str) -> pathlib.Path:
     candidate = pathlib.Path(value)
+    app_root = APP_ROOT / service_id
     try:
+        if not candidate.is_absolute() or ".." in candidate.parts:
+            raise ValueError("source must have an absolute path with no parent traversal")
+        candidate.relative_to(app_root)
         resolved = candidate.resolve(strict=True)
-        resolved.relative_to((APP_ROOT / service_id).resolve(strict=False))
+        resolved.relative_to(app_root.resolve(strict=False))
     except (OSError, ValueError) as exc:
         raise SourceWatchProjectionError(
             f"managed source for service {service_id!r} must exist beneath its managed app root"
         ) from exc
     if not resolved.is_file():
         raise SourceWatchProjectionError(f"managed source for service {service_id!r} must name a file")
-    return resolved
+    # Preserve the configured path. Watching only the resolved inode loses the
+    # relationship when a release selector symlink is atomically retargeted.
+    return candidate
+
+
+def _symlink_parent_paths(service_id: str, sources: list[pathlib.Path]) -> list[pathlib.Path]:
+    """Watch in-root symlink parents, including links reached through another link's target."""
+    app_root = APP_ROOT / service_id
+    directories: set[pathlib.Path] = set()
+    seen: set[pathlib.Path] = set()
+    pending = list(sources)
+    try:
+        resolved_root = app_root.resolve(strict=True)
+        for source in sources:
+            source.relative_to(app_root)
+        while pending:
+            path = pending.pop()
+            for component in (path, *path.parents):
+                if component in (app_root, resolved_root):
+                    break
+                if not component.is_symlink():
+                    continue
+                # A symlink may be reached only through another link's target, so
+                # walk the full chain instead of inspecting the configured path.
+                link = component.parent.resolve(strict=True) / component.name
+                if link in seen:
+                    continue
+                seen.add(link)
+                if link.is_relative_to(resolved_root):
+                    directories.add(link.parent)
+                # Resolving the whole target here would hide intermediate release selectors.
+                target = link.readlink()
+                pending.append(target if target.is_absolute() else link.parent / target)
+    except (OSError, ValueError) as exc:
+        raise SourceWatchProjectionError("unable to inspect managed source symlink parents") from exc
+    return sorted(directories, key=str)
 
 
 def source_paths(effective: dict[str, Any], service_id: str, service: dict[str, Any]) -> list[pathlib.Path]:
@@ -104,6 +143,9 @@ def augment_projection(
         paths = source_paths(effective, service_id, service)
         if not paths:
             continue
+        # PathChanged on a symlink resolves to its current file. Also watch
+        # the enclosing directory to catch atomic symlink replacement.
+        paths = sorted(set(paths + _symlink_parent_paths(service_id, paths)), key=str)
         unit = f"nas-v2-source-{service_id}.path"
         if unit in known_targets:
             raise SourceWatchProjectionError(f"duplicate systemd source watch target {unit!r}")
@@ -132,7 +174,9 @@ def validate_source_watches(files: dict[pathlib.Path, bytes], *, systemd_analyze
             destination.write_bytes(content)
             paths.append(str(destination))
         result = subprocess.run(
-            [systemd_analyze_bin, "verify", *paths],
+            # Warning-sensitive verification must retain systemd's dependency checks
+            # and fail on warnings, not only on hard errors.
+            [systemd_analyze_bin, "verify", "--recursive-errors=one", *paths],
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,

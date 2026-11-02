@@ -148,6 +148,28 @@ services:
             ):
                 self.generate(effective, pathlib.Path(raw) / "projection")
 
+    def test_descriptor_fingerprint_binds_resource_names_and_path_templates(self):
+        def fingerprint(effective: dict, output: pathlib.Path) -> str:
+            _files, manifest = self.generate(effective, output)
+            return manifest["fingerprints"]["nas-v2-session-agent.target"]
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            effective = self.effective()
+            original = fingerprint(effective, root / "projection-a")
+
+            changed_template = self.effective()
+            changed_template["storageResources"]["workspace"]["pathTemplate"] = "/srv/sessions/{instance}/data"
+            self.assertNotEqual(original, fingerprint(changed_template, root / "projection-b"))
+
+            reassociated = self.effective()
+            reassociated["storageResources"]["workspace-copy"] = {
+                **reassociated["storageResources"]["workspace"],
+                "pathTemplate": "/srv/sessions/{instance}/copy",
+            }
+            reassociated["services"]["agent"]["storage"][0]["resource"] = "workspace-copy"
+            self.assertNotEqual(original, fingerprint(reassociated, root / "projection-c"))
+
     def test_non_session_service_cannot_depend_on_session_template(self):
         effective = self.effective()
         effective["services"]["consumer"] = {

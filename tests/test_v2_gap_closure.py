@@ -252,10 +252,12 @@ class CaddyGapTests(unittest.TestCase):
         with self.assertRaises(caddy.CaddyProjectionError):
             caddy._safe_posix("/bad{brace", "msg")
         self.assertEqual(caddy._path_patterns("/"), ("/*",))
-        self.assertEqual(caddy._path_patterns("/api/"), ("/api/", "/api/*"))
+        self.assertEqual(caddy._path_patterns("/api/"), ("/api/", "/api", "/api/*"))
         self.assertEqual(caddy._path_patterns("/api"), ("/api", "/api/*"))
         with self.assertRaises(caddy.CaddyProjectionError):
             caddy._path_patterns("no-slash")
+        with self.assertRaises(caddy.CaddyProjectionError):
+            caddy._path_patterns("/wildcard*")
 
     def test_q_control_rejection(self):
         with self.assertRaises(caddy.CaddyProjectionError):

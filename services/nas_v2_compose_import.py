@@ -50,6 +50,15 @@ _ASSIGNMENT = re.compile(
 # generated filename.
 _REFERENCE_FIELDS = frozenset({"Build", "Container", "Image", "Kube", "Network", "Pod", "Volume"})
 
+# Canonical Compose models are consumed by Podlet inside one reconciliation.
+# Refuse pathological alias chains/deep structures instead of letting them
+# exhaust the interpreter stack.
+_MAX_CANONICAL_DEPTH = 128
+_MAX_CANONICAL_NODES = 200_000
+_QUOTE_STARTERS = frozenset(":-[{,?")
+_BARE_BLOCK_INDICATOR = re.compile(r"^[|>](?:[1-9][+-]?|[+-][1-9]?)?$")
+_BLOCK_SCALAR_END = re.compile(r"[|>](?:[1-9][+-]?|[+-][1-9]?)?\s*$")
+
 
 def _absolute_binary(value: str, *, label: str) -> str:
     candidate = pathlib.PurePosixPath(value)
@@ -90,6 +99,133 @@ def _json_bytes(value: Any) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
+def _line_has_interpolation(text: str) -> bool:
+    """Detect Compose interpolation without mistaking ``$$`` for a variable."""
+    index = 0
+    while index < len(text):
+        if text[index] != "$":
+            index += 1
+            continue
+        if index + 1 >= len(text):
+            return False
+        following = text[index + 1]
+        if following == "$":
+            # Compose consumes "$$" as one literal dollar; the next character
+            # is never the start of an interpolation.
+            index += 2
+            continue
+        if following == "{" or following == "_" or (following.isascii() and following.isalpha()):
+            return True
+        index += 1
+    return False
+
+
+def _scan_yaml_line(line: str, quote: str | None) -> tuple[str, str | None]:
+    """Return a line's code portion and any quote that spans the line break."""
+    output: list[str] = []
+    previous: str | None = None
+    index = 0
+    while index < len(line):
+        character = line[index]
+        if quote == "'":
+            output.append(character)
+            if character == "'":
+                if line[index + 1 : index + 2] == "'":
+                    output.append("'")
+                    index += 2
+                    continue
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            output.append(character)
+            if character == "\\" and index + 1 < len(line):
+                output.append(line[index + 1])
+                index += 2
+                continue
+            if character == '"':
+                quote = None
+            index += 1
+            continue
+        if character in "'\"" and (previous is None or previous in _QUOTE_STARTERS):
+            quote = character
+            output.append(character)
+            previous = character
+            index += 1
+            continue
+        if character == "#" and (index == 0 or line[index - 1] in " \t"):
+            break
+        output.append(character)
+        if not character.isspace():
+            previous = character
+        index += 1
+    return "".join(output), quote
+
+
+def _block_scalar_indent(code: str, line: str) -> int | None:
+    """Return the parent indentation when a line introduces a block scalar."""
+    if _BLOCK_SCALAR_END.search(code) is None:
+        return None
+    if _BARE_BLOCK_INDICATOR.fullmatch(code.strip()) is not None:
+        # A document-root block scalar may keep its content at column zero.
+        return -1
+    return len(line) - len(line.lstrip(" "))
+
+
+def _source_uses_interpolation(source: str) -> bool:
+    """Scan Compose YAML text while excluding comments and honouring ``$$``.
+
+    Compose interpolates scalar values but not YAML comments. Block-scalar
+    content is string data (not a comment), and quoted scalars may span lines,
+    so both are tracked instead of stripping every ``#`` heuristically.
+    """
+    quote: str | None = None
+    block_indent: int | None = None
+    for raw in source.splitlines():
+        if block_indent is not None:
+            if not raw.strip():
+                continue
+            indent = len(raw) - len(raw.lstrip(" "))
+            if block_indent < 0 or indent > block_indent:
+                if _line_has_interpolation(raw):
+                    return True
+                continue
+            block_indent = None
+        code, quote = _scan_yaml_line(raw, quote)
+        if _line_has_interpolation(code):
+            return True
+        if quote is None:
+            block_indent = _block_scalar_indent(code, raw)
+    return False
+
+
+def _compose_source_uses_interpolation(source: bytes) -> bool:
+    return _source_uses_interpolation(source.decode("utf-8", "replace"))
+
+
+def _validate_canonical_structure(service_id: str, value: Any) -> None:
+    """Bound canonical-model depth/nodes and tolerate alias cycles iteratively."""
+    seen: set[int] = set()
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    nodes = 0
+    while stack:
+        item, depth = stack.pop()
+        nodes += 1
+        if nodes > _MAX_CANONICAL_NODES:
+            raise ComposeImportError(f"Compose provider returned an oversized canonical model for {service_id!r}")
+        if depth > _MAX_CANONICAL_DEPTH:
+            raise ComposeImportError(
+                f"Compose provider returned canonical YAML deeper than {_MAX_CANONICAL_DEPTH} levels for {service_id!r}"
+            )
+        if not isinstance(item, (dict, list)) or id(item) in seen:
+            continue
+        seen.add(id(item))
+        if isinstance(item, dict):
+            stack.extend((child, depth + 1) for child in item.values())
+        else:
+            stack.extend((child, depth + 1) for child in item)
+
+
 def _canonical_compose(
     effective: dict[str, Any],
     service_id: str,
@@ -111,8 +247,9 @@ def _canonical_compose(
     # Podlet deliberately does not implement Compose interpolation.  Refuse a
     # model whose meaning would depend on ambient reconciliation environment;
     # V2 credentials/environment-file attachments are the deterministic secret
-    # path instead.
-    if b"${" in source_bytes:
+    # path instead.  Reject ${VAR} and bare $VAR forms; "$$" is an escaped
+    # literal dollar and YAML comments are not interpolation sites.
+    if _compose_source_uses_interpolation(source_bytes):
         raise ComposeImportError(
             f"Compose service {service_id!r} uses interpolation, which Podlet import does not support; "
             "use literal configuration or V2 credential/environment-file attachments"
@@ -154,8 +291,9 @@ def _validate_canonical_networking(service_id: str, canonical: bytes) -> None:
     parser.allow_duplicate_keys = False
     try:
         value = parser.load(canonical.decode("utf-8"))
-    except (UnicodeError, YAMLError) as exc:
+    except (UnicodeError, YAMLError, RecursionError) as exc:
         raise ComposeImportError(f"Compose provider returned invalid canonical YAML for {service_id!r}: {exc}") from exc
+    _validate_canonical_structure(service_id, value)
     services = value.get("services") if isinstance(value, dict) else None
     if not isinstance(services, dict) or not services:
         raise ComposeImportError(f"Compose provider returned no services for {service_id!r}")

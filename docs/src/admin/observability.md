@@ -23,7 +23,7 @@ Grafana is optional and can run on demand. Its declarative VictoriaMetrics datas
 
 `vmalert` evaluates NAS rules against VictoriaMetrics and sends firing and resolved alerts to Alertmanager. Alertmanager owns grouping, deduplication, inhibition, repeat timing, and the `/alerts/` status interface.
 
-The current routing policy groups by the complete alert label set, sends a new group immediately, allows updates to a group once per minute, and repeats unresolved alerts every four hours. A critical alert inhibits a warning with the same `alertname` and `instance`.
+The current routing policy groups by the complete alert label set, waits 30 seconds before sending a new group so related firings batch together, allows updates to a group once per minute, and repeats unresolved alerts every four hours. Inhibition is limited to documented pairs: `NasSmartHealthFailed` inhibits `NasDiskTemperatureHigh` for the same host and disk, and `NasFilesystemCriticalSpace` inhibits `NasFilesystemLowSpace` for the same host and path. Unrelated critical alerts do not silence unrelated warnings.
 
 When ntfy is enabled, Alertmanager sends its webhook notifications to `alertmanager-ntfy`. The bridge authenticates to the loopback ntfy service with runtime-only credentials rendered from the activated NAS secrets.
 
