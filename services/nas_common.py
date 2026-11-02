@@ -269,12 +269,23 @@ def load_effective_authority(path: pathlib.Path | None = None) -> dict[str, Any]
     services = data.get("services")
     if not isinstance(services, dict):
         raise ValueError("effective state missing services object")
+    for svc_id, declaration in services.items():
+        if not isinstance(declaration, dict) or not declaration:
+            raise ValueError(f"services entry {svc_id!r} must be a non-empty object")
     for svc_id, entry in authz.items():
         if not isinstance(entry, dict):
             raise ValueError(f"authorization entry {svc_id!r} must be object")
+        if svc_id not in services:
+            raise ValueError(f"authorization entry {svc_id!r} has no services declaration")
         caps = entry.get("capabilities")
         if caps is not None and not isinstance(caps, dict):
             raise ValueError(f"authorization capabilities for {svc_id!r} must be object")
+        if isinstance(caps, dict):
+            for cap_id, cap_value in caps.items():
+                if not isinstance(cap_value, str) or not cap_value:
+                    raise ValueError(
+                        f"authorization capability {svc_id!r}.{cap_id!r} must be a non-empty string"
+                    )
     return data
 
 
@@ -293,6 +304,14 @@ def resolve_v2_service_capability(
         if isinstance(caps, dict) and capability in caps:
             return service, capability
         if isinstance(derived, dict) and derived:
+            return None
+    except FileNotFoundError:
+        effective = pathlib.Path(effective_path)
+        # A dangling symlink anywhere in the ancestor chain means compiled
+        # authority exists as a path but is unreachable: fail closed. An
+        # ordinary absent parent means effective state has not been compiled
+        # yet (bootstrap): keep the synthetic fallback.
+        if any(parent.is_symlink() and not parent.exists() for parent in effective.parents):
             return None
     except (OSError, ValueError, json.JSONDecodeError):
         pass

@@ -926,6 +926,71 @@ class StateBundleTests(unittest.TestCase):
                 self.assertLess(call_order.index("export"), call_order.index("stop"))
                 self.assertIn(False, quiesce_args)
 
+    def test_rollback_logs_apply_after_quiesce_before_rollback_writes(self) -> None:
+        # Wrap apply_extracted to log an "apply" event so the test proves that
+        # quiescing (stop-writers) happens before both the forward and the rollback
+        # apply passes write restored data.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            public = root / "public.txt"
+            sensitive = root / "sensitive.txt"
+            public.write_text("bundle-public\n", encoding="utf-8")
+            sensitive.write_text("bundle-sensitive\n", encoding="utf-8")
+            bundle = root / "state.tar.gz"
+            registry = self.registry(public, sensitive, root / "missing")
+            with mock.patch.dict(os.environ, self.environment(registry), clear=False):
+                state.export_bundle(bundle, include_sensitive=True)
+                public.write_text("mutated-public\n", encoding="utf-8")
+
+                events: list[str] = []
+                original_stop = state.stop_active_units
+                original_apply = state.apply_extracted
+                original_reapply = state.reapply_runtime_consumers
+
+                def record_stop(snapshot: Mapping[str, bool]) -> None:
+                    events.append("stop-writers")
+                    return original_stop(snapshot)
+
+                def record_apply(
+                    staging: pathlib.Path, manifest: dict[str, Any], *, restore_absence: bool = False
+                ) -> None:
+                    events.append("apply")
+                    return original_apply(staging, manifest, restore_absence=restore_absence)
+
+                def failing_verify(staging: pathlib.Path, manifest: dict[str, Any]) -> None:
+                    raise state.StateError("digest mismatch")
+
+                def record_reapply(snapshot: Mapping[str, bool]) -> None:
+                    events.append("restart-writers")
+                    return original_reapply(snapshot)
+
+                with (
+                    mock.patch.object(state, "DEFAULT_ROLLBACK_ROOT", root / "rollbacks"),
+                    mock.patch.object(state, "stop_active_units", side_effect=record_stop),
+                    mock.patch.object(state, "apply_extracted", side_effect=record_apply),
+                    mock.patch.object(state, "verify_restored_state", side_effect=failing_verify),
+                    mock.patch.object(state, "reapply_runtime_consumers", side_effect=record_reapply),
+                    mock.patch.object(
+                        state,
+                        "run_systemctl",
+                        side_effect=lambda *args, **kwargs: self.completed(
+                            1 if args[:2] == ("is-active", "--quiet") else 0
+                        ),
+                    ),
+                ):
+                    with self.assertRaisesRegex(state.StateError, "digest mismatch"):
+                        state.restore_bundle(
+                            bundle,
+                            confirm_host=socket.gethostname(),
+                            allow_partial=False,
+                            include_sensitive=True,
+                        )
+                # stop-writers (quiesce) must precede every apply, including rollback.
+                stop_idx = events.index("stop-writers")
+                apply_idxs = [index for index, event in enumerate(events) if event == "apply"]
+                self.assertEqual(len(apply_idxs), 2, events)
+                self.assertTrue(all(index > stop_idx for index in apply_idxs), events)
+
 
 if __name__ == "__main__":
     unittest.main()

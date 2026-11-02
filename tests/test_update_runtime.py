@@ -174,6 +174,39 @@ class UpdateRuntimeTests(unittest.TestCase):
         self.assertIn("WARNING: persisting after local-only management checks by explicit override", result.stderr)
         self.assertFalse(self.trace.exists())
 
+    def test_dangling_system_profile_is_detected_before_activation(self):
+        # A dangling system_profile link resolves via readlink -f to a nonempty
+        # path whose target does not exist, so it must be rejected as a rollback
+        # baseline. -e follows the link; relative targets resolve from its dir.
+        dangling = self.root / "system-profile"
+        dangling.symlink_to(self.root / "missing-final-target")
+        result = subprocess.run(
+            [self.bash, "-c",
+             'system_profile="$1"\n'
+             'old_profile="$(readlink -f "$system_profile" 2>/dev/null || true)"\n'
+             'test -n "$old_profile" && test ! -e "$old_profile"',
+             "--", str(dangling)],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        # An existing, resolvable profile is not dangling.
+        real = self.root / "real-profile"
+        real.write_text("")
+        valid = self.root / "system-profile-valid"
+        valid.symlink_to(real)
+        result = subprocess.run(
+            [self.bash, "-c",
+             'system_profile="$1"\n'
+             'old_profile="$(readlink -f "$system_profile" 2>/dev/null || true)"\n'
+             'test -n "$old_profile" && test -e "$old_profile"',
+             "--", str(valid)],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

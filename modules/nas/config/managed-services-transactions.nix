@@ -152,12 +152,16 @@ in
       description = "Queue Managed Services V2 desired-state reconciliation";
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = "${pkgs.coreutils}/bin/touch ${reconcilePendingPath}";
+        # ConditionPathExists is evaluated before ExecStart, so readiness can
+        # disappear between the gate and the touch. Recheck readiness under the
+        # same exclusive lock the secret transaction holds so a start cannot
+        # write reconcile.pending after readiness is removed.
+        ExecStart = "${pkgs.util-linux}/bin/flock -x /run/lock/nas-secrets.lock ${pkgs.bash}/bin/bash -c 'if test -e ${nasInternal.secretRoot}/ready; then exec ${pkgs.coreutils}/bin/touch ${reconcilePendingPath}; fi'";
         NoNewPrivileges = true;
         PrivateTmp = true;
         ProtectHome = true;
         ProtectSystem = "strict";
-        ReadWritePaths = [ "/run/nas-control" ];
+        ReadWritePaths = [ "/run/nas-control" "/run/lock" ];
       };
     };
     systemd.paths.nas-managed-services-dirty = {

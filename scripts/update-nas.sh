@@ -426,6 +426,14 @@ echo "Building without activation..."
 nixos-rebuild build --flake "$flake_ref" --show-trace
 
 if $apply; then
+  # Reject a dangling system profile before activation: readlink -f resolves a
+  # dangling link to a nonempty path whose target does not exist, so an empty
+  # old_profile or a nonexistent link target means there is no usable rollback
+  # baseline. -e follows the link, resolving relative targets from its directory.
+  if [[ -z "$old_profile" || ! -e "$system_profile" ]]; then
+    echo "The existing persistent system profile is missing or unreadable; refusing activation without a rollback baseline." >&2
+    exit 1
+  fi
   echo "Capturing mutable application state before candidate activation..."
   create_state_snapshot
   echo "Temporarily activating the candidate generation..."

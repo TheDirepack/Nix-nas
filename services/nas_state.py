@@ -1363,14 +1363,26 @@ def canonical_apply_entries(manifest: Mapping[str, Any]) -> list[Mapping[str, An
 
 def apply_extracted(staging: pathlib.Path, manifest: dict[str, Any], *, restore_absence: bool = False) -> None:
     registry = {item.name: item for item in authorities()}
+    # Preflight every absence restoration before mutating state, so a conflict on the
+    # first entry cannot leave partial state behind that a stale-snapshot rollback
+    # could not unwind. Rollback stays enabled for failures after writes have begun,
+    # including failures from apply_extracted itself.
+    if not restore_absence:
+        for entry in canonical_apply_entries(manifest):
+            if entry["status"] == "absent":
+                authority = registry[entry["name"]]
+                destination = pathlib.Path(authority.source)
+                if authority.kind == "path" and lstat_type(destination) != 0:
+                    raise StateError(
+                        f"Restoring absence for {authority.name} requires --restore-absence"
+                    )
     for entry in canonical_apply_entries(manifest):
         authority = registry[entry["name"]]
         if entry["status"] == "absent":
             destination = pathlib.Path(authority.source)
             if authority.kind == "path" and lstat_type(destination) != 0:
-                if not restore_absence:
-                    raise StateError(f"Restoring absence for {authority.name} requires --restore-absence")
-                remove_path(destination)
+                if restore_absence:
+                    remove_path(destination)
             continue
         if entry["status"] != "captured":
             continue
@@ -1459,6 +1471,7 @@ def restore_units() -> tuple[str, ...]:
         return tuple(dict.fromkeys(value))
     return (
         "nas-protected-services.target",
+        "nas-managed-services-seed.service",
         "nas-v2-timer-identity-sync-0.timer",
         "NetworkManager.service",
         "firewalld.service",
@@ -1735,6 +1748,14 @@ def restore_bundle(
                     rollback_staging = pathlib.Path(rollback_temp)
                     extract_bundle(rollback, rollback_staging)
                     rollback_manifest = load_extracted_manifest(rollback_staging)
+                    # Rollback stops PostgreSQL before restore: pg_restore runs against a
+                    # stopped server, so start it before applying any rollback bundle that
+                    # restores a database authority. Mirrors the forward-path start above.
+                    if any(
+                        entry["status"] == "captured" and entry["kind"] == "database"
+                        for entry in rollback_manifest["entries"]
+                    ):
+                        run_systemctl("start", "postgresql.service")
                     apply_extracted(rollback_staging, rollback_manifest, restore_absence=True)
                 reapply_runtime_consumers(unit_snapshot)
                 restore_journal_update("failed-rolled-back", completedAt=int(time.time()))

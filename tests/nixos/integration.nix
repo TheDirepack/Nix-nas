@@ -46,6 +46,21 @@ pkgs.testers.runNixOSTest {
     machine.succeed("busctl --system call org.freedesktop.UDisks2 /org/freedesktop/UDisks2 org.freedesktop.DBus.ObjectManager GetManagedObjects >/dev/null")
     machine.succeed("test $(systemctl show -p Result --value nas-vm-test-repository.service) = success")
     machine.succeed("test ! -e /run/nas-secret-runtime/live/ready")
+    # The dirty service must gate reconciliation on the secret-ready marker:
+    # before secrets are active it must not create reconcile.pending, and once
+    # the ready marker exists it must queue reconciliation.
+    machine.succeed("systemctl start nas-managed-services-dirty.service")
+    machine.succeed("test $(systemctl show -p ActiveState --value nas-managed-services-dirty.service) = inactive")
+    machine.succeed("test $(systemctl show -p Result --value nas-managed-services-dirty.service) = success")
+    machine.succeed("test ! -e /run/nas-control/reconcile.pending")
+    machine.succeed("install -d -m 0755 /run/nas-secret-runtime/live")
+    machine.succeed("touch /run/nas-secret-runtime/live/ready")
+    machine.succeed("systemctl start nas-managed-services-dirty.service")
+    machine.succeed("test $(systemctl show -p ActiveState --value nas-managed-services-dirty.service) = inactive")
+    machine.succeed("test $(systemctl show -p Result --value nas-managed-services-dirty.service) = success")
+    machine.succeed("test -e /run/nas-control/reconcile.pending")
+    # Return to a clean pre-ready state for the existing reconcile checks.
+    machine.succeed("rm -f /run/nas-secret-runtime/live/ready /run/nas-control/reconcile.pending")
     machine.succeed("systemctl start nas-managed-services-reconcile.service")
     machine.succeed("test $(systemctl show -p ConditionResult --value nas-managed-services-reconcile.service) = no")
     machine.succeed("test ! -e /run/nas-control/systemd-reconciled.json")
