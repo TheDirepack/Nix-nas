@@ -15,6 +15,7 @@ import contextlib
 import fcntl
 import grp
 import hashlib
+import http.client
 import json
 import os
 import pathlib
@@ -31,7 +32,7 @@ import urllib.request
 from typing import Any, Mapping
 
 from nas_common import ADMIN_GROUP, DISABLED_GROUP
-from nas_operation_journal import JournalError, OperationJournal, atomic_write_json, load_json
+from nas_operation_journal import JournalError, OperationJournal, load_json
 from nas_operation_lock import (
     COORDINATION_TOKEN_ENV,
     OperationBusyError,
@@ -78,6 +79,27 @@ BOOTSTRAP_RECONCILE_ATTEMPTS = 4
 REQUIRED_PROXY_SCOPES = ("openid", "email", "profile", "entitlements", "ak_proxy")
 SYNCTHING_VERIFY_ATTEMPTS = 5
 SYNCTHING_VERIFY_INTERVAL_SECONDS = 0.5
+
+
+class AmbiguousMutationError(SyncError):
+    """A non-idempotent Authentik mutation may have been applied despite the failure."""
+
+
+def ambiguous_mutation_failure(exc: BaseException) -> bool:
+    """Whether a failed non-idempotent request may already have taken effect upstream.
+
+    Timeouts, aborted or reset connections, and proxy/server errors leave the
+    provider state unknown. Rejected requests (4xx other than 408), refused
+    connections, and name-resolution failures never reached the provider.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code == 408 or 500 <= exc.code <= 599
+    if isinstance(exc, urllib.error.URLError):
+        return isinstance(exc.reason, (TimeoutError, ConnectionResetError, ConnectionAbortedError))
+    return isinstance(
+        exc,
+        (TimeoutError, ConnectionResetError, ConnectionAbortedError, http.client.HTTPException),
+    )
 
 
 def _resolve_syncthing_url() -> str:  # pragma: no cover - V2 integration
@@ -223,6 +245,10 @@ def http_json(
                 retry_after = exc.headers.get("Retry-After") if exc.headers else None
                 time.sleep(_retry_delay(attempt, retry_after))
                 continue
+            if normalized_method not in {"GET", "HEAD"} and ambiguous_mutation_failure(exc):
+                raise AmbiguousMutationError(
+                    f"Upstream mutation outcome is uncertain after HTTP {exc.code} (reference {reference})"
+                ) from exc
             raise SyncError(f"Upstream request failed with HTTP {exc.code} (reference {reference})") from exc
         except urllib.error.URLError as exc:
             diagnostic(
@@ -234,7 +260,26 @@ def http_json(
             if attempt < max_attempts:
                 time.sleep(_retry_delay(attempt))
                 continue
+            if normalized_method not in {"GET", "HEAD"} and ambiguous_mutation_failure(exc):
+                raise AmbiguousMutationError(
+                    f"Upstream mutation outcome is uncertain after a transport failure (reference {reference})"
+                ) from exc
             raise SyncError(f"Unable to reach upstream (reference {reference})") from exc
+        except (TimeoutError, ConnectionResetError, http.client.HTTPException) as exc:
+            diagnostic(
+                f"nas-identity-sync: request {reference} interrupted "
+                f"attempt={attempt}/{max_attempts} endpoint={endpoint_label(url)} "
+                f"reason={type(exc).__name__}"
+            )
+            last_error = exc
+            if attempt < max_attempts:
+                time.sleep(_retry_delay(attempt))
+                continue
+            if normalized_method not in {"GET", "HEAD"} and ambiguous_mutation_failure(exc):
+                raise AmbiguousMutationError(
+                    f"Upstream mutation outcome is uncertain after {type(exc).__name__} (reference {reference})"
+                ) from exc
+            raise SyncError(f"Upstream request failed (reference {reference})") from exc
     else:  # pragma: no cover
         raise SyncError(f"Unable to reach upstream (reference {reference})") from last_error
 
@@ -1263,6 +1308,21 @@ def account_plan_fingerprint(plan: Mapping[str, Any]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def record_account_step_failure(journal: OperationJournal, step: str, error: BaseException) -> None:
+    """Persist a step failure, escalating uncertain Authentik mutations.
+
+    The shared journal helper only escalates the operation status, so the step
+    itself is also marked manual-recovery-required: cancellation must not treat
+    a possibly applied provider mutation as a reviewable failed step.
+    """
+    if isinstance(error, AmbiguousMutationError):
+        journal.fail_step(step, str(error), manual_recovery=True)
+        journal.value["steps"][step]["status"] = "manual-recovery-required"
+        journal.save()
+    else:
+        journal.fail_step(step, str(error))
+
+
 def journal_step(journal: OperationJournal, step: str, action: Any) -> Any:
     if journal.step_complete(step):
         return journal.result(step)
@@ -1270,10 +1330,124 @@ def journal_step(journal: OperationJournal, step: str, action: Any) -> Any:
     try:
         result = action()
     except Exception as exc:
-        journal.fail_step(step, str(exc))
+        record_account_step_failure(journal, step, exc)
         raise
     journal.complete_step(step, result)
     return result
+
+
+def account_journal_revision(record: Mapping[str, Any]) -> str:
+    """Identify the exact journal state an operator inspected, not only its plan."""
+    payload = json.dumps(record, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def account_journal_status() -> dict[str, Any]:
+    """Expose only recovery metadata, never account-plan results or passwords."""
+    try:
+        record = load_json(ACCOUNT_JOURNAL_PATH)
+    except (JournalError, UnicodeError) as exc:
+        raise SyncError(str(exc)) from exc
+    if record is None:
+        return {"exists": False, "path": str(ACCOUNT_JOURNAL_PATH)}
+    steps = record.get("steps", {})
+    if not isinstance(steps, dict):
+        raise SyncError("Account journal has malformed steps")
+    return {
+        "exists": True,
+        "path": str(ACCOUNT_JOURNAL_PATH),
+        "status": record.get("status"),
+        "fingerprint": record.get("fingerprint"),
+        "revision": account_journal_revision(record),
+        "steps": {
+            name: item.get("status")
+            for name, item in sorted(steps.items())
+            if isinstance(name, str) and isinstance(item, dict)
+        },
+    }
+
+
+def cancel_failed_account_plan(*, fingerprint: str, revision: str, note: str) -> dict[str, Any]:
+    """Explicitly abandon a failed plan without claiming its effects were undone.
+
+    This runs under both the identity operation lock and the local flock through
+    the CLI. Running, indeterminate and manual-recovery-required operations
+    cannot be abandoned. The original journal is archived verbatim before
+    cancellation, and the cancellation metadata is stored beside that archive so
+    a later corrected plan cannot overwrite the operator's record.
+    """
+    if not isinstance(note, str) or not note.strip() or len(note) > 1000:
+        raise SyncError("Cancellation requires a nonempty operator note of at most 1000 characters")
+    if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+        raise SyncError("Cancellation requires the exact 64-character account journal fingerprint")
+    if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{64}", revision):
+        raise SyncError("Cancellation requires the exact 64-character journal revision")
+    try:
+        previous = load_json(ACCOUNT_JOURNAL_PATH)
+    except (JournalError, UnicodeError) as exc:
+        raise SyncError(str(exc)) from exc
+    if previous is None:
+        raise SyncError("No account journal exists to cancel")
+    if previous.get("schemaVersion") != 1 or previous.get("workflow") != "authentik-account-plan":
+        raise SyncError("Refusing to cancel a journal for a different workflow or schema")
+    if previous.get("fingerprint") != fingerprint:
+        raise SyncError("Account journal fingerprint changed; inspect the active journal before cancellation")
+    cancelled_revision = account_journal_revision(previous)
+    if revision != cancelled_revision:
+        raise SyncError(
+            "Account journal state changed after it was inspected; "
+            "rerun account-journal and review the current steps before cancelling"
+        )
+    if previous.get("status") != "failed":
+        raise SyncError("Only failed account journals may be cancelled; running or uncertain work needs recovery")
+    steps = previous.get("steps")
+    if not isinstance(steps, dict):
+        raise SyncError("Account journal has malformed steps")
+    if any(isinstance(item, Mapping) and item.get("status") == "manual-recovery-required" for item in steps.values()):
+        raise SyncError("Account journal has manual-recovery-required steps; cancellation is not allowed")
+    if any(not isinstance(item, dict) or item.get("status") not in {"complete", "failed"} for item in steps.values()):
+        raise SyncError("Account journal has unverified or running steps; manual recovery required")
+
+    history_dir = ACCOUNT_JOURNAL_PATH.parent / "account-plan-history"
+    try:
+        history_dir.mkdir(mode=0o700, exist_ok=True)
+        if history_dir.is_symlink() or not history_dir.is_dir() or history_dir.stat().st_mode & 0o077:
+            raise SyncError("Account journal history must be a private real directory")
+        cancelled_at = int(time.time())
+        archived_path = history_dir / f"{cancelled_at}-{fingerprint[:12]}-{secrets.token_hex(6)}.json"
+        cancellation_path = archived_path.with_name(f"{archived_path.stem}-cancellation.json")
+        cancellation_record = {
+            "schemaVersion": 1,
+            "workflow": "authentik-account-plan",
+            "journalPath": str(ACCOUNT_JOURNAL_PATH),
+            "fingerprint": fingerprint,
+            "journalRevision": cancelled_revision,
+            "cancelledAt": cancelled_at,
+            "note": note.strip(),
+            "archivedJournal": str(archived_path),
+            "steps": {
+                name: item.get("status")
+                for name, item in sorted(steps.items())
+                if isinstance(name, str) and isinstance(item, dict)
+            },
+        }
+        atomic_write_json(archived_path, previous)
+        atomic_write_json(cancellation_path, cancellation_record)
+        changed = dict(previous)
+        changed["status"] = "cancelled"
+        changed["cancelledAt"] = cancelled_at
+        changed["cancelNote"] = note.strip()
+        changed["cancelledArchive"] = str(archived_path)
+        changed["cancellationRecord"] = str(cancellation_path)
+        OperationJournal(ACCOUNT_JOURNAL_PATH, changed).save()
+    except OSError as exc:
+        raise SyncError(f"Could not archive and cancel the failed account journal: {exc}") from exc
+    return {
+        "cancelled": True,
+        "archivedJournal": str(archived_path),
+        "cancellationRecord": str(cancellation_path),
+        "warning": "The previously completed Authentik mutations were not rolled back; inspect current identities before applying a corrected plan.",
+    }
 
 
 def apply_account_plan(
@@ -1413,7 +1587,7 @@ def apply_account_plan(
                         updated.append(username)
                         action = "updated"
                 except Exception as exc:
-                    journal.fail_step(core_step, str(exc))
+                    record_account_step_failure(journal, core_step, exc)
                     raise
                 journal.complete_step(core_step, {"username": username, "action": action})
             else:
@@ -1438,7 +1612,7 @@ def apply_account_plan(
                         body={"password": account["password"]},
                     )
                 except Exception as exc:
-                    journal.fail_step(password_step, str(exc))
+                    record_account_step_failure(journal, password_step, exc)
                     raise
                 journal.complete_step(password_step, {"username": username, "changed": True})
                 password_changed.append(username)
@@ -1465,7 +1639,7 @@ def apply_account_plan(
                             body={"is_active": False, "groups": sorted(kept)},
                         )
                     except Exception as exc:
-                        journal.fail_step(step, str(exc))
+                        record_account_step_failure(journal, step, exc)
                         raise
                     journal.complete_step(step, {"username": username, "deactivated": True})
                 deactivated.append(username)
@@ -1486,7 +1660,7 @@ def apply_account_plan(
         raise SyncError(str(exc)) from exc
     except (SyncError, OSError, ValueError) as exc:
         if journal.value.get("status") != "manual-recovery-required":
-            journal.fail(str(exc))
+            journal.fail(str(exc), manual_recovery=isinstance(exc, AmbiguousMutationError))
         raise
 
 
@@ -1596,6 +1770,7 @@ READ_ONLY_COMMANDS = frozenset(
         "capabilities",
         "export-account",
         "plan-accounts",
+        "account-journal",
         "status",
         "status-fixture",
         "verify-token",
@@ -1628,6 +1803,15 @@ def main() -> int:
     sub.add_parser("sync-syncthing", help="Reconcile only Authentik-owned Syncthing objects")
     sub.add_parser("status", help="Report the current Authentik identity model")
     sub.add_parser("capabilities", help="Report Authentik-owned Managed Services V2 application assignments")
+    sub.add_parser("account-journal", help="Inspect failed account-plan recovery metadata without credentials")
+    cancel_parser = sub.add_parser(
+        "cancel-failed-accounts", help="Acknowledge a failed account plan and archive its journal"
+    )
+    cancel_parser.add_argument("--fingerprint", required=True, help="Exact fingerprint printed by account-journal")
+    cancel_parser.add_argument("--revision", required=True, help="Exact journal revision printed by account-journal")
+    cancel_parser.add_argument(
+        "--note", required=True, help="Operator statement acknowledging possible partial account changes"
+    )
     apply_parser = sub.add_parser("apply-accounts", help="Create/update Authentik accounts from a transient JSON plan")
     apply_parser.add_argument("source", help="JSON file or - for stdin")
     apply_parser.add_argument(
@@ -1647,6 +1831,7 @@ def main() -> int:
             "bootstrap-runtime-token",
             "retire-bootstrap",
             "apply-accounts",
+            "cancel-failed-accounts",
             "sync",
             "sync-syncthing",
         }
@@ -1663,6 +1848,12 @@ def main() -> int:
                 result = provision_runtime_token(authentik_token(bootstrap=True))
             elif args.command == "retire-bootstrap":
                 result = retire_bootstrap_administrator(authentik_token(bootstrap=True), args.administrator)
+            elif args.command == "account-journal":
+                result = account_journal_status()
+            elif args.command == "cancel-failed-accounts":
+                result = cancel_failed_account_plan(
+                    fingerprint=args.fingerprint, revision=args.revision, note=args.note
+                )
             elif args.command == "apply-accounts":
                 result = apply_account_plan(
                     authentik_token(),
