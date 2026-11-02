@@ -170,7 +170,7 @@ diff --git a/web/src/user/LibraryPage/ApplicationList.ts b/web/src/user/LibraryP
          part="app-list"
          data-anchor-strategy=${AnchorPositionSupported ? "anchor-position" : "fallback"}
 -        style="--app-list-column-count: ${columnCount}"
-+        .style=${`--app-list-column-count: ${columnCount}`}
++        .style=${styleMap({"--app-list-column-count": columnCount})}
          ${spread(props)}
      >
          ${repeat(
@@ -182,7 +182,7 @@ diff --git a/web/src/user/LibraryApplication/CardMenu.ts b/web/src/user/LibraryA
              class="pf-c-dropdown__toggle"
              type="button"
 -            style="anchor-name: ${menuAnchor};"
-+            .style=${`anchor-name: ${menuAnchor};`}
++            .style=${styleMap({"anchor-name": menuAnchor})}
              popovertarget=${menuID}
              popovertargetaction="toggle"
              tabindex="-1"
@@ -191,27 +191,19 @@ diff --git a/web/src/user/LibraryApplication/CardMenu.ts b/web/src/user/LibraryA
              class="pf-c-dropdown__menu"
              part="card-header-actions-menu"
 -            style="position-anchor: ${menuAnchor};"
-+            .style=${`position-anchor: ${menuAnchor};`}
++            .style=${styleMap({"position-anchor": menuAnchor})}
              id=${menuID}
              ?popover=${AnchorPositionSupported}
          >
 diff --git a/web/src/user/LibraryApplication/index.ts b/web/src/user/LibraryApplication/index.ts
 --- a/web/src/user/LibraryApplication/index.ts
 +++ b/web/src/user/LibraryApplication/index.ts
-@@ -20,7 +20,6 @@
- import { html, nothing } from "lit";
- import { classMap } from "lit/directives/class-map.js";
- import { createRef, ref, RefOrCallback } from "lit/directives/ref.js";
--import { styleMap } from "lit/directives/style-map.js";
- 
- const RAC_LAUNCH_URL = "goauthentik.io://providers/rac/launch";
- 
 @@ -81,7 +80,7 @@
      return html`<div
          part="card-wrapper"
          data-application-name=${ifPresent(dataID)}
 -        style=${styleMap({ background: background || null })}
-+        .style=${background ? `background: ${background};` : ""}
++        .style=${styleMap({ background: background || null })}
      >
          <div part="card" class="pf-c-card pf-m-hoverable pf-m-compact ${classMap(classes)}">
              <ak-app-icon
@@ -230,21 +222,13 @@ diff --git a/web/src/user/index.entrypoint.ts b/web/src/user/index.entrypoint.ts
          return html`<ak-enterprise-status interface="user"></ak-enterprise-status>
              <div part="page" class="pf-c-page">
 -                <div part="background-wrapper" style=${ifPresent(backgroundStyles)}>
-+                <div part="background-wrapper" .style=${backgroundStyles || ""}>
++                <div part="background-wrapper" .style=${styleMap(backgroundStyles || {})}>
                      ${!backgroundStyles
                          ? html`<div part="background-default-slant"></div>`
                          : nothing}
 diff --git a/web/src/elements/ak-progress-bar.ts b/web/src/elements/ak-progress-bar.ts
 --- a/web/src/elements/ak-progress-bar.ts
 +++ b/web/src/elements/ak-progress-bar.ts
-@@ -5,7 +5,6 @@
- 
- import { css, html, nothing } from "lit";
- import { customElement, property } from "lit/decorators.js";
--import { styleMap } from "lit/directives/style-map.js";
- 
- import PFProgress from "@patternfly/patternfly/components/Progress/progress.css";
- 
 @@ -115,9 +114,7 @@
              >
                  <div
@@ -252,7 +236,7 @@ diff --git a/web/src/elements/ak-progress-bar.ts b/web/src/elements/ak-progress-
 -                    style=${styleMap({
 -                        width: this.indeterminate ? "100%" : `${Math.min(this.value, 100)}%`,
 -                    })}
-+                    .style=${`width: ${this.indeterminate ? "100%" : `${Math.min(this.value, 100)}%`};`}
++                    .style=${styleMap({ width: this.indeterminate ? "100%" : `${Math.min(this.value, 100)}%` })}
                  ></div>
              </div>
          </div> `;
@@ -264,7 +248,7 @@ diff --git a/web/src/flow/stages/FlowFrameStage.ts b/web/src/flow/stages/FlowFra
                  : nothing}
              <iframe
 -                style=${this.challenge.loadingOverlay ? "width:0;height:0;position:absolute;" : ""}
-+                .style=${this.challenge.loadingOverlay ? "width:0;height:0;position:absolute;" : ""}
++                .style=${styleMap(this.challenge.loadingOverlay ? {"width": "0", "height": "0", "position": "absolute"} : {})}
                  src=${this.challenge.url}
              ></iframe>
          </ak-flow-card>`;
@@ -276,7 +260,7 @@ diff --git a/web/src/flow/providers/IFrameLogoutStage.ts b/web/src/flow/provider
                      aria-valuenow="${percentage}"
                  >
 -                    <div class="pf-c-progress__indicator" style="width: ${percentage}%;"></div>
-+                    <div class="pf-c-progress__indicator" .style=${`width: ${percentage}%;`}></div>
++                    <div class="pf-c-progress__indicator" .style=${styleMap({"width": `${percentage}%`})}></div>
                  </div>
              </div>
          `;
@@ -288,7 +272,7 @@ diff --git a/web/src/flow/stages/captcha/CaptchaStage.ts b/web/src/flow/stages/c
                      aria-label=${msg("CAPTCHA challenge")}
                      ${ref(this.iframeRef)}
 -                    style="height: ${this.iframeHeight}px;"
-+                    .style=${`height: ${this.iframeHeight}px;`}
++                    .style=${styleMap({"height": `${this.iframeHeight}px`})}
                      data-ready=${this.#iframeLoaded ? "ready" : "loading"}
                      class="ak-interactive-challenge"
                      id="ak-captcha"
@@ -300,7 +284,7 @@ diff --git a/web/src/components/ak-file-search-input.ts b/web/src/components/ak-
  
              <ak-search-select
 -                style="width: 100%;"
-+                .style=${"width: 100%;"}
++                .style=${styleMap({"width": "100%"})}
                  .fieldID=${this.fieldID}
                  .fetchObjects=${this.#fetch.bind(this)}
                  .renderElement=${renderElement}
@@ -312,12 +296,12 @@ diff --git a/web/src/components/ak-hidden-text-input.ts b/web/src/components/ak-
          };
  
 -        return html`<div style="display: flex;" part="control">
-+        return html`<div .style=${"display: flex;"} part="control">
++        return html`<div .style=${styleMap({"display": "flex"})} part="control">
              ${this.renderInputField(setValue, code)}
              <ak-visibility-toggle
                  part="toggle"
 -                style="flex: 0 0 auto; align-self: flex-start"
-+                .style=${"flex: 0 0 auto; align-self: flex-start"}
++                .style=${styleMap({"flex": "0 0 auto", "align-self": "flex-start"})}
                  ?open=${this.revealed}
                  show-message=${this.showMessage}
                  hide-message=${this.hideMessage}
@@ -329,7 +313,7 @@ diff --git a/web/src/components/ak-hidden-textarea-input.ts b/web/src/components
          return html`
              <textarea
 -                style="flex: 1 1 auto; min-width: 0;"
-+                .style=${"flex: 1 1 auto; min-width: 0;"}
++                .style=${styleMap({"flex": "1 1 auto", "min-width": "0"})}
                  part="textarea"
                  @input=${setValue}
                  placeholder=${ifPresent(this.placeholder)}
@@ -341,7 +325,7 @@ diff --git a/web/src/components/ak-hint/ShowHintController.ts b/web/src/componen
      render() {
          return html`<ak-hint-footer
 -            ><div style="text-align: right">
-+            ><div .style=${"text-align: right"}>
++            ><div .style=${styleMap({"text-align": "right"})}>
                  <input type="checkbox" @input=${this.hide} />&nbsp;${msg(
                      "Don't show this message again.",
                  )}
@@ -353,7 +337,7 @@ diff --git a/web/src/elements/charts/Chart.ts b/web/src/elements/charts/Chart.ts
                      role="img"
                      aria-label=${msg("Chart")}
 -                    style="${!this.chart ? "display: none;" : ""}"
-+                    .style=${!this.chart ? "display: none;" : ""}
++                    .style=${styleMap(!this.chart ? {"display": "none"} : {})}
                  ></canvas>
              </div>
          `;
@@ -365,7 +349,7 @@ diff --git a/web/src/user/user-settings/details/stages/prompt/PromptStage.ts b/w
                  ?checked=${prompt.initialValue !== ""}
                  ?required=${prompt.required}
 -                style="vertical-align: bottom"
-+                .style=${"vertical-align: bottom"}
++                .style=${styleMap({"vertical-align": "bottom"})}
              />`;
          }
  
@@ -377,7 +361,7 @@ diff --git a/web/src/admin/groups/GroupViewPage.ts b/web/src/admin/groups/GroupV
                                                                      <span
                                                                          class="pf-c-label pf-m-outline pf-m-cyan"
 -                                                                        style="margin-left: 0.5rem;"
-+                                                                        .style=${"margin-left: 0.5rem;"}
++                                                                        .style=${styleMap({"margin-left": "0.5rem"})}
                                                                      >
                                                                          <span
                                                                              class="pf-c-label__content"
@@ -389,27 +373,19 @@ diff --git a/web/src/admin/providers/oauth2/OAuth2ProviderFormForm.ts b/web/src/
                                  .redirectURI=${redirectURI}
                                  name="oauth2-redirect-uri"
 -                                style="width: 100%"
-+                                .style=${"width: 100%"}
++                                .style=${styleMap({"width": "100%"})}
                                  input-id="redirect-uri-${idx}"
                              ></ak-provider-oauth2-redirect-uri>`;
                          }}
 diff --git a/web/src/admin/applications/ApplicationWizardHint.ts b/web/src/admin/applications/ApplicationWizardHint.ts
 --- a/web/src/admin/applications/ApplicationWizardHint.ts
 +++ b/web/src/admin/applications/ApplicationWizardHint.ts
-@@ -12,7 +12,6 @@
- import { msg } from "@lit/localize";
- import { css, html } from "lit";
- import { customElement, property, state } from "lit/decorators.js";
--import { styleMap } from "lit/directives/style-map.js";
- 
- import PFButton from "@patternfly/patternfly/components/Button/button.css";
- import PFLabel from "@patternfly/patternfly/components/Label/label.css";
 @@ -26,7 +25,7 @@
      viewBox="0 0 352 512"
      aria-hidden="true"
      role="img"
 -    style="vertical-align: -0.125em;"
-+    .style=${"vertical-align: -0.125em;"}
++    .style=${styleMap({"vertical-align": "-0.125em"})}
  >
      <path
          d="M242.72 256l100.07-100.07c12.28-12.28 12.28-32.19 0-44.48l-22.24-22.24c-12.28-12.28-32.19-12.28-44.48 0L176 189.28 75.93 89.21c-12.28-12.28-32.19-12.28-44.48 0L9.21 111.45c-12.28 12.28-12.28 32.19 0 44.48L109.28 256 9.21 356.07c-12.28 12.28-12.28 32.19 0 44.48l22.24 22.24c12.28 12.28 32.2 12.28 44.48 0L176 322.72l100.07 100.07c12.28 12.28 32.2 12.28 44.48 0l22.24-22.24c12.28-12.28 12.28-32.19 0-44.48L242.72 256z"
@@ -428,12 +404,12 @@ diff --git a/web/src/admin/applications/ApplicationWizardHint.ts b/web/src/admin
          return html`<section
              class="pf-c-page__main-section pf-m-no-padding-mobile"
 -            style="${styleMap(sectionStyles)}"
-+            .style=${"padding-bottom: 0; margin-bottom: -0.5rem; margin-right: 0.0625rem; text-align: right;"}
++            .style=${styleMap({"padding-bottom": "0", "margin-bottom": "-0.5rem", "margin-right": "0.0625rem", "text-align": "right"})}
          >
              <span class="pf-c-label">
                  <a class="pf-c-label__content" @click=${this.showHintController.show}>
 -                    <span class="pf-c-label__text" style="${styleMap(textStyle)}">
-+                    <span class="pf-c-label__text" .style=${"max-width: 60ch"}>
++                    <span class="pf-c-label__text" .style=${styleMap({"max-width": "60ch"})}>
                          ${msg("One hint, 'New Application Wizard', is currently hidden")}
                      </span>
                      <button

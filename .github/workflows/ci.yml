@@ -470,7 +470,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: main-coverage.json
-          key: ${{ env.CI_CACHE_SCHEMA }}-coverage-main-${{ runner.os }}-${{ steps.main-baseline.outputs.sha }}-${{ hashFiles('scripts/prepare-coverage-baseline.py', 'scripts/ci-qualification.sh', '.github/workflows/ci.yml') }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-coverage-main-${{ runner.os }}-${{ hashFiles('scripts/prepare-coverage-baseline.py', 'scripts/ci-qualification.sh', '.github/workflows/ci.yml') }}
       - name: Set up Nix for uncached baseline
         id: baseline-nix
         if: >-
@@ -1027,17 +1027,25 @@ jobs:
           gh api "/repos/$REPOSITORY/contents/.github/workflows?ref=$DEFAULT_BRANCH" \
             --jq '.[] | select(.type == "file") | .path' | sort -u > "$work/active-workflows"
           gh api --paginate "/repos/$REPOSITORY/actions/runs?status=completed&per_page=100" \
-            --jq '.workflow_runs[] | [.id, .path, .created_at] | @tsv' > "$work/completed-runs"
+            --jq '.workflow_runs[] | [.id, .path, .head_branch, .conclusion, .created_at] | @tsv' > "$work/completed-runs"
 
           active_cutoff="$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          # Qualified runs (successful runs on the default branch) are needed by the
+          # release workflow for signing, so retain them well beyond the default
+          # 7-day window instead of deleting them after a week.
+          qualified_cutoff="$(date -u -d '90 days ago' +%Y-%m-%dT%H:%M:%SZ)"
           deleted_runs=0
-          while IFS=$'\t' read -r run_id workflow_path created_at; do
+          while IFS=$'\t' read -r run_id workflow_path head_branch conclusion created_at; do
             [[ -n "$run_id" && "$run_id" != "$CURRENT_RUN_ID" ]] || continue
             remove=false
             if ! grep -Fxq -- "$workflow_path" "$work/active-workflows"; then
               remove=true
             elif [[ -n "$created_at" && "$created_at" < "$active_cutoff" ]]; then
-              remove=true
+              if [[ "$head_branch" == "$DEFAULT_BRANCH" && "$conclusion" == "success" ]]; then
+                [[ "$created_at" < "$qualified_cutoff" ]] && remove=true
+              else
+                remove=true
+              fi
             fi
             if [[ "$remove" == true ]]; then
               gh api --method DELETE "/repos/$REPOSITORY/actions/runs/$run_id" >/dev/null
@@ -1085,7 +1093,7 @@ jobs:
             echo "- Active workflow files: $(wc -l < "$work/active-workflows")"
             echo "- Deleted completed workflow runs: $deleted_runs"
             echo "- Deleted NAS-owned caches: $deleted_caches"
-            echo "- Active workflow history retention: 7 days"
+            echo "- Active workflow history retention: 7 days (90 days for qualified default-branch runs)"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Warn without blocking releases if maintenance fails
         if: always() && steps.prune.outcome != 'success'

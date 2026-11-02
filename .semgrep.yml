@@ -62,3 +62,53 @@ rules:
       - pattern: $EL.srcdoc = $VALUE
       - pattern: $EL.setAttribute("srcdoc", $VALUE)
       - pattern: $EL.setAttribute("on$EVENT", $VALUE)
+
+  - id: nas-python-sql-parameterized-call
+    languages: [python]
+    severity: WARNING
+    message: Parameterized SQL call with a string query; verify the query string is not assembled from unsanitized input.
+    pattern-either:
+      - pattern: $DB.execute($QUERY, ...)
+      - pattern: $DB.executemany($QUERY, ...)
+
+  - id: nas-react-dangerously-set-inner-html
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: React dangerouslySetInnerHTML inserts raw HTML and can cause XSS; avoid it or sanitize the value.
+    pattern-either:
+      - pattern: '<$TAG ... dangerouslySetInnerHTML={{__html: $VALUE}} ...>'
+
+  - id: nas-dom-setattribute-event-handler
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Assigning an event handler through setAttribute can execute attacker-controlled code.
+    pattern-either:
+      - pattern: $EL.setAttribute("onclick", $VALUE)
+      - pattern: $EL.setAttribute("ondblclick", $VALUE)
+      - pattern: $EL.setAttribute("onmousedown", $VALUE)
+      - pattern: $EL.setAttribute("onmouseup", $VALUE)
+      - pattern: $EL.setAttribute("onmouseover", $VALUE)
+      - pattern: $EL.setAttribute("onmousemove", $VALUE)
+      - pattern: $EL.setAttribute("onmouseout", $VALUE)
+      - pattern: $EL.setAttribute("onmouseenter", $VALUE)
+      - pattern: $EL.setAttribute("onmouseleave", $VALUE)
+      - pattern: $EL.setAttribute("onkeydown", $VALUE)
+      - pattern: $EL.setAttribute("onkeyup", $VALUE)
+      - pattern: $EL.setAttribute("onkeypress", $VALUE)
+      - pattern: $EL.setAttribute("onload", $VALUE)
+      - pattern: $EL.setAttribute("onerror", $VALUE)
+      - pattern: $EL.setAttribute("onabort", $VALUE)
+      - pattern: $EL.setAttribute("onchange", $VALUE)
+      - pattern: $EL.setAttribute("onsubmit", $VALUE)
+      - pattern: $EL.setAttribute("onreset", $VALUE)
+      - pattern: $EL.setAttribute("onselect", $VALUE)
+      - pattern: $EL.setAttribute("onfocus", $VALUE)
+      - pattern: $EL.setAttribute("onblur", $VALUE)
+      - pattern: $EL.setAttribute("oninput", $VALUE)
+      - pattern: $EL.setAttribute("oninvalid", $VALUE)
+      - pattern: $EL.setAttribute("onscroll", $VALUE)
+      - pattern: $EL.setAttribute("onwheel", $VALUE)
+      - pattern: $EL.setAttribute("oncontextmenu", $VALUE)
+      - pattern: $EL.setAttribute("oncopy", $VALUE)
+      - pattern: $EL.setAttribute("oncut", $VALUE)
+      - pattern: $EL.setAttribute("onpaste", $VALUE)

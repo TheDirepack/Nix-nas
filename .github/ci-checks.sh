@@ -4,6 +4,7 @@
 
 : "${CI_LOG_DIR:=ci-logs}"
 : "${CI_RESULTS_FILE:=$CI_LOG_DIR/results.tsv}"
+: "${CI_FAILED_RUNS_FILE:=$CI_LOG_DIR/failed-runs.tsv}"
 mkdir -p "$CI_LOG_DIR"
 
 ci_run() {
@@ -39,7 +40,13 @@ ci_run() {
     "$section" "$slug" "$label" "$rc" "$elapsed" "$log" "$command_text" >> "$CI_RESULTS_FILE"
 
   if ((rc != 0)); then
-    printf '::error title=%s::exit %d after %ds; full log: %s\n' "$label" "$rc" "$elapsed" "$log"
+    if [[ ! -f "$CI_FAILED_RUNS_FILE" ]]; then
+      printf 'section\tslug\tlabel\texit_code\telapsed\tlog_path\tcommand\n' > "$CI_FAILED_RUNS_FILE"
+    fi
+    printf '%s\t%s\t%s\t%d\t%d\t%s\t%s\n' \
+      "$section" "$slug" "$label" "$rc" "$elapsed" "$log" "$command_text" >> "$CI_FAILED_RUNS_FILE"
+    printf '::error title=ci_run FAILED::%s\n' \
+      "FAILED ci_run: section=$section slug=$slug label=$label exit_code=$rc elapsed=${elapsed}s log=$log command=$command_text" >&2
   fi
   return "$rc"
 }
