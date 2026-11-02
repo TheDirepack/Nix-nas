@@ -24,30 +24,45 @@ ci_run() {
   fi
 
   local log="$CI_LOG_DIR/$section-$slug.log"
-  local command_text start end elapsed rc
+  local command_text start end elapsed rc results_rc
+  local -a pipeline_status
   printf -v command_text '%q ' "$@"
   command_text=${command_text% }
   start=$(date +%s)
 
   printf '::group::%s\n' "$label"
-  "$@" 2>&1 | tee "$log"
-  rc=${PIPESTATUS[0]}
+  if "$@" 2>&1 | tee "$log"; then
+    pipeline_status=("${PIPESTATUS[@]}")
+  else
+    pipeline_status=("${PIPESTATUS[@]}")
+  fi
+  rc=${pipeline_status[0]}
+  if ((rc == 0)); then rc=${pipeline_status[1]}; fi
   printf '::endgroup::\n'
 
   end=$(date +%s)
   elapsed=$((end - start))
-  printf '%s\t%s\t%s\t%d\t%d\t%s\t%s\n' \
-    "$section" "$slug" "$label" "$rc" "$elapsed" "$log" "$command_text" >> "$CI_RESULTS_FILE"
+  if printf '%s\t%s\t%s\t%d\t%d\t%s\t%s\n' \
+    "$section" "$slug" "$label" "$rc" "$elapsed" "$log" "$command_text" >> "$CI_RESULTS_FILE"; then
+    :
+  else
+    results_rc=$?
+    printf 'ci_run: unable to append results to %s (exit %d)\n' "$CI_RESULTS_FILE" "$results_rc" >&2
+    if ((rc == 0)); then rc=$results_rc; fi
+  fi
 
   if ((rc != 0)); then
-    if [[ ! -f "$CI_FAILED_RUNS_FILE" ]]; then
-      printf 'section\tslug\tlabel\texit_code\telapsed\tlog_path\tcommand\n' > "$CI_FAILED_RUNS_FILE"
+    # Persist the failure context before returning so it survives a caller's
+    # `set -e` abort. This is best-effort: it must never change the reported
+    # status or the annotation, which stay authoritative.
+    if [[ -n "$CI_FAILED_RUNS_FILE" ]]; then
+      if [[ ! -f "$CI_FAILED_RUNS_FILE" ]]; then
+        printf 'section\tslug\tlabel\texit_code\telapsed\tlog_path\tcommand\n' > "$CI_FAILED_RUNS_FILE" 2>/dev/null || true
+      fi
+      printf '%s\t%s\t%s\t%d\t%d\t%s\t%s\n' \
+        "$section" "$slug" "$label" "$rc" "$elapsed" "$log" "$command_text" >> "$CI_FAILED_RUNS_FILE" 2>/dev/null || true
     fi
-    printf '%s\t%s\t%s\t%d\t%d\t%s\t%s\n' \
-      "$section" "$slug" "$label" "$rc" "$elapsed" "$log" "$command_text" >> "$CI_FAILED_RUNS_FILE"
-    printf '::error title=%s::%s\n' \
-      "ci_run FAILED" \
-      "section=$section slug=$slug label=$label exit_code=$rc elapsed=${elapsed}s log=$log command=$command_text" >&2
+    printf '::error title=%s::exit %d after %ds; full log: %s\n' "$label" "$rc" "$elapsed" "$log"
   fi
   return "$rc"
 }

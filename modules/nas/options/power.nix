@@ -77,8 +77,8 @@
           };
           port = lib.mkOption {
             type = lib.types.port;
-            default = 9001;
-            description = "Loopback NUT Web GUI HTTP port. Must not collide with nas.identity.authentik port (9000).";
+            default = 9005;
+            description = "Loopback NUT Web GUI HTTP port, separate from Authentik.";
           };
           upsdAddress = lib.mkOption {
             type = lib.types.str;

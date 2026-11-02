@@ -162,7 +162,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("ci_run()", helper)
         self.assertIn("::group::%s", helper)
         self.assertIn("::error title=%s", helper)
-        self.assertIn("PIPESTATUS[0]", helper)
+        self.assertIn("PIPESTATUS[@]", helper)
         self.assertIn("date +%s", helper)
         self.assertIn("printf -v command_text '%q '", helper)
         for name in self.PARALLEL:
