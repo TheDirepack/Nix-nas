@@ -142,7 +142,11 @@ test("setup job polling issues exactly the declared number of requests", async (
   assert.ok(increment > -1, "the poll budget must be tracked");
   assert.ok(increment < request, "the budget must be charged before the request is issued");
   const finallyBlock = body.split("} finally {")[1].split("};")[0];
-  assert.doesNotMatch(finallyBlock, /polls\+\+/, "charging the budget after the request issues one extra poll");
+  assert.doesNotMatch(
+    finallyBlock,
+    /polls\+\+/,
+    "charging the budget after the request issues one extra poll",
+  );
   assert.match(confirm, /MAX_POLLS = 30; \/\/ 30 polls \* 2s = 60s maximum polling window/);
 });
 

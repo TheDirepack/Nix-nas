@@ -103,8 +103,10 @@ class V2RestoreWiringTests(unittest.TestCase):
         pg_restore.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         pg_restore.chmod(0o700)
         restic = tools / "restic"
+        bash = shutil.which("bash")
+        assert bash is not None, "host tool unavailable: bash"
         restic.write_text(
-            "#!/bin/sh\n"
+            f"#!{bash}\n"
             "set -euo pipefail\n"
             'printf \'%s\\n\' "$*" >> "$RESTIC_LOG"\n'
             "repo=''\n"

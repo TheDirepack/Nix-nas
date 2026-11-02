@@ -150,11 +150,17 @@ test("unlock and backup-remote forms submit from the keyboard without navigating
     /<Button type="submit"[^>]*isDisabled=\{busy \|\| !unlockPassword\}/,
     "the unlock button must be the form's submit control",
   );
-  assert.match(app, /const unlock = async \(event\) => \{\s*if \(event\) event\.preventDefault\(\);/);
+  assert.match(
+    app,
+    /const unlock = async \(event\) => \{\s*if \(event\) event\.preventDefault\(\);/,
+  );
   const operations = await source("src/pages/operations-page.jsx");
   assert.match(operations, /<Form onSubmit=\{saveRemote\}>/);
   assert.match(operations, /<Button type="submit"[^>]*isDisabled=\{busy\}>/);
-  assert.match(operations, /const saveRemote = async \(event\) => \{\s*if \(event\) event\.preventDefault\(\);/);
+  assert.match(
+    operations,
+    /const saveRemote = async \(event\) => \{\s*if \(event\) event\.preventDefault\(\);/,
+  );
   for (const name of [APP_SHELL, "src/pages/operations-page.jsx"]) {
     assert.doesNotMatch(
       await source(name),

@@ -82,7 +82,9 @@ rules:
     severity: ERROR
     message: React dangerouslySetInnerHTML inserts raw HTML and can cause XSS; avoid it or sanitize the value.
     pattern-either:
-      - pattern: '<$TAG ... dangerouslySetInnerHTML={{__html: $VALUE}} ...>'
+      # Match the JSX attribute only; the nested object literal is not a valid
+      # semgrep pattern for JavaScript.
+      - pattern: '<$TAG ... dangerouslySetInnerHTML={$PROPS} ... />'
 
   - id: nas-dom-setattribute-event-handler
     languages: [javascript, typescript]

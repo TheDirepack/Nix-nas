@@ -135,6 +135,10 @@ in
         # reconcile after activating secrets, before publishing state.json.
         ConditionPathExists = [ "${nasInternal.secretRoot}/ready" ];
       };
+      # The NVIDIA toolkit is invoked by name by the probe; systemd composes
+      # PATH from this list, so the bare `nvidia-ctk` resolves without
+      # overriding the service's default PATH.
+      path = [ pkgs.nvidia-container-toolkit ];
       environment = {
         PYTHONPATH = "${v2Source}";
         NAS_V2_DESIRED = desiredPath;
@@ -153,7 +157,6 @@ in
         NAS_V2_AUTHENTIK_PATH = cfg.identity.authentikPath;
         NAS_V2_LAN_HOST = nasInternal.lanHost;
         NAS_V2_NVIDIA_CTK_BIN = "${pkgs.nvidia-container-toolkit}/bin/nvidia-ctk";
-        PATH = "${pkgs.nvidia-container-toolkit}/bin:${lib.concatStringsSep ":" config.environment.path}";
         NAS_V2_SYSTEMD_ANALYZE_BIN = "${pkgs.systemd}/bin/systemd-analyze";
         NAS_V2_SYSTEMCTL_BIN = "${pkgs.systemd}/bin/systemctl";
         NAS_V2_PYTHON_BIN = "${v2Python}/bin/python";

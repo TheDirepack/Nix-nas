@@ -7,7 +7,6 @@ import pathlib
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
 
@@ -774,9 +773,14 @@ fail() { echo "$*" >&2; exit 1; }
             bin_dir = root / "bin"
             bin_dir.mkdir()
             # The pidfile guard identifies a live VM by /proc/<pid>/exe, so the
-            # stand-in process must be a real executable with that basename.
+            # stand-in process must be a real ELF executable with that basename.
+            # Copying sys.executable is not sufficient: on NixOS it is a wrapper
+            # that re-execs a different store path, so /proc/<pid>/exe would not
+            # end in qemu-system-x86_64.
             fake_qemu = bin_dir / "qemu-system-x86_64"
-            shutil.copyfile(sys.executable, fake_qemu)
+            sleeper = shutil.which("sleep")
+            assert sleeper is not None, "host tool unavailable: sleep"
+            shutil.copyfile(sleeper, fake_qemu)
             fake_qemu.chmod(0o755)
             for tool in ("curl", "realpath", "readlink", "qemu-img", "expect", "bsdtar", "ssh", "ssh-keygen", "tar"):
                 if shutil.which(tool) is None:
@@ -784,7 +788,7 @@ fail() { echo "$*" >&2; exit 1; }
                     stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
                     stub.chmod(0o755)
             pidfile = state / "qemu.pid"
-            vm = subprocess.Popen([str(fake_qemu), "-c", "import time; time.sleep(120)"])
+            vm = subprocess.Popen([str(fake_qemu), "120"])
             try:
                 pidfile.write_text(f"{vm.pid}\n", encoding="utf-8")
                 # BASH_XTRACEFD keeps the trace separate from the refusal message.

@@ -170,7 +170,11 @@ export function SourcePage({data, mutate, busy}) {
                       >
                         Confirm
                       </Button>
-                      <Button variant="link" onClick={() => setConfirmOperation(null)} isDisabled={busy}>
+                      <Button
+                        variant="link"
+                        onClick={() => setConfirmOperation(null)}
+                        isDisabled={busy}
+                      >
                         Cancel
                       </Button>
                     </ModalFooter>
