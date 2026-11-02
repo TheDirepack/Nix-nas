@@ -59,6 +59,9 @@ in
             }
           fi
           printf '%s\n' '${bootstrapUsername}:${bootstrapPassword}' | ${pkgs.shadow}/bin/chpasswd
+          # Force a password change at the first local console/KVM login so the
+          # publicly-known development bootstrap password is not durable.
+          ${pkgs.shadow}/bin/chage -d 0 ${bootstrapUsername}
           ${pkgs.shadow}/bin/usermod --append --groups wheel,nas-administrators,nas-operations ${bootstrapUsername}
         '';
         NoNewPrivileges = false;

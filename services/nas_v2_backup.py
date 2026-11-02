@@ -361,6 +361,8 @@ def _run(argv: list[str], timeout: int = 60) -> str:
         result = subprocess.run(argv, check=False, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         raise BackupRuntimeError(f"native backup command timed out after {timeout}s: {' '.join(argv)}") from exc
+    except OSError as exc:
+        raise BackupRuntimeError(f"unable to execute native backup command {' '.join(argv)}: {exc}") from exc
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or f"exit status {result.returncode}"
         raise BackupRuntimeError(f"native backup command failed: {detail}")
@@ -374,6 +376,11 @@ def _zfs_snapshot_exists(zfs_bin: str, reference: str) -> bool:
     try:
         _run([zfs_bin, "list", reference])
     except BackupRuntimeError as exc:
+        # An execution failure (e.g. missing binary) says nothing about whether
+        # the snapshot exists; re-raise so the prepare failure handler keeps
+        # recording the failure and proceeds to the remaining cleanup steps.
+        if isinstance(exc.__cause__, OSError):
+            raise
         if any(marker in str(exc).lower() for marker in _ABSENCE_MARKERS):
             return False
         raise
@@ -457,7 +464,17 @@ def _native_dump_path(
     }
     if on_pending is not None:
         on_pending(pending)
-    _run([systemctl_bin, "restart", preparation_unit])
+    try:
+        _run([systemctl_bin, "restart", preparation_unit])
+    except BackupRuntimeError:
+        # A timed-out or failed preparation unit may still be running. Stop it
+        # before any artifact cleanup so in-flight dump writes cannot race with
+        # removal of the staged artifact.
+        try:
+            _run([systemctl_bin, "stop", preparation_unit])
+        except BackupRuntimeError:
+            pass
+        raise
     artifact = _validate_staged_artifact_path(resource_id, artifact_path, artifact_resource)
     try:
         produced = any(artifact.iterdir())

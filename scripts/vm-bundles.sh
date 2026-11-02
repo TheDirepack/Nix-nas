@@ -85,27 +85,42 @@ bundle_refs() {
 }
 
 bundle_out_paths() {
-  local ref
+  local ref out
   while IFS= read -r ref; do
-    "$NIX" eval --raw "${ref}.outPath"
-    printf '\n'
+    # A failed nix eval must not be swallowed by the process substitution:
+    # surface it explicitly instead of producing an empty/partial cache key.
+    out="$("$NIX" eval --raw "${ref}.outPath")" || return $?
+    [[ -n "$out" ]] || return 1
+    printf '%s\n' "$out"
   done < <(bundle_refs "$1")
 }
 
 bundle_hash() {
-  local name=$1 out
+  local name=$1 out src
   local -a hashes=()
-  if [[ $name != core ]]; then
-    while IFS= read -r out; do
-      if [[ -n $out ]]; then
-        hashes+=("$(basename "$out" | cut -d- -f1)")
-        break
-      fi
-    done < <(bundle_out_paths core)
+  local -a paths=()
+  local -a sources=()
+  if [[ $name == vm-drivers ]]; then
+    # The driver archive is a delta against the union of core and every
+    # application closure, so its key must cover all of them plus the driver
+    # roots themselves; otherwise an application change leaves a stale key.
+    sources=(core identity observability storage vm-drivers)
+  elif [[ $name != core ]]; then
+    sources=(core "$name")
+  else
+    sources=(core)
   fi
-  while IFS= read -r out; do
-    hashes+=("$(basename "$out" | cut -d- -f1)")
-  done < <(bundle_out_paths "$name")
+  for src in "${sources[@]}"; do
+    mapfile -t paths < <(bundle_out_paths "$src")
+    local expected
+    expected="$(bundle_refs "$src" | wc -l)"
+    if (( ${#paths[@]} != expected )); then
+      die "nix eval failed to enumerate outPaths for bundle: $src"
+    fi
+    for out in "${paths[@]}"; do
+      hashes+=("$(basename "$out" | cut -d- -f1)")
+    done
+  done
   (IFS=-; printf '%s\n' "${hashes[*]}")
 }
 
@@ -221,6 +236,12 @@ save() {
   else
     build_bundles "${targets[@]}"
   fi
+  # Bundles whose archives are missing must not reuse a stale cached closure
+  # manifest; re-enumerate from Nix instead of reusing a persisted .paths file
+  # that may correspond to a different bundle revision.
+  for name in "${targets[@]}"; do
+    rm -f -- "$SAVE_CLOSURE_CACHE/$name.paths" "$dir/$name.paths"
+  done
   closure_cached core > "$core_file"
   : > "$application_file"
   while IFS= read -r name; do

@@ -62,7 +62,10 @@ def backend_target(route: dict[str, Any]) -> str:
             raise ActivationProjectionError(f"unsafe on-demand upstream host {host!r}")
         if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
             raise ActivationProjectionError(f"invalid on-demand upstream port {port!r}")
-        # systemd-socket-proxyd splits at the last colon; URI brackets reach the resolver unchanged.
+        # systemd-socket-proxyd splits at the last colon; IPv6 addresses must be
+        # bracketed so the address/port split is unambiguous (e.g. [::1]:8080).
+        if ":" in host:
+            return f"[{host}]:{port}"
         return f"{host}:{port}"
     if target_type == "unix-http":
         raw = target.get("socket")

@@ -292,7 +292,11 @@ let
         exit 1
       fi
 
-      key="$($secret_reader show-zfs-key-stdin)" || {
+      # Mirror nas-zfs-export-recovery-key: prompt interactively on a TTY, read
+      # from stdin otherwise. The reader is chosen inline so the key-reading
+      # line stays a single self-contained statement (the test harness extracts
+      # the body starting at this line).
+      key="$($secret_reader $( [[ -t 0 ]] && echo show-zfs-key || echo show-zfs-key-stdin ))" || {
         echo "The KeePassXC ZFS key is missing. Run nas-secrets init first." >&2
         exit 1
       }

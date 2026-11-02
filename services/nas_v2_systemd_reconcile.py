@@ -167,6 +167,11 @@ def _read_owned_link(target: pathlib.Path, projection_roots: tuple[pathlib.Path,
     if target.is_symlink():
         raw = pathlib.Path(os.readlink(target))
         linked = raw if raw.is_absolute() else target.parent / raw
+        if not linked.exists():
+            # Dangling symlink: the runtime link exists but its target is
+            # missing. Treat as drift so the reconcile loop repairs it rather
+            # than failing the whole activation.
+            return None
         resolved = _is_under(linked, projection_roots, strict=True)
         if not resolved.is_file():
             raise SystemdReconcileError(f"V2 runtime link does not target a generated file: {target}")
@@ -460,7 +465,13 @@ def reconcile(
 
     try:
         for unit in sorted(units_to_stop):
-            _run_systemctl(systemctl, "stop", unit)
+            result = _run_systemctl(systemctl, "stop", unit, check=False)
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout).strip()
+                # A unit that is not loaded / not found is already stopped;
+                # tolerate it and keep stopping the rest.
+                if "not found" not in detail.lower():
+                    raise SystemdReconcileError(f"systemctl stop {unit} failed: {detail}")
         for unit in sorted(retired_units):
             _run_systemctl(systemctl, "reset-failed", unit, check=False)
 

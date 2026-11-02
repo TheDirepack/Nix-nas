@@ -3,11 +3,19 @@
 let
   cfg = config.nas;
   recoveryUsers = lib.attrValues config.users.users;
+  # sshd only admits users in nas-administrators (AllowGroups), so a recovery
+  # SSH key only counts for users who are actually allowed to log in via SSH.
   sshRecoveryConfigured =
     config.services.openssh.enable
     && lib.any (user:
-      lib.attrByPath [ "openssh" "authorizedKeys" "keys" ] [ ] user != [ ]
-      || lib.attrByPath [ "openssh" "authorizedKeys" "keyFiles" ] [ ] user != [ ]
+      let
+        groups = [ (user.group or "users") ] ++ (user.extraGroups or [ ]);
+      in
+      lib.elem "nas-administrators" groups
+      && (
+        lib.attrByPath [ "openssh" "authorizedKeys" "keys" ] [ ] user != [ ]
+        || lib.attrByPath [ "openssh" "authorizedKeys" "keyFiles" ] [ ] user != [ ]
+      )
     ) recoveryUsers;
 
   runtimeInputValidation = pkgs.writeShellScript "nas-installation-input-validation" ''

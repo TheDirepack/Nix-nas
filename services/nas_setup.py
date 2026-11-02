@@ -1101,6 +1101,7 @@ def _remove_setup_application() -> dict[str, Any]:
         "http://127.0.0.1:9000/api/v3",
     ]
     last_error: str | None = None
+    not_found_count = 0
     for base in bases:
         url = f"{base}/core/applications/{SETUP_APPLICATION_SLUG}/"
         request = urllib.request.Request(url, method="DELETE", headers={"Authorization": f"Bearer {token}"})
@@ -1110,13 +1111,19 @@ def _remove_setup_application() -> dict[str, Any]:
                 if response.status in (200, 201, 202, 204):
                     return {"removed": True, "slug": SETUP_APPLICATION_SLUG}
         except urllib.error.HTTPError as exc:
+            # BUG 9 fix: a 404 from one API base does not mean the application is
+            # absent everywhere; try the next base before concluding not-found. A
+            # 404 from all bases means the application truly does not exist.
             if exc.code == 404:
-                return {"removed": False, "reason": "not-found"}
+                not_found_count += 1
+                continue
             last_error = f"HTTP {exc.code}"
             continue
         except OSError as exc:
             last_error = str(exc)
             continue
+    if not_found_count == len(bases):
+        return {"removed": False, "reason": "not-found"}
     raise SetupError(f"Unable to retire the Authentik setup application: {last_error or 'unknown error'}")
 
 
@@ -1381,7 +1388,13 @@ def setup_state_matches(report: Mapping[str, Any]) -> bool:
         current = json.loads(STATE_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    return current == report
+    # BUG 3 fix: exclude volatile fields (completedAt, durationSeconds) that
+    # change on every resume attempt, so the postcondition is stable across
+    # resumes instead of flapping.
+    volatile = {"completedAt", "durationSeconds"}
+    current_stable = {k: v for k, v in current.items() if k not in volatile}
+    report_stable = {k: v for k, v in report.items() if k not in volatile}
+    return current_stable == report_stable
 
 
 def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
@@ -2092,6 +2105,14 @@ def first_run(args: argparse.Namespace) -> dict[str, Any]:
     reservation_token = getattr(args, "reservation_token", None)
     if not isinstance(reservation_token, str):
         reservation_token = None
+    # BUG 8 fix: refuse direct first-run re-execution after setup completes,
+    # preventing corruption of initialized state.
+    try:
+        existing = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        if isinstance(existing, dict) and existing.get("status") in {"complete", "complete-unverified"}:
+            raise SetupError("Initial setup is already complete; refusing direct first-run re-execution")
+    except (OSError, json.JSONDecodeError):
+        pass
     try:
         with acquire_operation("first-start-v2", SETUP_OPERATION_CLASSES, reservation_token=reservation_token):
             result = _first_run_locked(args)

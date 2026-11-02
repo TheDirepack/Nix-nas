@@ -197,7 +197,9 @@ nas_secret_tx_swap() {
   nas_secret_tx_stop_target || return $?
   NAS_SECRET_TX_PHASE=stopped
   if nas_secret_tx_privileged test -d "$NAS_SECRET_TX_ROOT"; then
-    nas_secret_tx_privileged mv "$NAS_SECRET_TX_ROOT" "$NAS_SECRET_TX_PREVIOUS" || return $?
+    # -T treats the destination as a normal file so it is replaced rather than
+  # nested inside it when it happens to be a directory.
+  nas_secret_tx_privileged mv -T "$NAS_SECRET_TX_ROOT" "$NAS_SECRET_TX_PREVIOUS" || return $?
     NAS_SECRET_TX_OLD_MOVED=true
   fi
   NAS_SECRET_TX_PHASE=old-moved
@@ -252,7 +254,9 @@ nas_secret_tx_rollback() {
       failed=true
     fi
   fi
-  nas_secret_tx_remove_directory || failed=true
+  if ! "$failed"; then
+    nas_secret_tx_remove_directory || failed=true
+  fi
   NAS_SECRET_TX_PHASE=rolled-back
   if "$failed"; then
     printf 'nas-secret-transaction: rollback was incomplete; inspect systemd and %s\n' "$NAS_SECRET_TX_ROOT" >&2

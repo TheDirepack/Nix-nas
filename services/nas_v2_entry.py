@@ -203,7 +203,15 @@ def main(*, overrides: dict[str, str | None] | None = None) -> int:
                         # current switch. Never let cleanup delete that tree.
                         pass
                 raise
-            prune_generations(generation_root, current_link=current_link, retain=3)
+            try:
+                prune_generations(generation_root, current_link=current_link, retain=3)
+            except Exception as exc:
+                # Post-publication prune failures are deferred: the generation
+                # is already published and current. A prune error must not
+                # turn a successful reconciliation into a fatal failure, and a
+                # symlink loop in the current link (RuntimeError from resolve)
+                # must not prevent reporting success either.
+                print(f"V2 reconcile: post-publication prune deferred: {exc}", file=sys.stderr)
             return 0
         raise GenerationError("desired state changed repeatedly during compilation; retry reconciliation")
     except Exception as exc:

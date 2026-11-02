@@ -24,16 +24,53 @@ class Finding:
     detail: str
 
 
-SHELL_EVAL_RE = re.compile(r"(?:^|&&|\|\||[;|&()])\s*(?:(?:if|elif|while|until|then|do)\s+)?eval(?:\s|$)")
-SHELL_XTRACE_RE = re.compile(
-    r"(?:^|&&|\|\||[;|&()])\s*(?:set\s+(?:-[A-Za-z]*x[A-Za-z]*|-o\s+xtrace)(?:\s|$)|(?:bash|sh)\s+-[A-Za-z]*x[A-Za-z]*(?:\s|$))"
-)
+# Quoted strings (single or double) are replaced with spaces so that eval or
+# xtrace appearing inside a string literal is not mistaken for an executed sink.
+_QUOTED_RE = re.compile(r"""(?:'[^']*'|"[^"]*")""")
+
+
+def _strip_quoted_strings(line: str) -> str:
+    """Return the line with quoted string contents blanked out."""
+
+    return _QUOTED_RE.sub(" ", line)
 
 
 def shell_eval_in_command_position(line: str) -> bool:
-    """Return true only when the shell eval builtin appears as a command."""
+    """Return true only when the shell eval builtin appears as a command.
 
-    return SHELL_EVAL_RE.search(line) is not None
+    Matches eval at command position (line start or after ; | & && || ( )),
+    optionally preceded by negation (!), variable assignments, and command
+    wrappers (command, builtin, command builtin). Does not match when --
+    appears between the command prefix and eval, because -- ends option
+    parsing and eval is then not an executed command.
+    """
+
+    stripped = _strip_quoted_strings(line)
+    for match in re.finditer(
+        r"(?:^|&&|\|\||[;|&(){]|`)\s*(?:!\s+|else\s+)?"
+        r"(?:[A-Za-z_][A-Za-z0-9_]*=[^\s;|&()]*\s+)*"
+        r"(?:command\s+(?:builtin\s+)?|builtin\s+)?"
+        r"eval(?!\w)",
+        stripped,
+    ):
+        eval_pos = match.group().rfind("eval")
+        prefix = match.group()[:eval_pos]
+        if "--" in prefix:
+            continue
+        return True
+    return False
+
+
+SHELL_XTRACE_RE = re.compile(
+    r"(?:^|&&|\|\||[;|&()])\s*"
+    r"(?:"
+    r"set\s+-?[A-Za-z]*(?:\s+-?[A-Za-z]*)*x[A-Za-z]*|"   # set -x, set -euxo, set -e -x
+    r"set\s+-o\s+xtrace|"                                  # set -o xtrace
+    r"(?:bash|sh)\s+-?[A-Za-z]*(?:\s+-?[A-Za-z]*)*x[A-Za-z]*|"  # bash -x, bash -e -x
+    r"(?:bash|sh)\s+-o\s+xtrace"                           # bash -o xtrace
+    r")"
+    r"(?:\s|$|;)"
+)
 
 
 def shell_xtrace_enabled(line: str) -> bool:
@@ -197,9 +234,22 @@ def scan_web(path: pathlib.Path) -> list[Finding]:
     return findings
 
 
+def _read_lines(path: pathlib.Path) -> list[str] | None:
+    """Return the lines of a file, or None if it cannot be read."""
+
+    try:
+        return path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+
+
 def scan_shell(path: pathlib.Path) -> list[Finding]:
     findings: list[Finding] = []
-    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    lines = _read_lines(path)
+    if lines is None:
+        findings.append(Finding(path, 1, "unreadable-source", f"cannot read {path}"))
+        return findings
+    for lineno, line in enumerate(lines, 1):
         stripped = line.lstrip()
         if stripped.startswith("#"):
             continue
@@ -217,7 +267,11 @@ def scan_shell(path: pathlib.Path) -> list[Finding]:
 def scan_nix(path: pathlib.Path) -> list[Finding]:
     """Scan shell fragments embedded in Nix without pretending to parse the Nix language."""
     findings: list[Finding] = []
-    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    lines = _read_lines(path)
+    if lines is None:
+        findings.append(Finding(path, 1, "unreadable-source", f"cannot read {path}"))
+        return findings
+    for lineno, line in enumerate(lines, 1):
         stripped = line.lstrip()
         if stripped.startswith("#"):
             continue
@@ -248,6 +302,10 @@ def files(root: pathlib.Path, suffixes: set[str]) -> list[pathlib.Path]:
 
 def main() -> int:
     findings: list[Finding] = []
+    for root in (*PYTHON_ROOTS, *WEB_ROOTS, *SHELL_ROOTS, *NIX_ROOTS):
+        if not root.is_dir():
+            print(f"scan root missing: {root}", file=sys.stderr)
+            return 1
     for root in PYTHON_ROOTS:
         for path in files(root, {".py"}):
             findings.extend(scan_python(path))

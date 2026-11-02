@@ -46,7 +46,7 @@ let
     [/shares/admin/copyparty-config]
       ${copypartyUserConfigDir}
       accs:
-      A: @nas_admin
+        A: @nas_admin
       flags:
         noidx: .*
         nohtml

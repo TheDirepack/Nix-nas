@@ -9,6 +9,10 @@ import {
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
+  Modal,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
   Spinner,
   Title,
 } from "@patternfly/react-core";
@@ -45,6 +49,7 @@ export function SourcePage({data, mutate, busy}) {
     ? operations.busyClasses.includes("appliance") || operations.busyClasses.includes("update")
     : false;
   const [result, setResult] = useState(null);
+  const [confirmOperation, setConfirmOperation] = useState(null);
   const runSource = async (operation) =>
     setResult(await mutate(() => apiInput(["source-control"], {operation})));
   const runUpdate = async (operation) =>
@@ -130,14 +135,47 @@ export function SourcePage({data, mutate, busy}) {
           </p>
           <div className="nas-actions nas-actions--wrap">
             {UPDATE_OPS.map(({operation, label}) => (
-              <Button
-                key={operation}
-                variant="primary"
-                isDisabled={busy || applianceBusy}
-                onClick={() => runUpdate(operation)}
-              >
-                {label}
-              </Button>
+              <React.Fragment key={operation}>
+                <Button
+                  key={`${operation}-button`}
+                  variant="primary"
+                  isDisabled={busy || applianceBusy}
+                  onClick={() => setConfirmOperation(operation)}
+                >
+                  {label}
+                </Button>
+                {confirmOperation === operation ? (
+                  <Modal
+                    isOpen
+                    variant={ModalVariant.small}
+                    aria-label={`Confirm ${label}`}
+                    onClose={() => setConfirmOperation(null)}
+                  >
+                    <ModalHeader title={`Confirm ${label}`} titleIconVariant="warning" />
+                    <ModalBody>
+                      <p>
+                        Run <strong>{label}</strong>? This action can change appliance state and
+                        cannot be undone.
+                      </p>
+                    </ModalBody>
+                    <ModalFooter>
+                      <Button
+                        variant="danger"
+                        onClick={() => {
+                          setConfirmOperation(null);
+                          runUpdate(operation);
+                        }}
+                        isDisabled={busy}
+                      >
+                        Confirm
+                      </Button>
+                      <Button variant="link" onClick={() => setConfirmOperation(null)} isDisabled={busy}>
+                        Cancel
+                      </Button>
+                    </ModalFooter>
+                  </Modal>
+                ) : null}
+              </React.Fragment>
             ))}
           </div>
         </CardBody>

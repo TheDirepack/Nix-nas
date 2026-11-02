@@ -22,6 +22,7 @@ from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 
 from nas_common import fsync_directory as _fsync_directory
+from nas_v2_editor import authority_lock
 from nas_v2_spec import ManagedServicesV2Error, compile_document, load_platform_capabilities, load_schema
 
 
@@ -186,24 +187,6 @@ def _clear_marker(marker: pathlib.Path) -> None:
     _fsync_directory(marker.parent)
 
 
-def _authority_lock(path: pathlib.Path):
-    import fcntl
-    from contextlib import contextmanager
-
-    @contextmanager
-    def _lock():
-        lock_path = path.with_name(f".{path.name}.lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle, fcntl.LOCK_UN)
-
-    return _lock()
-
-
 def migrate(
     *,
     desired: pathlib.Path,
@@ -215,7 +198,7 @@ def migrate(
     """Install the baseline only when the seed unit proved no prior authority existed."""
     # Use authority lock to serialize concurrent first-start attempts so only one
     # complete authority is ever created and no partial union occurs.
-    with _authority_lock(desired):
+    with authority_lock(desired):
         if not marker.exists():
             return {
                 "changed": False,

@@ -121,7 +121,7 @@ export default function App() {
                 <CardTitle>Protected services are locked</CardTitle>
               </CardHeader>
               <CardBody>
-                <Form>
+                <Form onSubmit={(_event) => _event.preventDefault()}>
                   <FormGroup label="KeePassXC database password">
                     <TextInput
                       type="password"

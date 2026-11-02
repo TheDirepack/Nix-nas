@@ -112,7 +112,7 @@ class ContractTests(unittest.TestCase):
         )[0]
         protected = text("modules/nas/config/systemd-services.nix")
 
-        self.assertNotIn("nas-zfs-mount-guard.service", seed)
+        self.assertIn("nas-zfs-mount-guard.service", seed)
         self.assertNotIn("RequiresMountsFor", seed)
         self.assertIn("nas-zfs-mount-guard.service", reconcile)
         self.assertIn("systemd-tmpfiles --create --graceful --prefix", protected)
@@ -150,7 +150,9 @@ class ContractTests(unittest.TestCase):
         setup = text("services/nas_setup.py")
         self.assertIn("nas-bootstrap-authentik-secrets", applications)
         self.assertIn("openssl rand -hex 64", applications)
-        self.assertIn("AUTHENTIK_BOOTSTRAP_PASSWORD=${bootstrapPassword}", applications)
+        # The bootstrap administrator password is not embedded in this store
+        # script: it would be recoverable from /nix/store (CodeRabbit #62).
+        self.assertNotIn("AUTHENTIK_BOOTSTRAP_PASSWORD=", applications)
         self.assertIn('authentikRuntimeEnvironmentFile = "/run/nas-authentik/environment";', base)
         self.assertIn('authentikRuntimeApiTokenFile = "/run/nas-authentik/api-token";', base)
         self.assertIn("sudo systemctl reset-failed", secrets)

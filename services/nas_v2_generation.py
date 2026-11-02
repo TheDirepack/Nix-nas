@@ -85,20 +85,24 @@ def allocate_generation(root: pathlib.Path, revision: str) -> pathlib.Path:
 
 
 def _seal_tree(root: pathlib.Path) -> None:
-    """Make generated files immutable to ordinary runtime writers."""
+    """Make generated files immutable to ordinary runtime writers.
+
+    Sealed trees are owner-only: no world-read or traverse permission, so
+    unprivileged local users cannot inspect sealed generation output.
+    """
     for path in sorted(
         (item for item in root.rglob("*") if item.is_file()),
         key=lambda item: len(item.parts),
         reverse=True,
     ):
-        os.chmod(path, 0o444)
+        os.chmod(path, 0o400)
     for path in sorted(
         (item for item in root.rglob("*") if item.is_dir()),
         key=lambda item: len(item.parts),
         reverse=True,
     ):
-        os.chmod(path, 0o555)
-    os.chmod(root, 0o555)
+        os.chmod(path, 0o500)
+    os.chmod(root, 0o500)
 
 
 def _replace_symlink(path: pathlib.Path, target: str) -> None:
@@ -238,10 +242,18 @@ def _refuse_if_current(path: pathlib.Path, current_link: pathlib.Path) -> None:
 
 
 def _unseal_tree(path: pathlib.Path) -> None:
+    """Make a sealed generation tree writable again so shutil.rmtree can remove it.
+
+    Both directories and files are restored to owner-writable modes; sealed
+    files are read-only (0o400) and would otherwise block removal.
+    """
     os.chmod(path, 0o700)
-    for directory in (item for item in path.rglob("*") if item.is_dir()):
+    for item in path.rglob("*"):
         try:
-            os.chmod(directory, 0o700)
+            if item.is_dir():
+                os.chmod(item, 0o700)
+            else:
+                os.chmod(item, 0o600)
         except OSError:
             pass
 

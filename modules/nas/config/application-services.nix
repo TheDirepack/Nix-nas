@@ -550,7 +550,9 @@ in
           token="$(${pkgs.openssl}/bin/openssl rand -hex 32)"
           printf '%s\n' 'AUTHENTIK_SECRET_KEY='"$(${pkgs.openssl}/bin/openssl rand -hex 64)"
           printf '%s\n' 'AUTHENTIK_BOOTSTRAP_TOKEN='"$token"
-          printf '%s\n' 'AUTHENTIK_BOOTSTRAP_PASSWORD=${bootstrapPassword}'
+          # The bootstrap administrator password is not embedded in this store
+          # script: it would be recoverable from /nix/store. It is staged at
+          # runtime from KeePassXC by nas-secrets activate instead.
           printf '%s\n' 'AUTHENTIK_BOOTSTRAP_EMAIL=${cfg.identity.bootstrapEmail}'
         } > "$temporary"
         ${pkgs.coreutils}/bin/install -m 0640 -o root -g authentik "$temporary" "$environment"

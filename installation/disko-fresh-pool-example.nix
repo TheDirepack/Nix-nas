@@ -37,10 +37,6 @@
         acltype = "posixacl";
         mountpoint = "none";
       };
-      datasets.nas = {
-        type = "zfs_fs";
-        mountpoint = "/tank";
-      };
     };
   };
 }

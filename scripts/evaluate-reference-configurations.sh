@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+fail() { printf 'evaluate-reference-configurations: %s\n' "$*" >&2; exit 1; }
+
 # The repository's nixosConfigurations.nas intentionally imports the checked-in
 # hardware-configuration.nix placeholder.  That output becomes bootable only
 # after an administrator replaces the placeholder with nixos-generate-config
@@ -30,12 +32,16 @@ checks=(
 
 for configuration in "${configurations[@]}"; do
   printf 'evaluating nixosConfigurations.%s\n' "$configuration"
-  nix eval --raw ".#nixosConfigurations.${configuration}.config.system.build.toplevel.drvPath" >/dev/null
+  if ! nix eval --raw ".#nixosConfigurations.${configuration}.config.system.build.toplevel.drvPath" >/dev/null; then
+    fail "nix eval failed for nixosConfigurations.${configuration}"
+  fi
 done
 
 for check in "${checks[@]}"; do
   printf 'evaluating checks.x86_64-linux.%s\n' "$check"
-  nix eval --raw ".#checks.x86_64-linux.${check}.drvPath" >/dev/null
+  if ! nix eval --raw ".#checks.x86_64-linux.${check}.drvPath" >/dev/null; then
+    fail "nix eval failed for checks.x86_64-linux.${check}"
+  fi
 done
 
 printf 'reference configuration evaluation passed: %d configurations, %d checks\n' \

@@ -108,6 +108,9 @@ class AuthentikCspPatchTests(unittest.TestCase):
             self.assertNotIn("styleMap", text, str(source))
             for tag in re.findall(r"<style\b[^>]*>", text):
                 self.assertIn("nonce=${window.litNonce}", tag)
+        skeleton = (self.tree / "authentik/core/templates/base/skeleton.html").read_text()
+        self.assertIn("window.litNonce", skeleton)
+        self.assertLess(skeleton.index("window.litNonce"), skeleton.index("{% block head_before %}"))
         progress = (self.tree / "web/src/elements/ak-progress-bar.ts").read_text()
         self.assertIn(".style=", progress)
         self.assertIn("Math.min(this.value, 100)", progress)
@@ -200,6 +203,7 @@ class AuthentikCspPatchTests(unittest.TestCase):
             django.setup()
         constants = importlib.import_module("csp.constants")
         namespace = {name: getattr(constants, name) for name in ("SELF", "NONE", "NONCE")}
+        namespace["SAML_IDP_FORM_ACTION_DOMAINS"] = ()
         policy = self.assignment("CONTENT_SECURITY_POLICY")
         self.assertIsNotNone(policy, "Authentik does not enforce a nonce CSP")
         directives = eval(compile(ast.Expression(policy), "authentik-csp-policy", "eval"), namespace)

@@ -333,14 +333,16 @@ for relative in sorted(selected, key=lambda value: value.as_posix()):
     if policy == "git-tracked-and-worktree" and ignored(relative):
         continue
     name = relative.as_posix()
-    if name in seen:
-        raise SystemExit(f"duplicate QEMU source path: {name}")
-    seen.add(name)
     source = root.joinpath(*relative.parts)
     try:
         mode = source.lstat().st_mode
-    except FileNotFoundError as error:
-        raise SystemExit(f"QEMU source path is missing: {relative}") from error
+    except FileNotFoundError:
+        if policy == "git-tracked-and-worktree":
+            continue  # tracked file deleted from the worktree; nothing to stage
+        raise SystemExit(f"QEMU source path is missing: {relative}")
+    if name in seen:
+        raise SystemExit(f"duplicate QEMU source path: {name}")
+    seen.add(name)
     if not stat.S_ISREG(mode):
         raise SystemExit(f"QEMU source path is not a regular file: {relative}")
     resolved = source.resolve(strict=True)
@@ -596,13 +598,20 @@ run_installer() {
     rm -f "$boot_log"
   fi
 
-  if [[ "$persistent_mode" != 1 || ! -s "$pidfile" ]]; then
-    rm -f "$pidfile"
-  elif nas_qemu_pid_from_pidfile "$pidfile"; then
-    :
+  if [[ -s "$pidfile" ]]; then
+    if nas_qemu_pid_from_pidfile "$pidfile"; then
+      # A live QEMU VM is recorded in the shared pidfile. Persistent mode may
+      # reuse it, but a disposable run must not start alongside it: the two
+      # would share state and corrupt each other's disks.
+      if [[ "$persistent_mode" != 1 ]]; then
+        die "refusing to start a disposable VM while a live QEMU VM is recorded in $pidfile"
+      fi
+    else
+      local pid_status=$?
+      (( pid_status == 2 )) && die "refusing to reuse a pidfile owned by a non-QEMU process: $pidfile"
+      rm -f "$pidfile"
+    fi
   else
-    local pid_status=$?
-    (( pid_status == 2 )) && die "refusing to reuse a pidfile owned by a non-QEMU process: $pidfile"
     rm -f "$pidfile"
   fi
   rm -f "$install_log"
@@ -793,7 +802,7 @@ run_installer() {
 run_installer_with_timeout() {
   local mode=$1 timeout_seconds
   case "$mode" in
-    persistent-test) timeout_seconds="${NAS_QEMU_FULL_SUITE_TIMEOUT:-$(nas_vm_full_suite_timeout_seconds)}" ;;
+    persistent-test) timeout_seconds="${NAS_QEMU_FULL_SUITE_TIMEOUT:-$(( $(nas_vm_full_suite_timeout_seconds) + $(nas_vm_outer_value slack) ))}" ;;
     *)
       timeout_seconds="${NAS_QEMU_INSTALLER_TIMEOUT:-$(nas_vm_installer_timeout_seconds)}"
       if [[ "${NAS_QEMU_PACKAGE_UPGRADE:-0}" == 1 && -z "${NAS_QEMU_INSTALLER_TIMEOUT:-}" ]]; then

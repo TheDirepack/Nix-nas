@@ -38,7 +38,7 @@ in
     # Replace only its generic Restic command chain (backup, unlock,
     # forget/prune, check) with resticprofile.
     systemd.services.restic-backups-nas-boot-system.serviceConfig.ExecStart = lib.mkForce [
-      "${pkgs.resticprofile}/bin/resticprofile --config ${profilePath} nas-boot-system.backup"
+      "${pkgs.resticprofile}/bin/resticprofile --config ${profilePath} --restic-binary ${pkgs.restic}/bin/restic nas-boot-system.backup"
     ];
   };
 }

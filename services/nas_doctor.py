@@ -352,6 +352,16 @@ def _authority_checks(deep: bool) -> tuple[list[Check], str | None]:
                     )
                 )
             continue
+        except OSError as exc:
+            checks.append(
+                Check(
+                    f"state.authority.{authority.name}",
+                    "critical",
+                    "State authority is unreadable",
+                    str(exc),
+                )
+            )
+            continue
         try:
             if stat.S_ISLNK(mode):
                 raise StateError(f"authority root is a symlink: {path}")
@@ -389,7 +399,7 @@ def build_report(*, deep: bool = False) -> dict[str, Any]:
 
     try:
         operations = operation_state()
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
         operations = {"busyClasses": [], "active": [], "error": str(exc)}
         checks.append(Check("operations.coordinator", "warning", "Operation coordinator is unreadable", str(exc)))
     else:

@@ -191,6 +191,18 @@ class V2SourceWatchTests(unittest.TestCase):
             with self.assertRaisesRegex(source_watch.SourceWatchProjectionError, "rejected"):
                 source_watch.validate_source_watches(files, systemd_analyze_bin=str(validator))
 
+    def test_validate_passes_recursive_errors_to_systemd_analyze(self):
+        with mock.patch.object(source_watch.subprocess, "run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            files = {
+                pathlib.Path("/projection/units/nas-v2-source-demo.path"): b"[Path]\nPathChanged=/tmp/demo\n",
+            }
+            source_watch.validate_source_watches(files, systemd_analyze_bin="/bin/systemd-analyze")
+            args = mock_run.call_args.args[0]
+            self.assertEqual(args[0], "/bin/systemd-analyze")
+            self.assertEqual(args[1], "verify")
+            self.assertIn("--recursive-errors=one", args)
+
     def test_reconciler_safe_target_accepts_path_units(self):
         target, affected = reconcile._safe_target(
             pathlib.Path("/run/systemd/system"),

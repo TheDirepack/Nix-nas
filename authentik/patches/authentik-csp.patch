@@ -1,11 +1,17 @@
 diff --git a/authentik/root/settings.py b/authentik/root/settings.py
 --- a/authentik/root/settings.py
 +++ b/authentik/root/settings.py
-@@ -6,6 +6,7 @@
+@@ -6,6 +6,13 @@
  from pathlib import Path
  
  import orjson
 +from csp.constants import NONCE, NONE, SELF
++
++# External SAML IdP domains allowed as cross-origin form-action targets.
++# Populate with your IdP's ACS hostnames, e.g. ("https://idp.example.org",).
++# These are in addition to 'self' so SAML POST responses from external IdPs
++# are not blocked by CSP.
++SAML_IDP_FORM_ACTION_DOMAINS: tuple[str, ...] = ()
  from django.utils import http as utils_http
  from sentry_sdk import set_tag
  from xmlsec import enable_debug_trace
@@ -28,7 +34,7 @@ diff --git a/authentik/root/settings.py b/authentik/root/settings.py
 +        "object-src": [NONE],
 +        "frame-ancestors": [SELF],
 +        "base-uri": [SELF],
-+        "form-action": [SELF],
++        "form-action": [SELF, *SAML_IDP_FORM_ACTION_DOMAINS],
 +    }
 +}
 +

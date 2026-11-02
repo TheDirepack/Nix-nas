@@ -96,7 +96,7 @@ class PublicationCleanupSeparationTests(unittest.TestCase):
                 mock.patch.object(entry, "discard_generation", side_effect=_spy_discard),
                 contextlib.redirect_stderr(io.StringIO()),
             ):
-                self.assertEqual(1, entry.main())
+                self.assertEqual(0, entry.main())
             published = generations / REV2
             self.assertTrue(published.is_dir(), "post-publication prune failure must not discard current output")
             self.assertNotIn(REV2, discarded)
@@ -125,8 +125,32 @@ class PublicationCleanupSeparationTests(unittest.TestCase):
                 self.addCleanup(patch.stop)
             with mock.patch.object(entry, "prune_generations", side_effect=_flaky_prune):
                 with contextlib.redirect_stderr(io.StringIO()):
-                    self.assertEqual(1, entry.main())
+                    self.assertEqual(0, entry.main())
             with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(0, entry.main())
+            self.assertEqual(EFFECTIVE_V2, (runtime / "effective.json").read_text(encoding="utf-8"))
+            self.assertTrue((runtime / "current").resolve(strict=True).is_dir())
+
+    def test_prune_oserror_after_publication_is_deferred(self) -> None:
+        """Direct OSError from pruning (e.g. symlink loop in current link) is deferred, not fatal."""
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = pathlib.Path(tmp) / "run"
+            repo = pathlib.Path(tmp) / "repo"
+            repo.mkdir()
+            _seed_current(runtime, REV1, EFFECTIVE_V1)
+
+            def _oserror_prune(*args: object, **kwargs: object) -> list[pathlib.Path]:
+                raise OSError("injected OSError pruning failure")
+
+            with (
+                mock.patch.dict(os.environ, _entry_env(runtime, repo), clear=False),
+                mock.patch.object(entry.sys, "argv", ["nas_v2_entry.py"]),
+                mock.patch.object(entry, "ensure_bootstrap_applied", return_value={}),
+                mock.patch.object(entry, "record_desired", return_value={"head": REV2}),
+                mock.patch.object(entry, "_apply_once", side_effect=_fake_apply(EFFECTIVE_V2, REV2)),
+                mock.patch.object(entry, "prune_generations", side_effect=_oserror_prune),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
                 self.assertEqual(0, entry.main())
             self.assertEqual(EFFECTIVE_V2, (runtime / "effective.json").read_text(encoding="utf-8"))
             self.assertTrue((runtime / "current").resolve(strict=True).is_dir())

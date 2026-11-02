@@ -105,6 +105,8 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
                     artifact.mkdir(parents=True, exist_ok=True)
                     (artifact / "partial.dump").write_bytes(b"partial-sensitive-bytes")
                     raise backup.BackupRuntimeError("preparation unit failed")
+                if argv == ["/bin/systemctl", "stop", "nas-v2-database-dump.service"]:
+                    return ""
                 raise AssertionError(f"unexpected command: {argv}")
 
             backup._run = fake_run
@@ -146,6 +148,8 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
                     artifact.mkdir(parents=True, exist_ok=True)
                     (artifact / "partial.dump").write_bytes(b"partial-sensitive-bytes")
                     raise backup.BackupRuntimeError("preparation unit failed")
+                if argv == ["/bin/systemctl", "stop", "nas-v2-database-dump.service"]:
+                    return ""
                 raise AssertionError(f"unexpected command: {argv}")
 
             def failing_remove(_path: str) -> None:
@@ -528,6 +532,54 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
                 backup.BACKUP_STAGING_ROOT = original_root
             self.assertFalse(state_path.exists())
             self.assertFalse((artifact / "backup.db").exists())
+
+    def test_failed_dump_preparation_stops_unit_before_artifact_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            staging = root / "backup-staging"
+            artifact = staging / "database-artifact"
+            inventory_path = root / "inventory.json"
+            paths_path = root / "paths.txt"
+            state_path = root / "state.json"
+            inventory_path.write_text(json.dumps(_native_inventory(artifact)), encoding="utf-8")
+            original_run = backup._run
+            original_root = backup.BACKUP_STAGING_ROOT
+            backup.BACKUP_STAGING_ROOT = staging
+            calls: list[list[str]] = []
+
+            def fake_run(argv: list[str]) -> str:
+                calls.append(argv)
+                if argv == ["/bin/systemctl", "restart", "nas-v2-database-dump.service"]:
+                    artifact.mkdir(parents=True, exist_ok=True)
+                    (artifact / "partial.dump").write_bytes(b"partial-sensitive-bytes")
+                    raise backup.BackupRuntimeError("preparation unit failed")
+                if argv == ["/bin/systemctl", "stop", "nas-v2-database-dump.service"]:
+                    return ""
+                raise AssertionError(f"unexpected command: {argv}")
+
+            backup._run = fake_run
+            try:
+                with self.assertRaises(backup.BackupRuntimeError):
+                    backup.prepare(
+                        inventory_path=inventory_path,
+                        paths_path=paths_path,
+                        state_path=state_path,
+                        zfs_bin="/bin/zfs",
+                        systemctl_bin="/bin/systemctl",
+                    )
+            finally:
+                backup._run = original_run
+                backup.BACKUP_STAGING_ROOT = original_root
+            # Restart is attempted first; on failure the unit is stopped before cleanup.
+            restart = ["/bin/systemctl", "restart", "nas-v2-database-dump.service"]
+            stop = ["/bin/systemctl", "stop", "nas-v2-database-dump.service"]
+            self.assertEqual(calls[0], restart)
+            self.assertIn(stop, calls)
+            self.assertLess(calls.index(restart), calls.index(stop))
+            # The staged artifact is cleaned up after the unit is stopped.
+            self.assertFalse(paths_path.exists())
+            self.assertFalse(state_path.exists())
+            self.assertFalse(artifact.exists())
 
 
 if __name__ == "__main__":

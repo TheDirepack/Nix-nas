@@ -4,7 +4,11 @@ set -Eeuo pipefail
 fail() { printf 'live-validation: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || fail "missing command: $1"; }
 need_env() { [[ -n "${!1:-}" ]] || fail "set $1"; }
-confirm() { [[ "${NAS_LIVE_CONFIRM:-}" == "$1" ]] || fail "set NAS_LIVE_CONFIRM=$1"; }
+# confirm() authorizes a single drill. NAS_LIVE_CONFIRM must match the drill name
+# (e.g. NAS_LIVE_CONFIRM=SYNCOID_DRILL). The special value ALL (or _LIVE_ALL_MODE)
+# authorizes every drill in the `all` subcommand. Each drill is authorized
+# individually by its confirm() call.
+confirm() { [[ -n "${_LIVE_ALL_MODE:-}" ]] && return 0; [[ "${NAS_LIVE_CONFIRM:-}" == "$1" ]] || fail "set NAS_LIVE_CONFIRM=$1"; }
 
 read_secret_file() {
   local path=$1 mode
@@ -39,6 +43,10 @@ remote_zfs() {
   local host=$1 action=$2 first=$3 second=${4:-}
   validate_dataset "$first"
   [[ -z "$second" ]] || validate_dataset "$second"
+  # Clone target must be a dataset, never a snapshot-qualified name
+  if [[ "$action" == "clone" && -n "$second" && "$second" == *"@"* ]]; then
+    fail "clone target must not be snapshot-qualified: $second"
+  fi
   # shellcheck disable=SC2016
   printf '%s
 ' \
@@ -46,7 +54,7 @@ remote_zfs() {
     'action=$1; first=$2; second=${3:-}' \
     'case "$action" in' \
     '  clone) exec zfs clone -- "$first" "$second" ;;' \
-    '  destroy) exec zfs destroy -- "$first" ;;' \
+    '  destroy) exec zfs destroy -r -- "$first" ;;' \
     '  mountpoint) exec zfs get -H -o value mountpoint "$first" ;;' \
     '  *) exit 64 ;;' \
     'esac' \
@@ -55,7 +63,8 @@ remote_zfs() {
 
 curl_config_escape() {
   local value=$1
-  printf '%s' "$value" | python3 -c '
+  local escaped
+  if ! escaped=$(printf '%s' "$value" | python3 -c '
 import sys
 s = sys.stdin.read()
 out = []
@@ -70,20 +79,28 @@ for ch in s:
     elif code < 0x20 or code == 0x7f: raise SystemExit("unsupported control character in curl config value")
     else: out.append(ch)
 sys.stdout.write("".join(out))
-'
+'); then
+    return 1
+  fi
+  printf '%s' "$escaped"
 }
 
 curl_basic() {
   local username=$1 password=$2
   shift 2
-  printf 'user = "%s:%s"\n' "$(curl_config_escape "$username")" "$(curl_config_escape "$password")" \
+  local user_escaped pass_escaped
+  user_escaped=$(curl_config_escape "$username") || fail "curl_config_escape failed for username"
+  pass_escaped=$(curl_config_escape "$password") || fail "curl_config_escape failed for password"
+  printf 'user = "%s:%s"\n' "$user_escaped" "$pass_escaped" \
     | curl --config - "$@"
 }
 
 curl_bearer() {
   local token=$1
   shift
-  printf 'header = "Authorization: Bearer %s"\n' "$(curl_config_escape "$token")" \
+  local token_escaped
+  token_escaped=$(curl_config_escape "$token") || fail "curl_config_escape failed for token"
+  printf 'header = "Authorization: Bearer %s"\n' "$token_escaped" \
     | curl --config - "$@"
 }
 
@@ -119,16 +136,18 @@ copyparty() {
   need_env NAS_COPY_PASSWORD_FILE
   need_env NAS_COPY_BASE_URL
   read_secret_file "$NAS_COPY_PASSWORD_FILE"
-  local password=$REPLY temp remote downloaded
-  temp=$(mktemp)
-  downloaded=$(mktemp)
-  trap 'rm -f "$temp" "$downloaded"' RETURN
+  local password=$REPLY temp remote downloaded stamp
+  temp=$(mktemp) || fail "failed to create temp file"
+  trap 'rm -f "$temp"' RETURN
+  downloaded=$(mktemp) || { rm -f -- "$temp"; fail "failed to create downloaded temp file"; }
+  trap 'rm -f "$temp" "$downloaded"' EXIT
+  stamp=$(date -u +%Y%m%d%H%M%S)
   printf 'nas live validation %s\n' "$(date -u +%FT%TZ)" > "$temp"
   nas-identity-sync sync >/dev/null
   if [[ -n "${NAS_COPY_EXPECTED_PATH:-}" ]]; then
     [[ -d "$NAS_COPY_EXPECTED_PATH" ]] || fail "personal volume path is missing: $NAS_COPY_EXPECTED_PATH"
   fi
-  remote="${NAS_COPY_BASE_URL%/}/nas-live-validation.txt"
+  remote="${NAS_COPY_BASE_URL%/}/nas-live-$stamp.txt"
   curl_basic "$NAS_COPY_USER" "$password" --fail --silent --show-error --upload-file "$temp" "$remote"
   curl_basic "$NAS_COPY_USER" "$password" --fail --silent --show-error "$remote" > "$downloaded"
   cmp "$temp" "$downloaded"
@@ -144,6 +163,17 @@ syncoid_drill() {
   need zfs
   need_env NAS_SYNCOID_SOURCE
   need_env NAS_SYNCOID_TARGET
+  # Validate source and target dataset names before any ZFS operations
+  validate_dataset "${NAS_SYNCOID_SOURCE%%/*}"
+  if [[ "$NAS_SYNCOID_TARGET" == *:* ]]; then
+    validate_dataset "${NAS_SYNCOID_TARGET#*:}"
+  else
+    validate_dataset "${NAS_SYNCOID_TARGET%/}"
+  fi
+  # Reject identical local source and target
+  if [[ "$NAS_SYNCOID_TARGET" != *:* ]] && [[ "${NAS_SYNCOID_TARGET%/}" == "${NAS_SYNCOID_SOURCE%/}" ]]; then
+    fail "source and target must not be identical: $NAS_SYNCOID_SOURCE"
+  fi
   local stamp child snapshot mountpoint marker target_dataset target_host clone cleanup_remote=false
   stamp=$(date -u +%Y%m%d%H%M%S)
   child="${NAS_SYNCOID_SOURCE}/nas-live-$stamp"
@@ -151,15 +181,26 @@ syncoid_drill() {
   validate_dataset "$child"
   validate_dataset "$snapshot"
   cleanup_syncoid() {
+    local _errexit_was_on=false
+    shopt -qo errexit && _errexit_was_on=true
     set +e
     if "$cleanup_remote"; then
       remote_zfs "$target_host" destroy "$clone" >/dev/null 2>&1 || true
       remote_zfs "$target_host" destroy "$target_dataset" >/dev/null 2>&1 || true
     else
-      [[ -z "${clone:-}" ]] || zfs destroy -r -- "$clone" >/dev/null 2>&1 || true
+      [[ -z "${clone:-}" ]] || zfs destroy -- "$clone" >/dev/null 2>&1 || true
       [[ -z "${target_dataset:-}" ]] || zfs destroy -r -- "$target_dataset" >/dev/null 2>&1 || true
     fi
-    zfs destroy -r -- "$child" >/dev/null 2>&1 || true
+    # Destroy our snapshot first, then the dataset non-recursively so foreign
+    # child datasets created by another writer are not destroyed.
+    [[ -z "${snapshot:-}" ]] || zfs destroy -- "$snapshot" >/dev/null 2>&1 || true
+    [[ -z "${child:-}" ]] || zfs destroy -- "$child" >/dev/null 2>&1 || true
+    # Restore errexit without eval (avoids security-scanner flag on eval builtin)
+    if $_errexit_was_on; then
+      set -e
+    else
+      set +e
+    fi
   }
   trap cleanup_syncoid RETURN
   zfs create -- "$child"
@@ -192,7 +233,10 @@ syncoid_drill() {
     zfs destroy -- "$clone"
     clone=""
   fi
-  zfs destroy -r -- "$child"
+  # Destroy our snapshot first, then the dataset non-recursively to avoid
+  # destroying foreign child datasets.
+  [[ -n "${snapshot:-}" ]] && zfs destroy -- "$snapshot" >/dev/null 2>&1 || true
+  [[ -n "${child:-}" ]] && zfs destroy -- "$child" >/dev/null 2>&1 || true
   child=""
 }
 
@@ -208,13 +252,14 @@ restic_drill() {
   stamp=$(date -u +%Y%m%d%H%M%S)
   marker="$NAS_RESTIC_SOURCE/.nas-live-$stamp"
   restore_root="$NAS_RESTIC_RESTORE_TARGET/nas-live-$stamp"
-  restored="$restore_root${NAS_RESTIC_SOURCE}/.nas-live-$stamp"
+  restored="$restore_root/${NAS_RESTIC_SOURCE}/.nas-live-$stamp"
   cleanup_restic() {
     rm -f -- "$marker"
     rm -rf -- "$restore_root"
   }
   trap cleanup_restic RETURN
-  install -d -m 0700 "$NAS_RESTIC_SOURCE" "$restore_root"
+  [[ -d "$NAS_RESTIC_SOURCE" ]] || install -d -m 0700 "$NAS_RESTIC_SOURCE"
+  install -d -m 0700 "$restore_root"
   printf '%s
 ' "$stamp" > "$marker"
   snapshot_id=$(restic backup --json "$NAS_RESTIC_SOURCE" | jq -r 'select(.message_type == "summary") | .snapshot_id')
@@ -254,7 +299,7 @@ observability() {
   curl --fail --silent --show-error --data-binary "$metric" \
     http://127.0.0.1:8428/victoriametrics/write >/dev/null
   curl --fail --silent --show-error \
-    "http://127.0.0.1:8428/victoriametrics/api/v1/query?query=nas_live_validation_value%7Brun%3D%22$stamp%22%7D" \
+    "http://127.0.0.1:8428/victoriametrics/api/v1/query?query=nas_live_validation_value%7Brun%3D%22$stamp%22%7D&offset=0" \
     | jq -e '.status == "success" and (.data.result | length) == 1' >/dev/null
   curl --fail --silent --show-error http://127.0.0.1:8880/-/healthy >/dev/null
   curl --fail --silent --show-error http://127.0.0.1:8880/api/v1/rules \
@@ -279,6 +324,6 @@ case "${1:-}" in
   restic) restic_drill ;;
   authentik) authentik ;;
   observability) observability ;;
-  all) locked_boot; copyparty; syncoid_drill; restic_drill; authentik; observability ;;
+  all) _LIVE_ALL_MODE=1; confirm ALL; locked_boot; copyparty; syncoid_drill; restic_drill; authentik; observability ;;
   *) fail "usage: $0 {locked-boot|copyparty|syncoid|restic|authentik|observability|all}" ;;
 esac

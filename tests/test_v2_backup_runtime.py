@@ -573,6 +573,12 @@ class V2BackupRuntimeTests(unittest.TestCase):
             self.assertFalse(state_path.exists())
             self.assertFalse(paths_path.exists())
 
+    def test_run_wraps_os_error_into_backup_runtime_error(self):
+        with self.assertRaisesRegex(
+            runtime.BackupRuntimeError, "unable to execute native backup command"
+        ):
+            runtime._run(["/nonexistent-path-to-native-backup-binary"])
+
 
 if __name__ == "__main__":
     unittest.main()

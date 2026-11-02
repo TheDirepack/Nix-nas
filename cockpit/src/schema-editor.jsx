@@ -34,9 +34,18 @@ function description(schema) {
 }
 
 function replaceObjectKey(value, oldKey, newKey) {
-  const result = {};
+  // Object.create(null) yields a prototype-less object so "__proto__" is
+  // always an own data property, never resolved through the prototype chain.
+  // Object.defineProperty copies each entry explicitly so "__proto__" is
+  // preserved as an enumerable own key rather than triggering the setter.
+  const result = Object.create(null);
   for (const [key, entry] of Object.entries(value || {})) {
-    result[key === oldKey ? newKey : key] = entry;
+    Object.defineProperty(result, key === oldKey ? newKey : key, {
+      enumerable: true,
+      writable: true,
+      configurable: true,
+      value: entry,
+    });
   }
   return result;
 }
@@ -239,13 +248,17 @@ function ObjectEditor({root, schema, value, onChange, path}) {
         </div>
       ) : null}
 
-      {dynamicEntries.map(([name, entry]) => (
-        <div className="nas-schema-map-entry" key={`${path}.${name}`}>
+      {dynamicEntries.map(([name, entry], index) => (
+        <div className="nas-schema-map-entry" key={`${path}-map-${index}`}>
           <div className="nas-schema-map-key">
             <TextInput
               value={name}
               aria-label={`Key for ${name}`}
-              onChange={(_event, next) => {
+              onChange={(event, next) => {
+                // Ignore changes while an IME composition is active. Safari
+                // reports isComposing as false around composition-end, so
+                // confirming a candidate must not prematurely commit a rename.
+                if (event.nativeEvent?.isComposing) return;
                 if (
                   !next ||
                   hasOwn(object, next) ||

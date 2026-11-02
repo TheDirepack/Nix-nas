@@ -310,11 +310,10 @@ def _transient_command(
         # supervisor used to perform in a ``finally`` block.
         f"--property=ExecStopPost={descriptor['podman']} rm --force --ignore "
         f"{container_name(descriptor['serviceId'], instance_id, user_id)}",
-        "--",
-        *run,
     ]
     if user_id is not None:
-        command.extend(["--user", user_id])
+        command.append("--user")
+    command.extend(["--", *run])
     return command
 
 
@@ -740,6 +739,7 @@ def generate_projection(
         target = _session_target(service_id)
         if not service["enabled"]:
             stop.add(target)
+            owned.add(target)
             continue
         descriptor = _descriptor(
             effective,
@@ -754,6 +754,26 @@ def generate_projection(
         files[target_path] = _target_unit(service_id)
         links.append({"target": target, "source": str(target_path)})
         owned.add(target)
+        # Resolved inputs that must be captured in the fingerprint so any
+        # change to storage roots, credential paths, or resolved network
+        # references forces descriptor regeneration. The raw service
+        # attachments (storage/credentials) only name resources; the actual
+        # paths live in the effective document and must be fingerprinted too.
+        storage_resources = effective.get("storageResources", {})
+        resolved_storage = sorted(
+            str(storage_resources.get(attachment.get("resource", ""), {}).get("path", ""))
+            for attachment in service.get("storage", [])
+        )
+        credential_resources = effective.get("credentials", {})
+        resolved_credentials = sorted(
+            str(credential_resources.get(attachment.get("credential", ""), {}).get("path", ""))
+            for attachment in service.get("credentials", [])
+        )
+        try:
+            resolved_network = quadlet_network_reference(effective, service_id, service)
+        except PodmanNetworkProjectionError:
+            resolved_network = None
+
         fingerprints[target] = _fingerprint(
             {
                 "runtime": service["runtime"],
@@ -762,8 +782,11 @@ def generate_projection(
                 "sandbox": service["sandbox"],
                 "storage": service["storage"],
                 "credentials": service["credentials"],
+                "storagePaths": resolved_storage,
+                "credentialPaths": resolved_credentials,
                 "network": service.get("network"),
                 "networkProfile": service.get("networkProfile"),
+                "networkReference": resolved_network,
                 "requiresUser": descriptor["requiresUser"],
             }
         )

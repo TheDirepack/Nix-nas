@@ -90,7 +90,7 @@ let
     [[ "$device" == /dev/* && "$device" != *".."* && "$device" != *$'\n'* ]] || die
     if [[ $# -eq 10 ]]; then
       [[ "$9" == "-d" ]] || die
-      [[ "$10" =~ ^[A-Za-z0-9_,:+.-]+$ ]] || die
+      [[ "${10}" =~ ^[A-Za-z0-9_,:+.-]+$ ]] || die
     elif [[ $# -ne 8 ]]; then
       die
     fi
@@ -331,7 +331,9 @@ in
       systemd.services.telegraf = {
         after = [ "victoriametrics.service" ];
         requires = [ "victoriametrics.service" ];
-        path = [ pkgs.sudo ];
+        # /run/wrappers/bin is on the default systemd service PATH and provides
+        # the NixOS setuid sudo wrapper; do not shadow it with the non-setuid
+        # Nix-store pkgs.sudo (SMART scans require the setuid wrapper).
         serviceConfig = {
           AmbientCapabilities = lib.mkForce [ ];
           RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
@@ -381,7 +383,10 @@ in
             {
               source_matchers = [ ''severity="critical"'' ];
               target_matchers = [ ''severity="warning"'' ];
-              equal = [ "alertname" "instance" ];
+              # Critical and warning alerts for the same resource carry distinct
+              # alertnames, so matching on alertname never pairs them. Inhibit on
+              # the instance so a critical alert silences sibling warnings.
+              equal = [ "instance" ];
             }
           ];
           receivers = [ { name = "discard"; } ] ++ lib.optional obs.ntfy.enable {
@@ -532,7 +537,11 @@ in
           NUTWG__UPSD__ADDRESS = cfg.power.ups.web.upsdAddress;
           NUTWG__UPSD__PORT = toString cfg.power.ups.web.upsdPort;
           NUTWG__UPSD__USERNAME = cfg.power.ups.monitorUser;
-          NUTWG__UPSD__PASSWORD = "/run/secrets/nut-password";
+          # Pass the UPS monitor password value (not the mounted file path) to
+          # the NUT Web GUI. Read from the boot-available secret file at
+          # evaluation time; absent file yields an empty value rather than
+          # failing a configuration build.
+          NUTWG__UPSD__PASSWORD = "${lib.optionalString (builtins.pathExists cfg.power.ups.passwordFile) (lib.removeSuffix "\n" (builtins.readFile cfg.power.ups.passwordFile))}";
           NUTWG__UPSD__POLL_INTERVAL = "2";
           NUTWG__UPSD__POLL_FREQ = "30";
           NUTWG__SERVER_KEY = "/run/secrets/nut-webgui-server-key";

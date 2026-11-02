@@ -39,7 +39,8 @@ def violations(paths: tuple[pathlib.Path, ...] = GENERIC_PATHS) -> list[tuple[pa
     result: list[tuple[pathlib.Path, str, int]] = []
     for path in paths:
         if not path.is_file():
-            continue
+            print(f"missing generic path: {path}", file=sys.stderr)
+            return 1
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             for name, pattern in patterns.items():
                 if pattern.search(line):

@@ -111,8 +111,9 @@ def _canonical_compose(
     # Podlet deliberately does not implement Compose interpolation.  Refuse a
     # model whose meaning would depend on ambient reconciliation environment;
     # V2 credentials/environment-file attachments are the deterministic secret
-    # path instead.
-    if b"${" in source_bytes:
+    # path instead.  Reject both ${VAR} and bare $VAR forms; $$ is an escaped
+    # literal dollar and is allowed.
+    if b"${" in source_bytes or re.search(rb"\$(?!\$)[A-Za-z_]", source_bytes):
         raise ComposeImportError(
             f"Compose service {service_id!r} uses interpolation, which Podlet import does not support; "
             "use literal configuration or V2 credential/environment-file attachments"

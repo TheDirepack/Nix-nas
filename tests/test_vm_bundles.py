@@ -148,7 +148,7 @@ class VmBundleScriptTests(unittest.TestCase):
         for name in EXPECTED_BUNDLES:
             expected_hash = {
                 "core": "aaaaaaaaaa",
-                "vm-drivers": "aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa",
+                "vm-drivers": "aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa",
             }.get(name, "aaaaaaaaaa-aaaaaaaaaa")
             expected = f"key_{name.replace('-', '_')}={expected_hash}"
             self.assertIn(expected, lines)
@@ -168,7 +168,7 @@ class VmBundleScriptTests(unittest.TestCase):
             "eval --raw .#checks.x86_64-linux.nas-vm-encrypted.driver.outPath",
             calls,
         )
-        self.assertIn("key_vm_drivers=aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa", result.stdout.splitlines())
+        self.assertIn("key_vm_drivers=aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa", result.stdout.splitlines())
 
     def test_build_builds_every_bundle_root_including_both_drivers(self) -> None:
         env, nix_log, _ = self._fake_environment()

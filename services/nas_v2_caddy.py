@@ -362,16 +362,22 @@ class PortalProjectionError(RuntimeError):
     """Raised when portal metadata cannot be projected safely."""
 
 
+def _safe_portal_link(value: str) -> str:
+    if "\\" in value or any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise PortalProjectionError("portal link contains a backslash or control character")
+    return value
+
+
 def _route_url(exposure: dict[str, Any], portal: dict[str, Any]) -> str:
     explicit = portal.get("url")
     if isinstance(explicit, str) and explicit.startswith("/") and not explicit.startswith("//"):
-        return explicit
+        return _safe_portal_link(explicit)
     exposure_type = exposure.get("type")
     if exposure_type == "path":
         paths = exposure.get("paths")
         candidate = paths[0] if isinstance(paths, list) and paths and isinstance(paths[0], str) else None
         if isinstance(candidate, str) and candidate.startswith("/") and not candidate.startswith("//"):
-            return candidate
+            return _safe_portal_link(candidate)
         raise PortalProjectionError("visible portal path route has no safe path")
     if exposure_type == "hostname":
         hostnames = exposure.get("hostnames")
@@ -383,7 +389,7 @@ def _route_url(exposure: dict[str, Any], portal: dict[str, Any]) -> str:
             and isinstance(path, str)
             and path.startswith("/")
         ):
-            return f"https://{hostnames[0]}{path}"
+            return _safe_portal_link(f"https://{hostnames[0]}{path}")
     raise PortalProjectionError("visible portal route has no safe URL")
 
 
@@ -404,7 +410,7 @@ def compile_portal_projection(effective: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(service_id, str) or not isinstance(route_id, str):
                 continue
             service = services.get(service_id)
-            if not isinstance(service, dict) or service.get("enabled", True) is False:
+            if not isinstance(service, dict) or service.get("enabled") is not True:
                 continue
             portal = route.get("portal", {})
             if not isinstance(portal, dict) or portal.get("visible") is not True:

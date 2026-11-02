@@ -31,7 +31,7 @@ import urllib.request
 from typing import Any, Mapping
 
 from nas_common import ADMIN_GROUP, DISABLED_GROUP
-from nas_operation_journal import JournalError, OperationJournal, load_json
+from nas_operation_journal import JournalError, OperationJournal, atomic_write_json, load_json
 from nas_operation_lock import (
     COORDINATION_TOKEN_ENV,
     OperationBusyError,
@@ -1062,6 +1062,22 @@ def interrupted_syncthing_ownership(state: Mapping[str, Any]) -> tuple[set[str],
     except JournalError as exc:
         raise SyncError(f"Invalid Syncthing reconciliation journal: {SYNCTHING_JOURNAL_PATH}") from exc
     if journal is None or journal.get("phase") == "committed":
+        # Journal is committed; ensure durable state matches the committed journal.
+        # A crash between the journal commit and the state write leaves state stale.
+        desired = journal.get("desired")
+        if isinstance(desired, dict):
+            folders_map = desired.get("folders")
+            devices_map = desired.get("devices")
+            if isinstance(folders_map, dict) and isinstance(devices_map, dict):
+                expected_state = {
+                    "schemaVersion": 2,
+                    "generation": journal.get("generation"),
+                    "folders": sorted(folders_map),
+                    "devices": sorted(set(devices_map) | set(journal.get("retainedDevices", []))),
+                }
+                if state != expected_state:
+                    atomic_write_json(STATE_PATH, expected_state)
+                return set(folders_map), set(devices_map)
         return set(), set()
     if journal.get("schemaVersion") != 1 or journal.get("phase") not in {"prepared", "mutated"}:
         raise SyncError(f"Invalid Syncthing reconciliation journal: {SYNCTHING_JOURNAL_PATH}")
@@ -1116,8 +1132,15 @@ def reconcile_syncthing(model: IdentityModel) -> dict[str, int]:
         "deviceID",
         label="device",
     )
-    unmanaged_folders = sorted(folders.keys() & observed_folders.keys() - old_folders)
-    unmanaged_devices = sorted(devices.keys() & observed_devices.keys() - old_devices)
+    # Objects deleted externally are absent from Syncthing and must not count
+    # as "old" for the unmanaged-guard check, otherwise newly desired objects
+    # would be falsely rejected as unmanaged.
+    folders_already_gone = old_folders - folders.keys() - observed_folders.keys()
+    devices_already_gone = old_devices - devices.keys() - observed_devices.keys()
+    effective_old_folders = old_folders - folders_already_gone
+    effective_old_devices = old_devices - devices_already_gone
+    unmanaged_folders = sorted(folders.keys() & observed_folders.keys() - effective_old_folders)
+    unmanaged_devices = sorted(devices.keys() & observed_devices.keys() - effective_old_devices)
     if unmanaged_folders:
         raise SyncError("Refusing to replace unmanaged Syncthing folder(s): " + ", ".join(unmanaged_folders))
     if unmanaged_devices:
@@ -1136,18 +1159,31 @@ def reconcile_syncthing(model: IdentityModel) -> dict[str, int]:
     for folder_id, folder in folders.items():
         ensure_syncthing_folder(pathlib.Path(folder["path"]))
         syncthing_request(f"/rest/config/folders/{urllib.parse.quote(folder_id, safe='')}", method="PUT", body=folder)
-    removed_folders = (old_folders - folders.keys()) & observed_folders.keys()
-    for folder_id in sorted(removed_folders):
-        syncthing_request(f"/rest/config/folders/{urllib.parse.quote(folder_id, safe='')}", method="DELETE")
+    removed_folders = old_folders - folders.keys()
+    folders_to_delete = sorted(removed_folders & observed_folders.keys())
+    for folder_id in folders_to_delete:
+        try:
+            syncthing_request(f"/rest/config/folders/{urllib.parse.quote(folder_id, safe='')}", method="DELETE")
+        except SyncError as exc:
+            message = str(exc)
+            if "HTTP 404" not in message and "does not exist" not in message.lower():
+                raise
+            print(f"nas-identity-sync: folder {folder_id} already removed: {message}", file=sys.stderr)
     removed_devices: set[str] = set()
     retained_devices: set[str] = set()
-    for device_id in sorted((old_devices - devices.keys()) & observed_devices.keys()):
+    devices_to_delete = sorted((old_devices - devices.keys()) & observed_devices.keys())
+    for device_id in devices_to_delete:
         try:
             syncthing_request(f"/rest/config/devices/{urllib.parse.quote(device_id, safe='')}", method="DELETE")
             removed_devices.add(device_id)
         except SyncError as exc:
             message = str(exc)
-            if "HTTP 409" not in message and "still referenced" not in message.lower():
+            if (
+                "HTTP 409" not in message
+                and "still referenced" not in message.lower()
+                and "HTTP 404" not in message
+                and "does not exist" not in message.lower()
+            ):
                 raise
             print(f"nas-identity-sync: retaining {device_id}: {message}", file=sys.stderr)
             retained_devices.add(device_id)
@@ -1163,6 +1199,8 @@ def reconcile_syncthing(model: IdentityModel) -> dict[str, int]:
     restart = syncthing_request("/rest/config/restart-required")
     if isinstance(restart, dict) and restart.get("requiresRestart"):
         syncthing_request("/rest/system/restart", method="POST")
+    journal["phase"] = "committed"
+    atomic_write_json(SYNCTHING_JOURNAL_PATH, journal)
     committed_state = {
         "schemaVersion": 2,
         "generation": generation,
@@ -1170,8 +1208,6 @@ def reconcile_syncthing(model: IdentityModel) -> dict[str, int]:
         "devices": sorted(set(devices) | retained_devices),
     }
     atomic_write_json(STATE_PATH, committed_state)
-    journal["phase"] = "committed"
-    atomic_write_json(SYNCTHING_JOURNAL_PATH, journal)
     remove_file_durable(SYNCTHING_JOURNAL_PATH)
     return {
         "folders": len(folders),
@@ -1528,6 +1564,9 @@ def retire_bootstrap_administrator(token: str, administrator: str) -> dict[str, 
         or replacement_pk not in member_pks
     ):
         raise SyncError(f"Chosen administrator {administrator!r} is not an enabled explicit member of {ADMIN_GROUP}")
+    current_administrators = enabled_administrator_names(users, groups)
+    if "akadmin" in current_administrators and len(current_administrators) == 1:
+        raise SyncError("Cannot retire akadmin: it is the only enabled administrator")
     bootstrap = next((user for user in users if user.get("username") == "akadmin"), None)
     if isinstance(bootstrap, Mapping):
         bootstrap_pk = user_detail_pk(bootstrap)

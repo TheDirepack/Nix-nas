@@ -46,9 +46,9 @@ class ManagedServicesV2GenerationTests(unittest.TestCase):
             self.assertEqual(os.readlink(runtime / "effective.json"), "current/effective.json")
             self.assertEqual(os.readlink(runtime / "systemd"), "current/systemd")
             self.assertEqual((runtime / "effective.json").read_text(encoding="utf-8"), '{"schemaVersion":3}\n')
-            self.assertEqual(stat.S_IMODE(candidate.stat().st_mode), 0o555)
-            self.assertEqual(stat.S_IMODE((candidate / "effective.json").stat().st_mode), 0o444)
-            self.assertEqual(stat.S_IMODE((candidate / "systemd").stat().st_mode), 0o555)
+            self.assertEqual(stat.S_IMODE(candidate.stat().st_mode), 0o500)
+            self.assertEqual(stat.S_IMODE((candidate / "effective.json").stat().st_mode), 0o400)
+            self.assertEqual(stat.S_IMODE((candidate / "systemd").stat().st_mode), 0o500)
 
     def test_repeated_revision_allocates_new_immutable_generation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -105,7 +105,7 @@ class ManagedServicesV2GenerationTests(unittest.TestCase):
             removed = generation.prune_generations(root, current_link=current, retain=1)
             self.assertEqual(removed, [old])
             self.assertFalse(old.exists())
-            self.assertEqual(stat.S_IMODE(active.stat().st_mode), 0o555)
+            self.assertEqual(stat.S_IMODE(active.stat().st_mode), 0o500)
             self.assertEqual((active / "nested/file").read_text(), "projection")
 
     def test_prune_still_reports_removal_failure(self) -> None:
@@ -140,7 +140,7 @@ class ManagedServicesV2GenerationTests(unittest.TestCase):
                 self.assertTrue(active.is_dir(), "relative roots must never delete the active generation")
                 self.assertEqual(current.resolve(strict=True), active)
                 self.assertEqual((active / "file").read_bytes(), b"projection\n")
-                self.assertEqual(stat.S_IMODE(active.stat().st_mode), 0o555)
+                self.assertEqual(stat.S_IMODE(active.stat().st_mode), 0o500)
                 self.assertEqual(len(list(root.iterdir())), retain)
                 self.assertEqual(len(removed), 4 - retain)
 

@@ -84,7 +84,13 @@ def _process_group_exists(pid: int) -> bool:
     return True
 
 
-def run(command: list[str], *, timeout: int, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def run(
+    command: list[str],
+    *,
+    timeout: int,
+    env: dict[str, str],
+    pids: set[int] | None = None,
+) -> subprocess.CompletedProcess[str]:
     # Use files rather than capture pipes. A leaked grandchild can inherit a pipe and
     # keep communicate() waiting forever after the actual test process has exited.
     with (
@@ -100,6 +106,8 @@ def run(command: list[str], *, timeout: int, env: dict[str, str]) -> subprocess.
             stderr=stderr_file,
             start_new_session=True,
         )
+        if pids is not None:
+            pids.add(process.pid)
         try:
             process.wait(timeout=timeout)
         except subprocess.TimeoutExpired as exc:
@@ -110,6 +118,9 @@ def run(command: list[str], *, timeout: int, env: dict[str, str]) -> subprocess.
             raise subprocess.TimeoutExpired(
                 command, timeout, output=stdout_file.read(), stderr=stderr_file.read()
             ) from exc
+        finally:
+            if pids is not None:
+                pids.discard(process.pid)
 
         # Give normal short-lived helpers a small reap window. Any remaining member of
         # the isolated process group is a test resource leak and is forcibly removed.
@@ -189,23 +200,17 @@ def main() -> int:
     # Per-run temp roots so parallel jobs and successive runs do not collide.
     # Use a single temp dir for the whole harness run (cleaned up on exit).
     _hermetic_tmp = pathlib.Path(tempfile.mkdtemp(prefix="nas-test-hermetic-"))
-    # State runtime root (for nas_state, operation_lock)
+    # State runtime root (for nas_state, operation_lock) -- always per-run to
+    # avoid collisions between parallel harness runs.
     if "NAS_STATE_RUNTIME_ROOT" not in env:
-        try:
-            os.makedirs("/run/nas-state", exist_ok=False)
-            os.rmdir("/run/nas-state")
-        except OSError:
-            env["NAS_STATE_RUNTIME_ROOT"] = str(_hermetic_tmp / "nas-state")
+        env["NAS_STATE_RUNTIME_ROOT"] = str(_hermetic_tmp / "nas-state")
     # Secret root for cockpit_api
     if "NAS_SECRET_ROOT" not in env:
         env["NAS_SECRET_ROOT"] = str(_hermetic_tmp / "nas-secrets")
-    # State rollback / journal paths (for nas_state, operation_journal)
+    # State rollback / journal paths (for nas_state, operation_journal) -- always
+    # per-run to avoid collisions between parallel harness runs.
     if "NAS_STATE_ROLLBACK_ROOT" not in env:
-        try:
-            os.makedirs("/var/lib/nas-state", exist_ok=False)
-            os.rmdir("/var/lib/nas-state")
-        except OSError:
-            env["NAS_STATE_ROLLBACK_ROOT"] = str(_hermetic_tmp / "nas-state-rollback")
+        env["NAS_STATE_ROLLBACK_ROOT"] = str(_hermetic_tmp / "nas-state-rollback")
     if "NAS_STATE_RESTORE_JOURNAL" not in env:
         # Use the same hermetic state dir for the journal so it is writable
         _state_journal_dir = pathlib.Path(env.get("NAS_STATE_ROLLBACK_ROOT", str(_hermetic_tmp / "nas-state-rollback")))
@@ -260,7 +265,11 @@ def main() -> int:
 
     atexit.register(_cleanup_harness_temps)
 
+    _running_pids: set[int] = set()
+
     def _handle_interrupt(signum, frame):  # noqa: ARG001
+        for pid in list(_running_pids):
+            _kill_process_group(pid)
         _cleanup_harness_temps()
         raise SystemExit(128 + signum)
 
@@ -373,7 +382,7 @@ def main() -> int:
             command = command_for(unittest_command)
             file_started = time.monotonic()
             try:
-                completed = run(command, timeout=args.timeout, env=env)
+                completed = run(command, timeout=args.timeout, env=env, pids=_running_pids)
             except subprocess.TimeoutExpired as exc:
                 output = ""
                 if isinstance(exc.stdout, str):
@@ -387,6 +396,7 @@ def main() -> int:
             return path, completed, time.monotonic() - file_started, count, output
 
         failures: list[tuple[pathlib.Path, str]] = []
+        timeouts: list[pathlib.Path] = []
 
         def record(
             result: tuple[pathlib.Path, subprocess.CompletedProcess[str] | None, float, int, str | None],
@@ -414,6 +424,7 @@ def main() -> int:
                 total_unexpected += unexp_c
                 detail = f"exceeded {args.timeout}s\n{(output or '')[-8000:]}"
                 failures.append((path, detail))
+                timeouts.append(path)
                 _github_error(f"Unit test timeout: {relative}", detail)
                 print(f"FAIL {relative}: exceeded {args.timeout}s", file=sys.stderr)
                 return
@@ -469,11 +480,23 @@ def main() -> int:
 
         serial_files = [path for path in files if path.name in SERIAL_TEST_FILES]
         parallel_files = [path for path in files if path.name not in SERIAL_TEST_FILES]
+        interrupted = False
         if parallel_files:
             with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
                 futures = [pool.submit(run_file, path) for path in parallel_files]
                 for future in concurrent.futures.as_completed(futures):
-                    record(future.result())
+                    if interrupted:
+                        future.cancel()
+                        continue
+                    try:
+                        record(future.result())
+                    except SystemExit:
+                        interrupted = True
+                        future.cancel()
+                        for other in futures:
+                            if other is not future and not other.done():
+                                other.cancel()
+                        raise
         # Repository/package validator tests intentionally execute alone. They create clean
         # copies and run heavyweight release tooling; concurrent copies only add timeout
         # noise and can make resource pressure look like a product regression.
@@ -490,7 +513,7 @@ def main() -> int:
                 f"{total_ran} ran across {len(files)} files with {args.jobs} worker(s) in {time.monotonic() - started:.1f}s",
                 file=sys.stderr,
             )
-            return 124 if any("exceeded" in detail for _, detail in failures) else 1
+            return 124 if timeouts else 1
 
         if args.coverage:
             report = pathlib.Path(args.coverage)
