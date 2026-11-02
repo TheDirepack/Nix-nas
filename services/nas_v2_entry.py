@@ -24,6 +24,7 @@ from nas_v2_apply import (
     apply,
 )
 from nas_v2_generation import (
+    CADDY_READER_GROUP,
     GenerationError,
     allocate_generation,
     discard_generation,
@@ -79,6 +80,10 @@ def main(*, overrides: dict[str, str | None] | None = None) -> int:
     history_repository_raw = setting("NAS_V2_HISTORY_REPOSITORY")
     history_repository = pathlib.Path(history_repository_raw) if history_repository_raw else None
     git_bin = setting("NAS_V2_GIT_BIN", "git")
+    # Caddy imports the managed Caddyfile from the sealed generation, so the
+    # sealed tree must be readable by its account group. An empty value keeps
+    # the owner-only seal for non-NixOS development runs.
+    reader_group = setting("NAS_V2_GENERATION_READER_GROUP", CADDY_READER_GROUP) or None
 
     caddy = CaddyProjection(
         output=caddy_output,
@@ -192,6 +197,7 @@ def main(*, overrides: dict[str, str | None] | None = None) -> int:
                     generation_root=generation_root,
                     current_link=current_link,
                     compatibility_paths=stable_paths,
+                    reader_group=reader_group,
                 )
                 published = True
             except Exception:
@@ -205,7 +211,7 @@ def main(*, overrides: dict[str, str | None] | None = None) -> int:
                 raise
             try:
                 prune_generations(generation_root, current_link=current_link, retain=3)
-            except Exception as exc:
+            except (GenerationError, OSError, RuntimeError) as exc:
                 # Post-publication prune failures are deferred: the generation
                 # is already published and current. A prune error must not
                 # turn a successful reconciliation into a fatal failure, and a

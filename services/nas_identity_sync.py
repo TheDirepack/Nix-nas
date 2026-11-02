@@ -1106,24 +1106,32 @@ def interrupted_syncthing_ownership(state: Mapping[str, Any]) -> tuple[set[str],
         journal = load_json(SYNCTHING_JOURNAL_PATH)
     except JournalError as exc:
         raise SyncError(f"Invalid Syncthing reconciliation journal: {SYNCTHING_JOURNAL_PATH}") from exc
-    if journal is None or journal.get("phase") == "committed":
-        # Journal is committed; ensure durable state matches the committed journal.
-        # A crash between the journal commit and the state write leaves state stale.
+    if journal is None:
+        return set(), set()
+    if journal.get("phase") == "committed":
+        # The journal commits before the state write, so a crash here leaves the
+        # journal authoritative and state stale. Repair state from the journal.
         desired = journal.get("desired")
         if isinstance(desired, dict):
             folders_map = desired.get("folders")
             devices_map = desired.get("devices")
-            if isinstance(folders_map, dict) and isinstance(devices_map, dict):
+            retained = journal.get("retainedDevices", [])
+            if (
+                isinstance(folders_map, dict)
+                and isinstance(devices_map, dict)
+                and isinstance(retained, list)
+                and all(isinstance(device, str) for device in retained)
+            ):
                 expected_state = {
                     "schemaVersion": 2,
                     "generation": journal.get("generation"),
                     "folders": sorted(folders_map),
-                    "devices": sorted(set(devices_map) | set(journal.get("retainedDevices", []))),
+                    "devices": sorted(set(devices_map) | set(retained)),
                 }
                 if state != expected_state:
                     atomic_write_json(STATE_PATH, expected_state)
                 return set(folders_map), set(devices_map)
-        return set(), set()
+        raise SyncError(f"Invalid Syncthing reconciliation journal: {SYNCTHING_JOURNAL_PATH}")
     if journal.get("schemaVersion") != 1 or journal.get("phase") not in {"prepared", "mutated"}:
         raise SyncError(f"Invalid Syncthing reconciliation journal: {SYNCTHING_JOURNAL_PATH}")
     desired = journal.get("desired")
@@ -1165,6 +1173,10 @@ def reconcile_syncthing(model: IdentityModel) -> dict[str, int]:
     old_folders = {str(value) for value in state.get("folders", [])}
     old_devices = {str(value) for value in state.get("devices", [])}
     interrupted_folders, interrupted_devices = interrupted_syncthing_ownership(state)
+    # The interrupted-journal repair rewrites STATE_PATH; reload it so the
+    # journal's previousState records the durable state a retry will compare
+    # against instead of the superseded pre-repair snapshot.
+    state = load_state()
     old_folders.update(interrupted_folders)
     old_devices.update(interrupted_devices)
     observed_folders = object_by_identifier(

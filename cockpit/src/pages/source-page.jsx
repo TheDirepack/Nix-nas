@@ -13,6 +13,7 @@ import {
   ModalBody,
   ModalFooter,
   ModalHeader,
+  ModalVariant,
   Spinner,
   Title,
 } from "@patternfly/react-core";

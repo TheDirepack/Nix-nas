@@ -52,6 +52,10 @@ Do not copy a release password into `main`, and do not assume
 `nas-admin-first-boot` works for a tagged release. If you are installing a
 published release, use the credentials from the matching GitHub Release notes.
 
+The bootstrap Linux account expires this password at first login, so the console
+session requires a new password before it starts. The bootstrap Authentik
+identity is unaffected: the wizard still expects the bootstrap password above.
+
 The setup workflow creates the administrator you choose, verifies that account
 as the first permanent Linux recovery administrator and as an enabled
 Authentik `nas_admin` member. Its Linux home is

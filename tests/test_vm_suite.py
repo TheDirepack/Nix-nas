@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import json
 import pathlib
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -753,6 +756,67 @@ fail() { echo "$*" >&2; exit 1; }
             self.assertNotEqual(clean.returncode, 0)
             self.assertTrue(cache.exists())
             self.assertIn("unrecognized QEMU cache", clean.stderr)
+
+    def test_refused_disposable_run_does_not_stop_the_live_persistent_vm(self) -> None:
+        payload = b"payload\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            cache = root / "cache"
+            state = cache / "state"
+            state.mkdir(parents=True)
+            (cache / ".nas-qemu-cache").write_text("nixos-nas-qemu-cache-v1\n", encoding="utf-8")
+            source = root / "source"
+            source.mkdir()
+            (source / "payload.txt").write_bytes(payload)
+            (source / "MANIFEST.sha256").write_text(
+                f"{hashlib.sha256(payload).hexdigest()}  payload.txt\n", encoding="utf-8"
+            )
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            # The pidfile guard identifies a live VM by /proc/<pid>/exe, so the
+            # stand-in process must be a real executable with that basename.
+            fake_qemu = bin_dir / "qemu-system-x86_64"
+            shutil.copyfile(sys.executable, fake_qemu)
+            fake_qemu.chmod(0o755)
+            for tool in ("curl", "realpath", "readlink", "qemu-img", "expect", "bsdtar", "ssh", "ssh-keygen", "tar"):
+                if shutil.which(tool) is None:
+                    stub = bin_dir / tool
+                    stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                    stub.chmod(0o755)
+            pidfile = state / "qemu.pid"
+            vm = subprocess.Popen([str(fake_qemu), "-c", "import time; time.sleep(120)"])
+            try:
+                pidfile.write_text(f"{vm.pid}\n", encoding="utf-8")
+                # BASH_XTRACEFD keeps the trace separate from the refusal message.
+                env = {
+                    **os.environ,
+                    "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+                    "NAS_QEMU_CACHE_DIR": str(cache),
+                    "NAS_QEMU_STATE_DIR": str(state),
+                    "NAS_QEMU_SOURCE_ROOT": str(source),
+                    "NAS_QEMU_OUTER_TIMEOUT_ACTIVE": "1",
+                }
+                result = subprocess.run(
+                    ["bash", "-x", str(QEMU), "installer"],
+                    cwd=ROOT,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=300,
+                )
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("refusing to start a disposable VM", result.stderr)
+                self.assertNotIn("nas_qemu_stop_pidfile", result.stderr)
+                self.assertEqual(vm.poll(), None, "refused run stopped the live VM")
+                self.assertTrue(pidfile.exists(), "refused run removed the live pidfile")
+            finally:
+                vm.terminate()
+                try:
+                    vm.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    vm.kill()
+                    vm.wait(timeout=30)
 
     def test_source_stage_fails_on_a_manifest_entry_missing_from_the_tree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

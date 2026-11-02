@@ -38,8 +38,7 @@ def _iter_table_cells(markdown: str):
             table_lines = [line]
             next_index = index + 1
             while next_index < len(lines) and (
-                _TABLE_LINE_RE.match(lines[next_index])
-                or _SEPARATOR_LINE_RE.match(lines[next_index])
+                _TABLE_LINE_RE.match(lines[next_index]) or _SEPARATOR_LINE_RE.match(lines[next_index])
             ):
                 table_lines.append(lines[next_index])
                 next_index += 1
@@ -68,10 +67,7 @@ class OperatorDocsTests(unittest.TestCase):
             for cell in _iter_table_cells(content):
                 for retired in RETIRED_GROUPS:
                     if retired in cell:
-                        self.fail(
-                            f"{md_file}: retired group {retired!r} recommended in "
-                            f"table cell: {cell!r}"
-                        )
+                        self.fail(f"{md_file}: retired group {retired!r} recommended in table cell: {cell!r}")
 
 
 if __name__ == "__main__":

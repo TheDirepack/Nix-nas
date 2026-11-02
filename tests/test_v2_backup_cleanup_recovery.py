@@ -100,7 +100,7 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             original_root = backup.BACKUP_STAGING_ROOT
             backup.BACKUP_STAGING_ROOT = staging
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 if argv == ["/bin/systemctl", "restart", "nas-v2-database-dump.service"]:
                     artifact.mkdir(parents=True, exist_ok=True)
                     (artifact / "partial.dump").write_bytes(b"partial-sensitive-bytes")
@@ -143,7 +143,7 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             original_remove = backup._remove_staged_artifact
             backup.BACKUP_STAGING_ROOT = staging
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 if argv == ["/bin/systemctl", "restart", "nas-v2-database-dump.service"]:
                     artifact.mkdir(parents=True, exist_ok=True)
                     (artifact / "partial.dump").write_bytes(b"partial-sensitive-bytes")
@@ -438,6 +438,9 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             ctl_fake = bin_dir / "systemctl"
             ctl_fake.write_text(
                 "#!/bin/sh\n"
+                'if [ "$1" = stop ]; then\n'
+                "  exit 0\n"
+                "fi\n"
                 f"mkdir -p {artifact}\n"
                 f"printf 'partial' > {artifact}/partial.dump\n"
                 "echo 'simulated preparation failure' >&2\n"
@@ -483,6 +486,9 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             ctl_fake = bin_dir / "systemctl"
             ctl_fake.write_text(
                 "#!/bin/sh\n"
+                'if [ "$1" = stop ]; then\n'
+                "  exit 0\n"
+                "fi\n"
                 f"mkdir -p {artifact}\n"
                 f"{sys.executable} - {source_db} {artifact}/backup.db <<'PY'\n"
                 "import pathlib, sqlite3, sys\n"
@@ -546,14 +552,18 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             original_root = backup.BACKUP_STAGING_ROOT
             backup.BACKUP_STAGING_ROOT = staging
             calls: list[list[str]] = []
+            artifact_at_stop: list[tuple[bool, bool]] = []
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 calls.append(argv)
                 if argv == ["/bin/systemctl", "restart", "nas-v2-database-dump.service"]:
                     artifact.mkdir(parents=True, exist_ok=True)
                     (artifact / "partial.dump").write_bytes(b"partial-sensitive-bytes")
                     raise backup.BackupRuntimeError("preparation unit failed")
                 if argv == ["/bin/systemctl", "stop", "nas-v2-database-dump.service"]:
+                    # Record the on-disk artifact state at the exact moment the
+                    # unit is stopped; ordering must be observable, not inferred.
+                    artifact_at_stop.append((artifact.is_dir(), (artifact / "partial.dump").is_file()))
                     return ""
                 raise AssertionError(f"unexpected command: {argv}")
 
@@ -576,7 +586,10 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             self.assertEqual(calls[0], restart)
             self.assertIn(stop, calls)
             self.assertLess(calls.index(restart), calls.index(stop))
-            # The staged artifact is cleaned up after the unit is stopped.
+            # The partial artifact still existed when the unit was stopped; it is
+            # removed only afterwards, so sensitive staging data is never left
+            # behind and is never cleaned while the unit can still write to it.
+            self.assertEqual(artifact_at_stop, [(True, True)])
             self.assertFalse(paths_path.exists())
             self.assertFalse(state_path.exists())
             self.assertFalse(artifact.exists())

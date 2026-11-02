@@ -80,12 +80,40 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertNotIn("settings.bearer", application)
         self.assertNotIn("nas-cockpit-oauth", application)
         # Caddy owns authorization: forward auth via the outpost plus the
-        # nas_admin group check before any request reaches Cockpit.
-        console = bootstrap.split("handle /console* {", 1)[1].split("reverse_proxy", 1)[0]
+        # cockpit admin capability (or legacy nas_admin) check before any
+        # request reaches Cockpit, and the only upstream is the permissioned
+        # Cockpit Unix socket.
+        console = bootstrap.split("handle /console* {", 1)[1].split("\n  }", 1)[0]
         self.assertIn("${caddyForwardAuth}", console)
         self.assertIn("missingCockpitAdmin", console)
         self.assertIn("respond @missingCockpitAdmin 403", console)
-        self.assertIn("--address 127.0.0.1", application)
+        self.assertIn("application[.]cockpit[.]admin|nas_admin", console)
+        self.assertIn("reverse_proxy unix//run/nas-cockpit-sso/ws.sock", console)
+        # cockpit-ws must inherit the systemd socket. Any TCP address or port
+        # option, in long or short form with an attached or separate value,
+        # would restore the retired root-session loopback listener.
+        web_service = application.split("cockpitWebService = pkgs.writeShellScript", 1)[1].split(
+            "authentikProxyOutpost = pkgs.writeShellScript", 1
+        )[0]
+        invocation = web_service.split("${cockpitPatched}/libexec/cockpit-ws", 1)[1].split("\n      )", 1)[0]
+        self.assertIn("--no-tls", invocation)
+        self.assertIn("--local-session", invocation)
+        self.assertNotRegex(invocation, r"(?:^|\s)(?:-a|-p|--address|--port)(?:=|\s|$)")
+        # The socket unit owns the complete Caddy-only contract; asserting on
+        # the whole file would let another socket unit satisfy these checks.
+        socket = application.split("systemd.sockets.nas-cockpit-sso = {", 1)[1].split("\n    };", 1)[0]
+        self.assertIn('ListenStream = "/run/nas-cockpit-sso/ws.sock";', socket)
+        self.assertIn('SocketUser = "root";', socket)
+        self.assertIn("SocketGroup = config.services.caddy.group;", socket)
+        self.assertIn('SocketMode = "0660";', socket)
+        self.assertIn('DirectoryMode = "0755";', socket)
+        self.assertIn('Service = "nas-cockpit-sso.service";', socket)
+        self.assertIn("RemoveOnStop = true;", socket)
+        service = application.split("systemd.services.nas-cockpit-sso = {", 1)[1].split("\n    };", 1)[0]
+        self.assertIn("ExecStart = cockpitWebService;", service)
+        self.assertIn('Sockets = [ "nas-cockpit-sso.socket" ];', service)
+        self.assertIn('after = [ "nas-first-start.service" "nas-cockpit-sso.socket" ];', service)
+        self.assertIn('SocketBindDeny = "any";', service)
         self.assertIn("systemd.sockets.cockpit.enable = false;", system)
         self.assertNotIn("ConditionPathExists = lib.mkOverride", system)
         cockpit = seed.split("cockpit = {", 1)[1].split("    };\n  };", 1)[0]

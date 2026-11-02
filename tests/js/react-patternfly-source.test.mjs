@@ -141,3 +141,37 @@ test("manifest does not weaken Cockpit content security policy", async () => {
   assert.match(manifest["content-security-policy"], /frame-ancestors 'self'/);
   assert.equal(manifest.requires.cockpit, "300");
 });
+
+test("unlock and backup-remote forms submit from the keyboard without navigating", async () => {
+  const app = await source(APP_SHELL);
+  assert.match(app, /<Form onSubmit=\{unlock\}>/, "the unlock form must invoke unlock on submit");
+  assert.match(
+    app,
+    /<Button type="submit"[^>]*isDisabled=\{busy \|\| !unlockPassword\}/,
+    "the unlock button must be the form's submit control",
+  );
+  assert.match(app, /const unlock = async \(event\) => \{\s*if \(event\) event\.preventDefault\(\);/);
+  const operations = await source("src/pages/operations-page.jsx");
+  assert.match(operations, /<Form onSubmit=\{saveRemote\}>/);
+  assert.match(operations, /<Button type="submit"[^>]*isDisabled=\{busy\}>/);
+  assert.match(operations, /const saveRemote = async \(event\) => \{\s*if \(event\) event\.preventDefault\(\);/);
+  for (const name of [APP_SHELL, "src/pages/operations-page.jsx"]) {
+    assert.doesNotMatch(
+      await source(name),
+      /<Form onSubmit=\{\(_event\) => _event\.preventDefault\(\)\}>/,
+      `${name} still swallows the submit event`,
+    );
+  }
+});
+
+test("source page imports every component it references", async () => {
+  const page = await source("src/pages/source-page.jsx");
+  const imported = new Set();
+  for (const match of page.matchAll(/import\s+(?:([A-Za-z0-9_$]+)\s*,\s*)?\{([^}]*)\}\s*from/g)) {
+    if (match[1]) imported.add(match[1]);
+    for (const name of match[2].split(",")) imported.add(name.trim());
+  }
+  for (const match of page.matchAll(/<([A-Z][A-Za-z0-9]*)/g)) {
+    assert.ok(imported.has(match[1]), `src/pages/source-page.jsx uses unimported ${match[1]}`);
+  }
+});

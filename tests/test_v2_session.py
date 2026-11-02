@@ -140,12 +140,11 @@ class V2SessionRuntimeTests(unittest.TestCase):
                 command,
                 "systemd owns stop/cleanup instead of a Python signal handler",
             )
-            # --user is a systemd-run flag (runs in the user manager), placed
-            # before the -- separator; it must not leak into the container command.
-            user_index = command.index("--user")
-            separator_index = command.index("--")
-            self.assertLess(user_index, separator_index)
-            self.assertNotIn("--user", command[separator_index + 1 :])
+            # The authenticated user selects naming and user-scoped storage;
+            # systemd-run --user would target the caller's user manager and
+            # takes no uid, so it must not be passed from the system helper.
+            self.assertNotIn("--user", command)
+            self.assertFalse(any(item.startswith("--uid=") for item in command))
             self.assertFalse(any("session.db" in item for item in command))
 
     def test_descriptor_path_is_derived_from_safe_service_id(self):

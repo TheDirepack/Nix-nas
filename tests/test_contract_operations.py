@@ -55,6 +55,12 @@ class ContractTests(unittest.TestCase):
         self.assertIn("services.telegraf", observability)
         self.assertIn('path_smartctl = "${smartctlReadOnly}";', observability)
         self.assertIn("use_sudo = true", observability)
+        # The setuid sudo wrapper is only reachable through /run/wrappers.
+        self.assertIn('path = [ "/run/wrappers" ];', observability)
+        # The UPS monitor password is read by the container at runtime; the Nix
+        # store must never contain its value.
+        self.assertNotIn("builtins.readFile cfg.power.ups.passwordFile", observability)
+        self.assertIn('NUTWG__UPSD__PASSWORD = "/run/secrets/nut-password";', observability)
         self.assertIn("services.smartd.enable = lib.mkDefault false", storage)
         schedules = text("modules/nas/config/schedules.nix")
         self.assertIn("protectedServiceUnits", schedules)
@@ -185,7 +191,9 @@ class ContractTests(unittest.TestCase):
         self.assertIn("--local-session", services)
         self.assertNotIn("settings.bearer", services)
         self.assertNotIn("nas-cockpit-oauth", services)
-        self.assertIn("--address 127.0.0.1", services)
+        self.assertNotIn("--address", services)
+        self.assertNotIn("--port", services)
+        self.assertIn('ListenStream = "/run/nas-cockpit-sso/ws.sock";', services)
         self.assertIn("AllowUnencrypted = false", services)
         self.assertIn("activate-stdin)", secrets)
 
@@ -232,6 +240,14 @@ class ContractTests(unittest.TestCase):
         self.assertIn("pkgs.nodejs_22", zfs)
         self.assertIn("cfg.observability.serviceGid", validation)
         self.assertIn('${if cfg.tftp.writable then "rw" else "r"}: *', text("modules/nas/config/system.nix"))
+
+    def test_legacy_podman_graphroot_fails_fast_instead_of_being_ignored(self) -> None:
+        virtualization = text("modules/nas/config/virtualization.nix")
+        check = virtualization.split("containersStorageCheck =", 1)[1].split("'';", 1)[0]
+        self.assertIn('[[ -L "$legacy" || ! -d "$legacy" ]]', check)
+        self.assertIn("exit 1", check)
+        self.assertIn('requires = [ "nas-containers-storage-check.service" ];', virtualization)
+        self.assertIn('after = [ "nas-containers-storage-check.service" ];', virtualization)
 
     def test_observability_consumes_compiled_v2_service_state(self) -> None:
         observability = text("modules/nas/config/observability.nix")

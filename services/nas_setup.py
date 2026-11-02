@@ -90,6 +90,7 @@ SHARE_ROOT = pathlib.Path(os.environ.get("NAS_SHARE_ROOT", str(ZFS_ROOT / "share
 SYNCTHING_ENABLED = os.environ.get("NAS_SYNCTHING_ENABLE", "0") == "1"
 STATE_PATH = pathlib.Path(os.environ.get("NAS_SETUP_STATE", "/var/lib/nas-setup/state.json"))
 JOURNAL_PATH = pathlib.Path(os.environ.get("NAS_SETUP_JOURNAL", "/var/lib/nas-setup/first-run-journal.json"))
+COMPLETE_SETUP_STATUSES = frozenset({"complete", "complete-unverified"})
 FIRST_START_STATUS_PATH = pathlib.Path(os.environ.get("NAS_FIRST_START_STATUS", "/var/lib/nas-first-start/status.json"))
 MANAGED_SERVICES_CONTROL = os.environ.get("NAS_MANAGED_SERVICES_CONTROL", "nas-managed-services-control")
 MANAGED_SERVICES_DESIRED = pathlib.Path(os.environ.get("NAS_V2_DESIRED", "/var/lib/nas-control/services.yaml"))
@@ -1397,6 +1398,55 @@ def setup_state_matches(report: Mapping[str, Any]) -> bool:
     return current_stable == report_stable
 
 
+def completed_setup_report() -> dict[str, Any] | None:
+    """Return the persisted completed setup report, or None when setup has not completed.
+
+    Only an absent state file is the bootstrap case. Unreadable or corrupt
+    state is fatal: treating it as absent restarts setup over an initialized
+    system and rewrites its authority.
+    """
+    try:
+        raw = STATE_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SetupError(f"Setup state {STATE_PATH} is unreadable: {exc}") from exc
+    try:
+        existing = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SetupError(f"Setup state {STATE_PATH} is corrupt: {exc}") from exc
+    if not isinstance(existing, dict):
+        raise SetupError(f"Setup state {STATE_PATH} is not a JSON object")
+    if existing.get("status") not in COMPLETE_SETUP_STATUSES:
+        return None
+    return existing
+
+
+def finish_interrupted_setup_journal(report: Mapping[str, Any]) -> None:
+    """Finish the journal left open when the process died after the final state write.
+
+    Setup writes the completed state before marking the journal complete. A
+    crash in that window must finish the journal on retry: refusing wedges
+    setup, and re-running it rewrites initialized state.
+    """
+    try:
+        existing = load_json(JOURNAL_PATH)
+    except JournalError as exc:
+        raise SetupError(str(exc)) from exc
+    if existing is None or existing.get("status") == "complete":
+        return
+    if existing.get("schemaVersion") != 1 or existing.get("workflow") != "first-run-v2":
+        raise SetupError(f"Setup state is complete but {JOURNAL_PATH} belongs to another operation; reconcile it")
+    journal = OperationJournal(JOURNAL_PATH, existing)
+    if existing.get("status") not in {"pending", "running", "resuming"} or not journal.step_complete("final-state"):
+        raise SetupError(
+            f"Setup state is complete but {JOURNAL_PATH} stopped at {existing.get('status')!r}; "
+            "acknowledge manual recovery before retrying"
+        )
+    recorded = journal.result("final-state")
+    journal.complete(recorded if isinstance(recorded, Mapping) else dict(report))
+
+
 def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
     args.encrypt_storage = bool(getattr(args, "encrypt_storage", ZFS_ENCRYPTION))
     if args.encrypt_storage and not ZFS_ENCRYPTION:
@@ -2105,17 +2155,31 @@ def first_run(args: argparse.Namespace) -> dict[str, Any]:
     reservation_token = getattr(args, "reservation_token", None)
     if not isinstance(reservation_token, str):
         reservation_token = None
-    # BUG 8 fix: refuse direct first-run re-execution after setup completes,
-    # preventing corruption of initialized state.
-    try:
-        existing = json.loads(STATE_PATH.read_text(encoding="utf-8"))
-        if isinstance(existing, dict) and existing.get("status") in {"complete", "complete-unverified"}:
-            raise SetupError("Initial setup is already complete; refusing direct first-run re-execution")
-    except (OSError, json.JSONDecodeError):
-        pass
+    # Fail closed before taking the lock when persisted state is unreadable or
+    # corrupt. Only an absent state file means this is a genuine first run.
+    completed_setup_report()
     try:
         with acquire_operation("first-start-v2", SETUP_OPERATION_CLASSES, reservation_token=reservation_token):
-            result = _first_run_locked(args)
+            # Re-check under the lock: a pre-lock read can be stale, and the
+            # inherited-coordination path validates a parent lock instead of
+            # taking the flock itself.
+            recorded = completed_setup_report()
+            if recorded is None:
+                result = _first_run_locked(args)
+            else:
+                requested_digest = getattr(args, "confirm_plan_digest", None)
+                recorded_digest = recorded.get("planDigest")
+                if (
+                    isinstance(requested_digest, str)
+                    and isinstance(recorded_digest, str)
+                    and requested_digest != recorded_digest
+                ):
+                    raise SetupError(
+                        "Initial setup already completed with a different plan; reconcile the configuration "
+                        "before retrying"
+                    )
+                finish_interrupted_setup_journal(recorded)
+                result = recorded
         run_root(["systemctl", "start", "nas-protected-services.target"])
         ensure_secret_gated_services()
         if (

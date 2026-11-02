@@ -4,6 +4,7 @@ import concurrent.futures
 import hashlib
 import os
 import pathlib
+import re
 import subprocess
 import tempfile
 import unittest
@@ -170,13 +171,20 @@ class MaintainerReleaseTests(MaintainerScriptMixin, unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        # With skip flags set, preflight reports partial status with these incomplete checks
-        self.assertIn("Preflight partial: 5 check(s) were not executed:", result.stdout)
-        self.assertIn("python-tests", result.stdout)
-        self.assertIn("cockpit-bundle", result.stdout)
-        self.assertIn("cockpit-jsx-syntax", result.stdout)
-        self.assertIn("javascript-tests", result.stdout)
-        self.assertIn("nix", result.stdout)
+        # With skip flags set, preflight reports partial status and lists every
+        # incomplete check. Assert the structural contract rather than a fixed
+        # count so a legitimate skip-set change does not invalidate the test.
+        partial = re.search(
+            r"^Preflight partial: (\d+) check\(s\) were not executed: (.+)$",
+            result.stdout,
+            re.MULTILINE,
+        )
+        self.assertIsNotNone(partial, result.stdout)
+        assert partial is not None
+        skipped = partial.group(2).split()
+        self.assertEqual(int(partial.group(1)), len(skipped), partial.group(0))
+        for check in ("python-tests", "cockpit-bundle", "cockpit-jsx-syntax", "javascript-tests", "nix"):
+            self.assertIn(check, skipped)
         self.assertIn("repository structure", result.stdout)
         self.assertIn("static security boundaries", result.stdout)
         self.assertFalse((self.clean_root / ".ruff_cache").exists())

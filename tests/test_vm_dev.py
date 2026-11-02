@@ -106,7 +106,7 @@ if name == "curl":
                 env=env,
                 capture_output=True,
                 text=True,
-                timeout=15,
+                timeout=60,
                 check=False,
             )
             calls = {

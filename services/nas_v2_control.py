@@ -161,6 +161,22 @@ def _reconcile() -> None:
     _systemctl("start", RECONCILE_UNIT)
 
 
+def _attach_status(result: dict[str, Any]) -> dict[str, Any]:
+    """Report a completed mutation even when the follow-up status read fails.
+
+    ``status()`` observes live systemd state; it is not part of the mutation
+    transaction. Turning a successful edit/reconcile into a CLI failure because
+    the observer failed misreports the authority state, so surface the read
+    failure as a diagnostic instead.
+    """
+    try:
+        result["status"] = status()
+    except Exception as exc:  # noqa: BLE001 - the mutation already committed
+        result["status"] = None
+        result["statusWarning"] = f"mutation completed but live status could not be read: {exc}"
+    return result
+
+
 def set_mode(service_id: str, mode: str) -> dict[str, Any]:
     try:
         result = set_service_mode(
@@ -173,8 +189,7 @@ def set_mode(service_id: str, mode: str) -> dict[str, Any]:
         _reconcile()
     except (OSError, ManagedServicesEditorError) as exc:
         raise ControlError(str(exc)) from exc
-    result["status"] = status()
-    return result
+    return _attach_status(result)
 
 
 def set_modes(modes: dict[str, str]) -> dict[str, Any]:
@@ -188,8 +203,7 @@ def set_modes(modes: dict[str, str]) -> dict[str, Any]:
         _reconcile()
     except (OSError, ManagedServicesEditorError) as exc:
         raise ControlError(str(exc)) from exc
-    result["status"] = status()
-    return result
+    return _attach_status(result)
 
 
 def replace_from_source(source: str, expected_revision: str) -> dict[str, Any]:
@@ -233,7 +247,7 @@ def document() -> dict[str, Any]:
 
 def reconcile() -> dict[str, Any]:
     _reconcile()
-    return {"ok": True, "status": status()}
+    return _attach_status({"ok": True})
 
 
 def _revision_argument(value: str) -> str:

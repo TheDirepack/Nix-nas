@@ -2,9 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {resolve} from "node:path";
+import {fileURLToPath} from "node:url";
 import cockpit from "./systemd-cockpit-stub.mjs";
 
-const source = readFileSync(resolve(import.meta.dirname, "../../cockpit/src/systemd.js"), "utf8");
+// import.meta.dirname requires Node 20.11+; this project builds on Node 18.
+const here = fileURLToPath(new URL(".", import.meta.url));
+const source = readFileSync(resolve(here, "../../cockpit/src/systemd.js"), "utf8");
 
 test("systemd status uses Cockpit system D-Bus directly", () => {
   assert.match(source, /cockpit\.dbus\(SYSTEMD_NAME, \{bus: "system"\}\)/);

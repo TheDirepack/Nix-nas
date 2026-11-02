@@ -45,8 +45,9 @@ ci_run() {
     fi
     printf '%s\t%s\t%s\t%d\t%d\t%s\t%s\n' \
       "$section" "$slug" "$label" "$rc" "$elapsed" "$log" "$command_text" >> "$CI_FAILED_RUNS_FILE"
-    printf '::error title=ci_run FAILED::%s\n' \
-      "FAILED ci_run: section=$section slug=$slug label=$label exit_code=$rc elapsed=${elapsed}s log=$log command=$command_text" >&2
+    printf '::error title=%s::%s\n' \
+      "ci_run FAILED" \
+      "section=$section slug=$slug label=$label exit_code=$rc elapsed=${elapsed}s log=$log command=$command_text" >&2
   fi
   return "$rc"
 }

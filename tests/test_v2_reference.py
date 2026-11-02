@@ -84,8 +84,9 @@ class V2ReferenceTests(unittest.TestCase):
         rendered = caddy.generate_caddyfile(effective)
         # Longest-path-first: /metrics/admin and /metrics/api must appear before /metrics/
         # Use specific path patterns to avoid substring matches
-        self.assertLess(rendered.index('"/metrics/admin/"'), rendered.index('"/metrics/" "/metrics/*"'))
-        self.assertLess(rendered.index('"/metrics/api/"'), rendered.index('"/metrics/" "/metrics/*"'))
+        parent = '"/metrics/" "/metrics" "/metrics/*"'
+        self.assertLess(rendered.index('"/metrics/admin/"'), rendered.index(parent))
+        self.assertLess(rendered.index('"/metrics/api/"'), rendered.index(parent))
 
     def test_nix_authority_path_consistency(self):
         nix_files = {
@@ -159,7 +160,9 @@ class V2ReferenceTests(unittest.TestCase):
         self.assertIn("derived", effective)
 
     def test_cockpit_port_consistency(self):
-        # Cockpit remains private on 9092; browser clients use the Caddy route.
+        # Cockpit listens on loopback TCP 127.0.0.1:9092 behind Caddy; browser
+        # clients use the Caddy /console route. Port 9092 is not admitted by
+        # the LAN firewall policy.
         network = (ROOT / "services/nas_v2_network.py").read_text(encoding="utf-8")
         self.assertIn("NAS_V2_COCKPIT_PORT", network)
         self.assertIn("_remote_admin_ports", network)

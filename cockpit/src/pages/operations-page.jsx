@@ -48,9 +48,15 @@ export function OperationsPage({data, mutate, busy}) {
       // The shared mutation hook keeps the failed action visible and reports its error.
     }
   };
-  const saveRemote = async () => {
-    const result = await mutate(() => apiInput(["backup-remote-set"], remoteDraft));
-    setLastResult(result);
+  const saveRemote = async (event) => {
+    if (event) event.preventDefault();
+    if (busy) return;
+    try {
+      const result = await mutate(() => apiInput(["backup-remote-set"], remoteDraft));
+      setLastResult(result);
+    } catch (_reason) {
+      // The shared mutation hook keeps the failed save visible and reports its error.
+    }
   };
   return (
     <>
@@ -101,7 +107,7 @@ export function OperationsPage({data, mutate, busy}) {
             substrate — the minimum needed to restore the Authentik remote sign-in route. All also
             includes V2 app data emitted via <code>storageResources</code>.
           </p>
-          <Form onSubmit={(_event) => _event.preventDefault()}>
+          <Form onSubmit={saveRemote}>
             <FormGroup label="Provider">
               <FormSelect
                 aria-label="Backup provider"
@@ -144,7 +150,7 @@ export function OperationsPage({data, mutate, busy}) {
                 isDisabled={busy}
               />
             </FormGroup>
-            <Button variant="secondary" onClick={saveRemote} isDisabled={busy}>
+            <Button type="submit" variant="secondary" isDisabled={busy}>
               Save remote (stub — wire to V2 authority when backend lands)
             </Button>
           </Form>

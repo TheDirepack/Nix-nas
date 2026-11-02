@@ -66,10 +66,16 @@ rules:
   - id: nas-python-sql-parameterized-call
     languages: [python]
     severity: WARNING
-    message: Parameterized SQL call with a string query; verify the query string is not assembled from unsanitized input.
-    pattern-either:
-      - pattern: $DB.execute($QUERY, ...)
-      - pattern: $DB.executemany($QUERY, ...)
+    message: Parameterized SQL call with a non-literal query; verify the query string is not assembled from unsanitized input.
+    # Only non-literal queries are reviewable: a constant statement with bound
+    # parameters (for example execute("PRAGMA integrity_check")) has no
+    # interpolation surface and a second argument proves parameters are bound.
+    patterns:
+      - pattern-either:
+          - pattern: $DB.execute($QUERY, $PARAMS, ...)
+          - pattern: $DB.executemany($QUERY, $PARAMS, ...)
+      - pattern-not: $DB.execute("...", $PARAMS, ...)
+      - pattern-not: $DB.executemany("...", $PARAMS, ...)
 
   - id: nas-react-dangerously-set-inner-html
     languages: [javascript, typescript]

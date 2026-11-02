@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import pathlib
 import subprocess
 import sys
@@ -115,6 +117,69 @@ class SecuritySurfaceTests(unittest.TestCase):
                 {finding.rule for finding in scanner.scan_nix(nix)},
             )
 
+    def test_static_scanner_fails_when_configured_root_disappears(self):
+        spec = importlib.util.spec_from_file_location(
+            "security_static_scan_root_missing", ROOT / "scripts" / "security-static-scan.py"
+        )
+        assert spec and spec.loader
+        scanner = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = scanner
+        spec.loader.exec_module(scanner)
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = pathlib.Path(tmp) / "gone"
+            with (
+                mock.patch.object(scanner.pathlib.Path, "is_dir", return_value=True),
+                mock.patch.multiple(
+                    scanner,
+                    PYTHON_ROOTS=(missing,),
+                    WEB_ROOTS=(),
+                    SHELL_ROOTS=(),
+                    NIX_ROOTS=(),
+                ),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(scanner.main(), 1)
+
+    def test_static_scanner_fails_on_unreadable_configured_subtree(self):
+        spec = importlib.util.spec_from_file_location(
+            "security_static_scan_root_unreadable", ROOT / "scripts" / "security-static-scan.py"
+        )
+        assert spec and spec.loader
+        scanner = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = scanner
+        spec.loader.exec_module(scanner)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            blocked = root / "blocked"
+            blocked.mkdir()
+            readable = root / "readable.sh"
+            readable.write_text("set -euo pipefail\n", encoding="utf-8")
+            real_scandir = scanner.os.scandir
+
+            def scandir(path):
+                if pathlib.Path(path) == blocked:
+                    raise PermissionError(13, "Permission denied", str(path))
+                return real_scandir(path)
+
+            with mock.patch.object(scanner.os, "scandir", side_effect=scandir):
+                paths, errors = scanner.files(root, {".sh"})
+                self.assertEqual(paths, [readable])
+                self.assertEqual(len(errors), 1)
+                self.assertIn(str(blocked), errors[0])
+
+            with (
+                mock.patch.object(scanner.os, "scandir", side_effect=scandir),
+                mock.patch.multiple(
+                    scanner,
+                    PYTHON_ROOTS=(),
+                    WEB_ROOTS=(),
+                    SHELL_ROOTS=(root,),
+                    NIX_ROOTS=(),
+                ),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(scanner.main(), 1)
+
     def test_static_scanner_detects_additional_browser_execution_sinks(self):
         spec = importlib.util.spec_from_file_location(
             "security_static_scan_web", ROOT / "scripts" / "security-static-scan.py"
@@ -177,11 +242,19 @@ class SecuritySurfaceTests(unittest.TestCase):
         self.assertNotIn(".backup '$destination'", source)
         self.assertNotIn(".restore '$source'", source)
 
-    def test_portal_explicitly_escapes_identity_values(self):
+    def test_portal_escapes_displayed_identity_and_compares_raw_user(self):
         portal = (ROOT / "web" / "portal" / "index.html").read_text(encoding="utf-8")
+        # Displayed identity values must be HTML-escaped.
         self.assertIn('placeholder "http.request.header.Remote-Name" | html', portal)
-        self.assertIn('placeholder "http.request.header.Remote-User" | urlquery', portal)
         self.assertNotIn('placeholder "http.request.header.Remote-Name"}}</strong>', portal)
+        # The user header is only used for equality against the configured
+        # allow-list, so it must NOT be urlquery-escaped: escaping rewrites
+        # characters such as "@" and makes legitimate accounts fail to match.
+        self.assertIn('$user := placeholder "http.request.header.Remote-User"', portal)
+        self.assertNotIn('placeholder "http.request.header.Remote-User" | urlquery', portal)
+        # The raw user value must never be emitted into markup.
+        self.assertNotIn("{{ $user }}", portal)
+        self.assertNotIn("{{$user}}", portal)
 
     def test_nas_alert_rejects_crlf_in_header_value(self):
         source = (ROOT / "modules" / "nas" / "internal" / "maintenance-tools.nix").read_text(encoding="utf-8")

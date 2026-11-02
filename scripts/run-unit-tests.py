@@ -480,23 +480,19 @@ def main() -> int:
 
         serial_files = [path for path in files if path.name in SERIAL_TEST_FILES]
         parallel_files = [path for path in files if path.name not in SERIAL_TEST_FILES]
-        interrupted = False
         if parallel_files:
             with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
                 futures = [pool.submit(run_file, path) for path in parallel_files]
-                for future in concurrent.futures.as_completed(futures):
-                    if interrupted:
-                        future.cancel()
-                        continue
-                    try:
+                # SystemExit can come from the as_completed iterator as well as
+                # from a worker future, so the cancel path must wrap the whole
+                # iteration rather than a single result() call.
+                try:
+                    for future in concurrent.futures.as_completed(futures):
                         record(future.result())
-                    except SystemExit:
-                        interrupted = True
+                except SystemExit:
+                    for future in futures:
                         future.cancel()
-                        for other in futures:
-                            if other is not future and not other.done():
-                                other.cancel()
-                        raise
+                    raise
         # Repository/package validator tests intentionally execute alone. They create clean
         # copies and run heavyweight release tooling; concurrent copies only add timeout
         # noise and can make resource pressure look like a product regression.

@@ -102,6 +102,22 @@ def group_names(raw: Mapping[str, Any], groups_by_pk: Mapping[str, str]) -> set[
     return output
 
 
+def eligible_administrator(user: User) -> bool:
+    """Whether a user satisfies the enabled-administrator invariant.
+
+    Mirrors enabled_administrator_names: the account must be enabled and its
+    username safe for a managed folder ID. Unsafe accounts stay visible in
+    reports, but cannot satisfy or be reported by the administrator invariant.
+    """
+    if not user.enabled:
+        return False
+    try:
+        validate_uid(user.uid)
+    except SyncError:
+        return False
+    return True
+
+
 def build_model(data: Mapping[str, Any]) -> IdentityModel:
     raw_groups = [item for item in data.get("groups", []) if isinstance(item, Mapping)]
     raw_users = [item for item in data.get("users", []) if isinstance(item, Mapping)]
@@ -206,7 +222,9 @@ def build_model(data: Mapping[str, Any]) -> IdentityModel:
             )
         )
 
-    administrators = tuple(sorted(user.uid for user in users if ADMIN_GROUP in user.groups))
+    administrators = tuple(
+        sorted(user.uid for user in users if ADMIN_GROUP in user.groups and eligible_administrator(user))
+    )
     if not administrators:
         raise SyncError(
             f"No enabled members of {ADMIN_GROUP} were found. Authentik superuser status "

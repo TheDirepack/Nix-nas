@@ -200,6 +200,57 @@ class V2FirewalldTests(unittest.TestCase):
         self.assertIn(["40000-40099", "udp"], policy["ports"])
         self.assertNotIn(["69", "udp"], policy["ports"])
 
+    def test_multiple_host_services_share_one_default_deny_policy(self):
+        services = {}
+        for name, port, forward_port, target_port in (
+            ("web", 8080, 9080, 18080),
+            ("api", 8081, 9081, 18081),
+        ):
+            services[name] = {
+                "managed": True,
+                "enabled": True,
+                "runtime": {"type": "systemd", "unit": f"{name}.service"},
+                "network": {
+                    "mode": "host",
+                    "outboundDefault": "allow",
+                    "lanAccess": False,
+                    "allowedHostPorts": [],
+                    "allowedEgress": [],
+                },
+                "listeners": {
+                    "server": {
+                        "protocol": "tcp",
+                        "exposure": {"port": port},
+                        "firewall": True,
+                    },
+                    "forward": {
+                        "protocol": "tcp",
+                        "exposure": {"port": forward_port},
+                        "targetPort": target_port,
+                        "firewall": True,
+                    },
+                },
+            }
+        effective = {"schemaVersion": 3, "services": services}
+        files, manifest = firewalld.compile_projection(effective, lan_zone="trusted")
+        self.assertTrue(requires_firewalld(effective))
+        for name, port, forward_port, target_port in (
+            ("web", 8080, 9080, 18080),
+            ("api", 8081, 9081, 18081),
+        ):
+            policy = files[f"policies/{firewalld.listener_policy_name(name)}"]
+            self.assertIn([str(port), "tcp"], policy["ports"])
+            self.assertIn([str(forward_port), "tcp", str(target_port)], policy["forwardPorts"])
+        combined_forward_ports = [
+            entry
+            for name in ("web", "api")
+            for entry in files[f"policies/{firewalld.listener_policy_name(name)}"]["forwardPorts"]
+        ]
+        self.assertEqual(
+            sorted(combined_forward_ports),
+            sorted([["9080", "tcp", "18080"], ["9081", "tcp", "18081"]]),
+        )
+
     def test_listener_target_port_requires_single_port_exposure(self):
         effective = {
             "schemaVersion": 3,

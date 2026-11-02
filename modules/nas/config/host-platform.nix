@@ -104,8 +104,17 @@ in
       nvidiaSettings = false;
       powerManagement.enable = false;
     };
-    hardware.nvidia-container-toolkit.enable =
-      hasNvidiaGpu && cfg.hardware.nvidia.containerToolkit;
+    hardware.nvidia-container-toolkit = {
+      enable = hasNvidiaGpu && cfg.hardware.nvidia.containerToolkit;
+      # The platform probe emits index selectors (nvidia.com/gpu=0); keep UUID
+      # selectors resolvable for existing service declarations. nvidia-ctk
+      # accepts repeated --device-name-strategy flags and generates one CDI
+      # device name per strategy.
+      device-name-strategy = lib.mkIf (hasNvidiaGpu && cfg.hardware.nvidia.containerToolkit) "index";
+      extraArgs = lib.mkIf (hasNvidiaGpu && cfg.hardware.nvidia.containerToolkit) [
+        "--device-name-strategy=uuid"
+      ];
+    };
     services.xserver = lib.mkIf cfg.desktop.enable {
       enable = true;
       videoDrivers =

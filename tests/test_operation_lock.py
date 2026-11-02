@@ -79,6 +79,13 @@ class OperationLockTests(unittest.TestCase):
             locks.validate_coordination_token(operation.coordination_token, ("storage", "identity"))
         self.assertEqual(sorted(self.root.glob("*.lock")), [self.root / locks.LOCK_PATH_NAME])
 
+    def test_deeply_nested_metadata_is_treated_as_absent_instead_of_crashing(self) -> None:
+        depth = 200_000
+        payload = "[" * depth + "0" + "]" * depth
+        handle = mock.Mock()
+        handle.read.return_value = payload
+        self.assertIsNone(locks._read_metadata(handle))
+
     def test_reservation_is_only_an_admission_check(self) -> None:
         reservation = locks.reserve_operation("first-start", ("storage",), ttl_seconds=60)
         self.assertEqual(reservation.classes, ("storage",))

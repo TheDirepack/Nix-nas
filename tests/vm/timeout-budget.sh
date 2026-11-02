@@ -79,6 +79,12 @@ nas_vm_full_suite_timeout_seconds() {
   printf '%s\n' "$(( $(nas_vm_outer_value fullSuiteSetup) + $(nas_vm_integration_timeout_seconds) ))"
 }
 
+# The persistent-test wrapper rebuilds the guest source (reconfigureBuild) before
+# it starts the in-VM full suite, so its outer deadline covers the rebuild too.
+nas_vm_persistent_test_timeout_seconds() {
+  printf '%s\n' "$(( $(nas_vm_full_suite_timeout_seconds) + $(nas_vm_timeout_value reconfigureBuild) + $(nas_vm_outer_value slack) ))"
+}
+
 nas_vm_ci_integration_timeout_seconds() {
   printf '%s\n' "$(( $(nas_vm_integration_timeout_seconds) + $(nas_vm_outer_value ciSetup) ))"
 }

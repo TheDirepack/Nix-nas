@@ -1,7 +1,24 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-fail() { printf 'evaluate-reference-configurations: %s\n' "$*" >&2; exit 1; }
+fail() {
+  local status=$1
+  shift
+  printf 'evaluate-reference-configurations: %s\n' "$*" >&2
+  exit "$status"
+}
+
+# Preserve nix's own exit status so CI surfaces the real evaluation failure code
+# instead of collapsing every failure into a generic 1.
+nix_eval() {
+  local attribute=$1
+  local description=$2
+  local status=0
+  nix eval --raw "$attribute" >/dev/null || status=$?
+  if ((status != 0)); then
+    fail "$status" "nix eval failed for ${description}"
+  fi
+}
 
 # The repository's nixosConfigurations.nas intentionally imports the checked-in
 # hardware-configuration.nix placeholder.  That output becomes bootable only
@@ -32,16 +49,13 @@ checks=(
 
 for configuration in "${configurations[@]}"; do
   printf 'evaluating nixosConfigurations.%s\n' "$configuration"
-  if ! nix eval --raw ".#nixosConfigurations.${configuration}.config.system.build.toplevel.drvPath" >/dev/null; then
-    fail "nix eval failed for nixosConfigurations.${configuration}"
-  fi
+  nix_eval ".#nixosConfigurations.${configuration}.config.system.build.toplevel.drvPath" \
+    "nixosConfigurations.${configuration}"
 done
 
 for check in "${checks[@]}"; do
   printf 'evaluating checks.x86_64-linux.%s\n' "$check"
-  if ! nix eval --raw ".#checks.x86_64-linux.${check}.drvPath" >/dev/null; then
-    fail "nix eval failed for checks.x86_64-linux.${check}"
-  fi
+  nix_eval ".#checks.x86_64-linux.${check}.drvPath" "checks.x86_64-linux.${check}"
 done
 
 printf 'reference configuration evaluation passed: %d configurations, %d checks\n' \

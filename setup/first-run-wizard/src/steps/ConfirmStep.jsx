@@ -128,6 +128,7 @@ const ConfirmStep = ({
     let polls = 0;
     const MAX_POLLS = 30; // 30 polls * 2s = 60s maximum polling window
     const poll = async () => {
+      polls += 1;
       try {
         const value = await fetchJson('api/first-start/job', {
           headers: { Accept: 'application/json', [CAPABILITY_HEADER]: capability },
@@ -141,7 +142,6 @@ const ConfirmStep = ({
         if (!cancelled) setPollingInterrupted(true);
       } finally {
         if (!cancelled && polls < MAX_POLLS) {
-          polls++;
           timer = window.setTimeout(poll, 2000);
         }
       }

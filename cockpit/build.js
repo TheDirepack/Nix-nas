@@ -2,9 +2,11 @@
 import {copyFileSync, existsSync, mkdirSync, readFileSync, rmSync} from "node:fs";
 import {join, resolve} from "node:path";
 import {createRequire} from "node:module";
+import {fileURLToPath} from "node:url";
 import process from "node:process";
 
-const root = resolve(import.meta.dirname);
+// import.meta.dirname requires Node 20.11+; this project builds on Node 18.
+const root = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const source = join(root, "src");
 const output = join(root, "dist");
 const mode = process.argv[2] || "build";

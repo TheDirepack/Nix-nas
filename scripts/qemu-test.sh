@@ -578,7 +578,6 @@ run_installer() {
       return "$pid_status"
     }
   }
-  trap cleanup_vm EXIT INT TERM
 
   [[ "$package_upgrade" == 0 || "$package_upgrade" == 1 ]] || die "NAS_QEMU_PACKAGE_UPGRADE must be 0 or 1"
   reconfigure_timeout="${NAS_QEMU_RECONFIGURE_TIMEOUT:-$(nas_vm_timeout_value reconfigure)}"
@@ -618,6 +617,9 @@ run_installer() {
   if [[ "$persistent_mode" != 1 || ! -s "$pidfile" ]]; then
     rm -f "$boot_log"
   fi
+  # Arm cleanup only after the shared-pidfile check above. A refusal that
+  # protects a live persistent VM must not run the EXIT trap and stop it.
+  trap cleanup_vm EXIT INT TERM
   if [[ "$reuse_installed" != 1 && ( "$KEEP_VM" != 1 || ! -s "$os_disk" || ! -s "$ssh_key" || "$marker_id" != "$source_id" ) ]] || \
      [[ ! -s "$os_disk" || ! -s "$ssh_key" || ! -s "$install_marker" ]]; then
     iso="$(download_iso)"
@@ -802,7 +804,7 @@ run_installer() {
 run_installer_with_timeout() {
   local mode=$1 timeout_seconds
   case "$mode" in
-    persistent-test) timeout_seconds="${NAS_QEMU_FULL_SUITE_TIMEOUT:-$(( $(nas_vm_full_suite_timeout_seconds) + $(nas_vm_outer_value slack) ))}" ;;
+    persistent-test) timeout_seconds="${NAS_QEMU_FULL_SUITE_TIMEOUT:-$(nas_vm_persistent_test_timeout_seconds)}" ;;
     *)
       timeout_seconds="${NAS_QEMU_INSTALLER_TIMEOUT:-$(nas_vm_installer_timeout_seconds)}"
       if [[ "${NAS_QEMU_PACKAGE_UPGRADE:-0}" == 1 && -z "${NAS_QEMU_INSTALLER_TIMEOUT:-}" ]]; then

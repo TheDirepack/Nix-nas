@@ -126,7 +126,13 @@ bundle_hash() {
 
 closure() {
   local -a outs=()
-  mapfile -t outs < <(bundle_out_paths "$1")
+  local roots
+  # A process substitution or pipeline would hide a failed nix eval behind the
+  # exit status of mapfile/sort, turning an incomplete closure into an empty or
+  # partial one. Capture the roots explicitly so evaluation errors fail closed.
+  roots="$(bundle_out_paths "$1")" || return $?
+  [[ -n "$roots" ]] || return 1
+  mapfile -t outs <<< "${roots%$'\n'}"
   "$NIX" path-info -r "${outs[@]}" | sort -u
 }
 
@@ -170,36 +176,72 @@ save() {
   manifest="$dir/bundle-manifest.tsv"
 
   closure_cached() {
-    local cached_name=$1 cached_file="$SAVE_CLOSURE_CACHE/$1.paths"
-    if [[ ! -f "$cached_file" ]]; then
-      if [[ -f "$dir/$cached_name.paths" ]]; then
-        printf '%s: reusing cached closure manifest for %s\n' "$PROG" "$cached_name" >&2
-        cp -- "$dir/$cached_name.paths" "$cached_file"
-        sort -u "$cached_file" -o "$cached_file"
-      else
-        printf '%s: enumerating closure for %s\n' "$PROG" "$cached_name" >&2
-        closure "$cached_name" > "$cached_file"
-        printf '%s: closure enumeration complete for %s (%s paths)\n' \
-          "$PROG" "$cached_name" "$(wc -l < "$cached_file")" >&2
+    local cached_name=$1 cached_file="$SAVE_CLOSURE_CACHE/$1.paths" enum_tmp
+    if [[ -f "$cached_file" ]]; then
+      cat "$cached_file"
+      return 0
+    fi
+    # Persisted paths describe the closure of the bundle revision whose archive
+    # sits beside them. Reuse them only for save-missing when both exist; a
+    # missing archive means the key moved and the paths are stale, and full
+    # save runs must always enumerate the current closure.
+    if ((only_missing == 1)) && [[ -f "$dir/$cached_name.nar.gz" && -f "$dir/$cached_name.paths" ]]; then
+      printf '%s: reusing cached closure manifest for %s\n' "$PROG" "$cached_name" >&2
+      cp -- "$dir/$cached_name.paths" "$cached_file" || return 1
+      sort -u "$cached_file" -o "$cached_file" || return 1
+    else
+      printf '%s: enumerating closure for %s\n' "$PROG" "$cached_name" >&2
+      enum_tmp="$cached_file.$$"
+      if ! closure "$cached_name" > "$enum_tmp"; then
+        rm -f -- "$enum_tmp"
+        return 1
       fi
+      mv -- "$enum_tmp" "$cached_file"
+      printf '%s: closure enumeration complete for %s (%s paths)\n' \
+        "$PROG" "$cached_name" "$(wc -l < "$cached_file")" >&2
     fi
     cat "$cached_file"
   }
 
+  # The union of every application closure, excluding core (which has its own
+  # bundle) and the driver bundle (which is a delta against this union). The
+  # while loop must not feed a pipeline: that would discard a failed evaluation
+  # and let an incomplete manifest be published.
+  application_closure() {
+    local name unsorted="$SAVE_CLOSURE_CACHE/.application.unsorted"
+    : > "$unsorted"
+    while IFS= read -r name; do
+      [[ $name == core || $name == vm-drivers ]] && continue
+      closure_cached "$name" >> "$unsorted" || return 1
+    done < <(list_bundles)
+    sort -u "$unsorted"
+  }
+
   write_manifest() {
-    local manifest_name manifest_path
-    : > "$manifest"
+    local manifest_name manifest_path closure_file manifest_tmp="$manifest.tmp.$$"
+    # Build beside the destination and rename: a failed run must not leave a
+    # partial manifest that a later save-missing would trust and checksum.
+    : > "$manifest_tmp"
     while IFS= read -r manifest_name; do
+      # Materialize every closure through closure_cached first: comm in a
+      # process substitution would silently diff against an empty closure if
+      # evaluation failed, producing an incomplete manifest.
+      if ! closure_cached "$manifest_name" > /dev/null; then
+        rm -f -- "$manifest_tmp"
+        return 1
+      fi
+      closure_file="$SAVE_CLOSURE_CACHE/$manifest_name.paths"
       case "$manifest_name" in
-        core) closure_cached core > "$dir/.manifest.paths" ;;
-        vm-drivers) comm -23 <(closure_cached vm-drivers) "$base_file" > "$dir/.manifest.paths" ;;
-        *) comm -23 <(closure_cached "$manifest_name") "$core_file" > "$dir/.manifest.paths" ;;
+        core) cp -- "$closure_file" "$dir/.manifest.paths" ;;
+        vm-drivers) comm -23 "$closure_file" "$base_file" > "$dir/.manifest.paths" ;;
+        *) comm -23 "$closure_file" "$core_file" > "$dir/.manifest.paths" ;;
       esac
       while IFS= read -r manifest_path; do
-        [[ -n "$manifest_path" ]] && printf '%s\t%s\n' "$manifest_name" "$manifest_path" >> "$manifest"
+        [[ -n "$manifest_path" ]] && printf '%s\t%s\n' "$manifest_name" "$manifest_path" >> "$manifest_tmp"
       done < "$dir/.manifest.paths"
     done < <(list_bundles)
     rm -f "$dir/.manifest.paths"
+    mv -- "$manifest_tmp" "$manifest"
   }
 
   if [[ $only_missing == 1 ]]; then
@@ -212,17 +254,13 @@ save() {
   # A complete cache hit is already the exact handoff needed by downstream
   # VMs. Do not invoke Nix or rewrite archives when there is nothing missing.
   if ((${#targets[@]} == 0)); then
-    [[ -f "$dir/bundle-manifest.tsv" ]] || {
+    if [[ ! -f "$dir/bundle-manifest.tsv" ]]; then
       closure_cached core > "$core_file"
-      : > "$application_file"
-      while IFS= read -r name; do
-        [[ $name == core || $name == vm-drivers ]] && continue
-        closure_cached "$name"
-      done < <(list_bundles) | sort -u > "$application_file"
-      cat "$core_file" "$application_file" | sort -u > "$base_file"
+      application_closure > "$application_file"
+      sort -u "$core_file" "$application_file" > "$base_file"
       write_manifest
       rm -f "$core_file" "$application_file" "$base_file"
-    }
+    fi
     verify_manifest "$dir"
     write_handoff_checksum "$dir"
     return 0
@@ -237,18 +275,11 @@ save() {
     build_bundles "${targets[@]}"
   fi
   # Bundles whose archives are missing must not reuse a stale cached closure
-  # manifest; re-enumerate from Nix instead of reusing a persisted .paths file
-  # that may correspond to a different bundle revision.
-  for name in "${targets[@]}"; do
-    rm -f -- "$SAVE_CLOSURE_CACHE/$name.paths" "$dir/$name.paths"
-  done
+  # manifest; closure_cached re-enumerates from Nix whenever the archive is
+  # absent, which also covers every bundle in a full save run.
   closure_cached core > "$core_file"
-  : > "$application_file"
-  while IFS= read -r name; do
-    [[ $name == core || $name == vm-drivers ]] && continue
-    closure_cached "$name"
-  done < <(list_bundles) | sort -u > "$application_file"
-  cat "$core_file" "$application_file" | sort -u > "$base_file"
+  application_closure > "$application_file"
+  sort -u "$core_file" "$application_file" > "$base_file"
   closure_cached vm-drivers > /dev/null
   while IFS= read -r name; do
     cp -- "$SAVE_CLOSURE_CACHE/$name.paths" "$dir/$name.paths"

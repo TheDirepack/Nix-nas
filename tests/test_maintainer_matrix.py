@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import unittest
@@ -249,6 +250,39 @@ sys.exit(int(os.environ.get('FAKE_ZAP_RC', '0')))
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("NAS_ZAP_CONFIRM_ACTIVE=1", result.stderr)
+
+    def test_zap_automation_deadline_is_clamped_for_long_scan_budgets(self) -> None:
+        bin_dir = pathlib.Path(self._temporary.name) / "deadline-bin"
+        bin_dir.mkdir(exist_ok=True)
+        for tool in ("bash", "chmod", "dirname", "id", "install", "python3", "rm", "timeout"):
+            executable = shutil.which(tool)
+            assert executable is not None, tool
+            (bin_dir / tool).symlink_to(executable)
+        runtime = bin_dir / "docker"
+        runtime.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        runtime.chmod(0o755)
+        out = pathlib.Path(self._temporary.name) / "zap-deadline"
+        out.mkdir()
+        result = subprocess.run(
+            ["bash", "scripts/zap-automation-scan.sh", "unauthenticated", "https://127.0.0.1/"],
+            cwd=self.clean_root,
+            env={
+                **os.environ,
+                "PATH": str(bin_dir),
+                "NAS_CONTAINER_RUNTIME": "docker",
+                "NAS_ZAP_IMAGE": "example.invalid/zap@sha256:" + "a" * 64,
+                "NAS_ZAP_CONFIRM_ACTIVE": "1",
+                "NAS_ZAP_AUTOMATION_MINUTES": "240",
+                "NAS_ZAP_OUT_DIR": str(out),
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        # A 240 minute budget must not be rejected by the derived process
+        # deadline; the run stops later at the scanner build step.
+        self.assertNotIn("must not exceed 18000", result.stderr)
+        self.assertIn("could not build the source-built scanner", result.stderr)
 
     def test_zap_wrappers_require_reports_from_the_current_scan(self) -> None:
         fake_bin = pathlib.Path(self._temporary.name) / "fresh-evidence-bin"

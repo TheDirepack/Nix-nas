@@ -6,6 +6,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from typing import Any
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -297,6 +298,54 @@ class CommonPolicyTests(unittest.TestCase):
                     ("syncthing", "access"),
                 )
 
+    def test_resolve_v2_service_capability_fails_closed_on_dangling_leaf_and_corrupt_authority(self) -> None:
+        env_base = {"NAS_V2_SYNCTHING_SERVICE": "syncthing", "NAS_V2_SYNCTHING_CAPABILITY": "access"}
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+
+            dangling_leaf = root / "effective.json"
+            dangling_leaf.symlink_to(root / "does-not-exist")
+            with mock.patch.dict(os.environ, {**env_base, "NAS_V2_EFFECTIVE": str(dangling_leaf)}, clear=False):
+                self.assertIsNone(
+                    common.resolve_v2_service_capability(
+                        "NAS_V2_SYNCTHING_SERVICE", "NAS_V2_SYNCTHING_CAPABILITY", "syncthing", "access"
+                    )
+                )
+
+            corrupt = root / "corrupt.json"
+            corrupt.write_text("{not json", encoding="utf-8")
+            with mock.patch.dict(os.environ, {**env_base, "NAS_V2_EFFECTIVE": str(corrupt)}, clear=False):
+                with self.assertRaisesRegex(ValueError, "not valid JSON"):
+                    common.resolve_v2_service_capability(
+                        "NAS_V2_SYNCTHING_SERVICE", "NAS_V2_SYNCTHING_CAPABILITY", "syncthing", "access"
+                    )
+
+            unreadable = root / "directory-authority"
+            unreadable.mkdir()
+            with mock.patch.dict(os.environ, {**env_base, "NAS_V2_EFFECTIVE": str(unreadable)}, clear=False):
+                with self.assertRaisesRegex(ValueError, "unreadable"):
+                    common.resolve_v2_service_capability(
+                        "NAS_V2_SYNCTHING_SERVICE", "NAS_V2_SYNCTHING_CAPABILITY", "syncthing", "access"
+                    )
+
+            missing_authorization = root / "no-authz.json"
+            missing_authorization.write_text(
+                json.dumps({"schemaVersion": 3, "services": {}, "derived": {}}), encoding="utf-8"
+            )
+            with mock.patch.dict(os.environ, {**env_base, "NAS_V2_EFFECTIVE": str(missing_authorization)}, clear=False):
+                with self.assertRaisesRegex(ValueError, "missing the derived.authorization"):
+                    common.resolve_v2_service_capability(
+                        "NAS_V2_SYNCTHING_SERVICE", "NAS_V2_SYNCTHING_CAPABILITY", "syncthing", "access"
+                    )
+
+            non_object = root / "list.json"
+            non_object.write_text("[]", encoding="utf-8")
+            with mock.patch.dict(os.environ, {**env_base, "NAS_V2_EFFECTIVE": str(non_object)}, clear=False):
+                with self.assertRaisesRegex(ValueError, "top-level must be an object"):
+                    common.resolve_v2_service_capability(
+                        "NAS_V2_SYNCTHING_SERVICE", "NAS_V2_SYNCTHING_CAPABILITY", "syncthing", "access"
+                    )
+
     def test_resolve_v2_service_capability_resolves_declared_capability(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
@@ -305,12 +354,8 @@ class CommonPolicyTests(unittest.TestCase):
                 json.dumps(
                     {
                         "schemaVersion": 3,
-                        "services": {},
-                        "derived": {
-                            "authorization": {
-                                "demo": {"capabilities": {"access": "application.demo.access"}}
-                            }
-                        },
+                        "services": {"demo": {"enabled": True}},
+                        "derived": {"authorization": {"demo": {"capabilities": {"access": "application.demo.access"}}}},
                     }
                 )
             )

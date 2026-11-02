@@ -9,6 +9,79 @@ let
     + pkgs.lib.foldl' (total: key: total + (builtins.getAttr key timeoutBudget.timeouts)) 0 phase.timeoutKeys;
   guestWatchdog = pkgs.lib.foldl' (total: phase: total + phaseBudget phase) 0 timeoutBudget.phases
     + timeoutBudget.slackSeconds;
+  deviceAllowProbe = pkgs.writeText "nas-vm-device-allow.py" ''
+    import errno
+    import json
+    import os
+    import pathlib
+    import stat
+    import subprocess
+    import sys
+    import tempfile
+
+    sys.path.insert(0, "${../../services}")
+    from nas_v2_systemd_attachments import attachment_lines
+
+    # DeviceAllow= filters on major:minor, not on the node path. Reusing
+    # /dev/null's identity (1:3) would make the stdio grant below authorize
+    # every variant, so use /dev/zero (1:5) for the probe aliases instead.
+    probe_device = os.makedev(1, 5)
+
+    subprocess.run(["systemctl", "--version"], check=True)
+    results = []
+    with tempfile.TemporaryDirectory(prefix="nas-deviceallow-", dir="/run") as temporary:
+        root = pathlib.Path(temporary)
+        for index, device in enumerate(("/dev/nas-deviceallow-probe", "/dev/nas-deviceallow probe")):
+            node = pathlib.Path(device)
+            os.mknod(node, stat.S_IFCHR | 0o600, probe_device)
+            try:
+                projected = attachment_lines({}, {
+                    "runtime": {"type": "systemd"},
+                    "resources": {"accelerators": [{"mode": "shared", "device": device}]},
+                })
+                legacy = [line.replace('" rw', ' rw"') if line.startswith("DeviceAllow=") else line for line in projected]
+                for variant, lines, expected in (("denied", [], False), ("legacy", legacy, False), ("projected", projected, True)):
+                    name = f"nas-vm-deviceallow-{index}-{variant}.service"
+                    unit = pathlib.Path("/run/systemd/system") / name
+                    report = root / f"{index}-{variant}.json"
+                    probe = root / f"{index}-{variant}.py"
+                    probe.write_text(
+                        "import errno,json,os,pathlib\nresult={}\n"
+                        "for name,mode in [('read',os.O_RDONLY),('write',os.O_WRONLY)]:\n"
+                        " try:\n"
+                        f"  fd=os.open({device!r},mode);os.close(fd);result[name]=True\n"
+                        " except OSError as error:\n"
+                        "  if error.errno not in (errno.EPERM,errno.EACCES):raise\n"
+                        "  result[name]=False\n"
+                        f"pathlib.Path({str(report)!r}).write_text(json.dumps(result))\n"
+                    )
+                    # /dev/null is always available for stdio even under DevicePolicy=strict;
+                    # it is not the device under test and does not weaken enforcement.
+                    stdio_allow = ["DeviceAllow=/dev/null rw"]
+                    unit.write_text("\n".join([
+                        "[Service]", "Type=oneshot", *stdio_allow, *lines,
+                        # Strict mode removes systemd's implicit pseudo-device grants,
+                        # so only an explicit rule can authorize the probe device.
+                        "DevicePolicy=strict", f"ExecStart=${pkgs.python3}/bin/python {probe}", "",
+                    ]))
+                    try:
+                        subprocess.run(["systemctl", "daemon-reload"], check=True)
+                        subprocess.run(["systemctl", "start", name], check=True)
+                        parsed = subprocess.check_output(["systemctl", "show", name, "-p", "DeviceAllow", "--value"], text=True)
+                        observed = json.loads(report.read_text())
+                        results.append({"device": device, "variant": variant, "parsed": parsed, "observed": observed})
+                        print(json.dumps(results[-1]), flush=True)
+                        assert observed == {"read": expected, "write": expected}, results[-1]
+                    finally:
+                        try:
+                            subprocess.run(["systemctl", "stop", name], check=False)
+                        finally:
+                            unit.unlink(missing_ok=True)
+                            subprocess.run(["systemctl", "daemon-reload"], check=False)
+            finally:
+                node.unlink()
+    assert len(results) == 6
+  '';
 in
 
 pkgs.testers.runNixOSTest {
@@ -45,6 +118,7 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_unit("multi-user.target")
     machine.succeed("busctl --system call org.freedesktop.UDisks2 /org/freedesktop/UDisks2 org.freedesktop.DBus.ObjectManager GetManagedObjects >/dev/null")
     machine.succeed("test $(systemctl show -p Result --value nas-vm-test-repository.service) = success")
+    machine.succeed("${pkgs.python3}/bin/python ${deviceAllowProbe}")
     machine.succeed("test ! -e /run/nas-secret-runtime/live/ready")
     # The dirty service must gate reconciliation on the secret-ready marker:
     # before secrets are active it must not create reconcile.pending, and once
@@ -59,6 +133,19 @@ pkgs.testers.runNixOSTest {
     machine.succeed("test $(systemctl show -p ActiveState --value nas-managed-services-dirty.service) = inactive")
     machine.succeed("test $(systemctl show -p Result --value nas-managed-services-dirty.service) = success")
     machine.succeed("test -e /run/nas-control/reconcile.pending")
+    # Serialization: readiness can disappear behind the lock, so the dirty
+    # service must take /run/lock/nas-secrets.lock before it rechecks the ready
+    # marker. While that lock is held the unit blocks and no marker appears.
+    machine.succeed("rm -f /run/nas-control/reconcile.pending")
+    machine.succeed("systemd-run --unit=nas-secrets-lock-holder ${pkgs.util-linux}/bin/flock -x /run/lock/nas-secrets.lock ${pkgs.bash}/bin/bash -c '${pkgs.coreutils}/bin/touch /run/nas-lock-holder-acquired && exec ${pkgs.coreutils}/bin/sleep 300'")
+    machine.wait_until_succeeds("test -e /run/nas-lock-holder-acquired")
+    machine.succeed("systemctl start --no-block nas-managed-services-dirty.service")
+    machine.wait_until_succeeds("test $(systemctl show -p ActiveState --value nas-managed-services-dirty.service) = activating", timeout=15)
+    machine.succeed("test ! -e /run/nas-control/reconcile.pending")
+    machine.succeed("systemctl stop nas-managed-services-dirty.service")
+    machine.succeed("test ! -e /run/nas-control/reconcile.pending")
+    machine.succeed("systemctl stop nas-secrets-lock-holder.service")
+    machine.succeed("systemctl reset-failed nas-secrets-lock-holder.service nas-managed-services-dirty.service || true")
     # Return to a clean pre-ready state for the existing reconcile checks.
     machine.succeed("rm -f /run/nas-secret-runtime/live/ready /run/nas-control/reconcile.pending")
     machine.succeed("systemctl start nas-managed-services-reconcile.service")

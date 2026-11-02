@@ -56,7 +56,9 @@ export default function App() {
     return () => window.removeEventListener("hashchange", syncFromHash);
   }, []);
 
-  const unlock = async () => {
+  const unlock = async (event) => {
+    if (event) event.preventDefault();
+    if (busy || !unlockPassword) return;
     try {
       await mutate(() => activateSecrets(unlockPassword));
       setUnlockPassword("");
@@ -121,7 +123,7 @@ export default function App() {
                 <CardTitle>Protected services are locked</CardTitle>
               </CardHeader>
               <CardBody>
-                <Form onSubmit={(_event) => _event.preventDefault()}>
+                <Form onSubmit={unlock}>
                   <FormGroup label="KeePassXC database password">
                     <TextInput
                       type="password"
@@ -129,7 +131,7 @@ export default function App() {
                       onChange={(_e, value) => setUnlockPassword(value)}
                     />
                   </FormGroup>
-                  <Button onClick={unlock} isDisabled={busy || !unlockPassword}>
+                  <Button type="submit" isDisabled={busy || !unlockPassword}>
                     Activate secrets
                   </Button>
                 </Form>

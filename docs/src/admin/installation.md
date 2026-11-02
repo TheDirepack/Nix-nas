@@ -47,7 +47,7 @@ On the target machine, run `nixos-generate-config`, review its output, and repla
 
    Write the value down with your recovery material. It must never change after the pool is created or imported.
 
-2. **Plan first access.** Fresh systems create the disposable `akadmin` Linux login at boot with the same release credential used by Authentik. The wizard replaces it with your permanent administrator. Add permanent SSH keys after setup, or use local console/KVM for first access.
+2. **Plan first access.** Fresh systems create the disposable `akadmin` Linux login at boot with the same release credential used by Authentik. The wizard replaces it with your permanent administrator. Add permanent SSH keys after setup, or use local console/KVM for first access. Readiness is evaluated from Nix, so before setting `nas.installationReady = true` declare the permanent administrator in `local.nix` with its SSH key and its `nas-administrators` membership — as the primary group, in `extraGroups`, or in `users.groups.nas-administrators.members` — because the wizard's runtime `usermod` is invisible to Nix evaluation.
 
 3. **Set `nas.trustedInterfaces`** to the names of your LAN interfaces (for example `[ "enp1s0" ]`). These are the only interfaces allowed to reach SSH, HTTPS, mDNS, Syncthing, and optional TFTP; empty is fail-closed.
 
@@ -140,7 +140,7 @@ Two routes reach the same result. Run either as the configured local administrat
 
 Open `https://<nas-hostname>.local/setup/` and follow the first-start wizard: administrator account, storage plan and ZFS-encryption choice, and final confirmation. Encryption is recommended and starts enabled; its key is created in the new system-side KeePassXC database before ZFS is created. Configure the host locale declaratively in NixOS; the wizard does not maintain a second mutable locale setting.
 
-Authentik gates the wizard. Sign in with temporary identity `akadmin`: development builds use `nas-admin-first-boot`, while releases publish their generated password in the matching release notes. The same username/password works for the initial Linux console login. Setup rebuilds Authentik and PostgreSQL on the system partition, creates your permanent Authentik and ZFS-backed Linux administrator, and removes both temporary identities.
+Authentik gates the wizard. Sign in with temporary identity `akadmin`: development builds use `nas-admin-first-boot`, while releases publish their generated password in the matching release notes. The same username/password authenticates the initial Linux console login, which requires setting a new password before the session starts. Setup rebuilds Authentik and PostgreSQL on the system partition, creates your permanent Authentik and ZFS-backed Linux administrator, and removes both temporary identities.
 
 ### Route B: the CLI from a recovery terminal
 

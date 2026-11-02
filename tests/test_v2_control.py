@@ -71,6 +71,21 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["status"], {"ok": True})
 
+    def test_status_read_failure_after_mutation_is_a_warning_not_a_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            desired_path = pathlib.Path(tmp) / "services.yaml"
+            desired_path.write_text("schemaVersion: 3\nservices: {}\n", encoding="utf-8")
+            with (
+                mock.patch.object(control, "DESIRED_PATH", desired_path),
+                mock.patch.object(control, "set_service_mode", return_value={"ok": True}),
+                mock.patch.object(control, "_reconcile"),
+                mock.patch.object(control, "status", side_effect=control.ControlError("systemctl show failed")),
+            ):
+                result = control.set_mode("demo", "always")
+        self.assertTrue(result["ok"], "a completed mutation must not be reported as failed")
+        self.assertIsNone(result["status"])
+        self.assertIn("systemctl show failed", result["statusWarning"])
+
     def test_failed_reconcile_is_reported_without_a_second_editor_rollback(self):
         with tempfile.TemporaryDirectory() as tmp:
             desired_path = pathlib.Path(tmp) / "services.yaml"

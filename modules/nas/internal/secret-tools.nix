@@ -75,7 +75,7 @@ let
           }
         else
           read -r -s -p "KeePass database password: " keepass_password
-          echo
+          echo >&2
         fi
         [[ -n "$keepass_password" ]] || {
           echo "The KeePass database password cannot be empty." >&2
@@ -628,7 +628,7 @@ NTFY_ENV
       command_show_zfs_key() {
         prompt_unlock
         get_secret zfs-dataset-key
-        echo
+        echo >&2
       }
 
       command_show_zfs_key_stdin() {

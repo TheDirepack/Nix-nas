@@ -706,11 +706,12 @@ def build_verify_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
+    arguments = sys.argv[1:] if argv is None else argv
     # Allow verify sub-invocation via same entrypoint when invoked as backup-verify
-    if argv is not None and "--restore-root" in argv:
-        return verify_main(argv)
-    args = parser.parse_args(argv)
+    if "--restore-root" in arguments:
+        return verify_main(arguments)
+    parser = build_parser()
+    args = parser.parse_args(arguments)
     try:
         if args.command == "prepare":
             result = prepare(
@@ -964,3 +965,7 @@ __all__ = [
     "verify_main",
     "main",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

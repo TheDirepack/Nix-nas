@@ -469,8 +469,19 @@ jobs:
         continue-on-error: true
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: main-coverage.json
-          key: ${{ env.CI_CACHE_SCHEMA }}-coverage-main-${{ runner.os }}-${{ hashFiles('scripts/prepare-coverage-baseline.py', 'scripts/ci-qualification.sh', '.github/workflows/ci.yml') }}
+          # A baseline measured on one main revision is not a valid target for
+          # a different main revision. The resolved SHA is part of the exact
+          # key, so PRs that share a base commit reuse one cached baseline
+          # while a new main commit can never inherit an older one.
+          path: |
+            main-coverage.json
+            main-coverage-revision.txt
+          key: ${{ env.CI_CACHE_SCHEMA }}-coverage-main-${{ runner.os }}-${{ hashFiles('scripts/prepare-coverage-baseline.py', 'scripts/ci-qualification.sh', '.github/workflows/ci.yml') }}-${{ steps.main-baseline.outputs.sha }}
+          # The SHA-less prefix only warms the workspace with an older
+          # baseline; actions/cache keeps cache-hit false for a partial restore
+          # and the compare step below rejects a revision mismatch.
+          restore-keys: |
+            ${{ env.CI_CACHE_SCHEMA }}-coverage-main-${{ runner.os }}-${{ hashFiles('scripts/prepare-coverage-baseline.py', 'scripts/ci-qualification.sh', '.github/workflows/ci.yml') }}-
       - name: Set up Nix for uncached baseline
         id: baseline-nix
         if: >-
@@ -500,6 +511,7 @@ jobs:
             --exclude test_fuzz_custom_inputs.py \
             --exclude test_property_invariants.py \
             --exclude test_secret_security_fuzz.py
+          printf '%s\n' "${{ steps.main-baseline.outputs.sha }}" > ../main-coverage-revision.txt
       - name: Compare current coverage with main
         id: drift
         continue-on-error: true
@@ -507,6 +519,10 @@ jobs:
         run: |
           test -s coverage.json
           test -s main-coverage.json
+          # A restore-keys fallback can leave an older baseline in place. Refuse
+          # to compare against a baseline that was not measured on the resolved
+          # main revision.
+          test "$(cat main-coverage-revision.txt)" = "${{ steps.main-baseline.outputs.sha }}"
           python3 scripts/check-coverage.py \
             coverage.json --baseline main-coverage.json
       - name: Report coverage baseline failures

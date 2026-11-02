@@ -339,6 +339,90 @@ class ManagedServicesV2SpecTests(unittest.TestCase):
         }
         self.compile({"schemaVersion": 3, "services": {"one": sibling, "two": sibling2}})
 
+    def route_service(self, *, path: str | None = None, hostname: str | None = None, port: int = 8080) -> dict:
+        service = minimal_service()
+        exposure: dict = (
+            {"type": "path", "paths": [path]}
+            if path is not None
+            else {"type": "hostname", "hostnames": [hostname], "path": "/"}
+        )
+        service["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": port},
+                "exposure": exposure,
+                "auth": {"mode": "public"},
+            }
+        }
+        return service
+
+    def test_route_path_validation_rejects_wildcards_reserved_prefixes_and_encoded_overlaps(self) -> None:
+        # (a) Wildcard paths pass the schema's ^/ pattern but Caddy would treat
+        # them as patterns; reject them at the desired-state boundary.
+        for path in ("/admin*", "/admin?", "/admin#fragment"):
+            with self.subTest(path=path):
+                document = {"schemaVersion": 3, "services": {"one": self.route_service(path=path)}}
+                with self.assertRaisesRegex(v2.ManagedServicesV2Error, "wildcard"):
+                    self.compile(document)
+
+        # (b) Percent-encoded and decoded paths are the same Caddy match.
+        document = {
+            "schemaVersion": 3,
+            "services": {
+                "one": self.route_service(path="/app/admin"),
+                "two": self.route_service(path="/app/%61dmin", port=8081),
+            },
+        }
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "Duplicate route path"):
+            self.compile(document)
+
+        # (c) A trailing-slash route normalizes to the bare path for conflict
+        # purposes, so a protected child cannot be shadowed by that spelling.
+        document = {
+            "schemaVersion": 3,
+            "services": {
+                "one": self.route_service(path="/app/admin"),
+                "two": self.route_service(path="/app/admin/", port=8081),
+            },
+        }
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "Duplicate route path"):
+            self.compile(document)
+
+        # (d) Path and hostname conflicts are case-insensitive.
+        document = {
+            "schemaVersion": 3,
+            "services": {
+                "one": self.route_service(path="/App/Admin"),
+                "two": self.route_service(path="/app/admin", port=8081),
+            },
+        }
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "Duplicate route path"):
+            self.compile(document)
+        document = {
+            "schemaVersion": 3,
+            "services": {
+                "one": self.route_service(hostname="Demo.Example"),
+                "two": self.route_service(hostname="demo.example", port=8081),
+            },
+        }
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "Duplicate route hostname"):
+            self.compile(document)
+
+    def test_reserved_authentik_outpost_route_paths_are_rejected(self) -> None:
+        for path in (
+            "/outpost.goauthentik.io/auth/caddy",
+            "/outpost.goauthentik.io/",
+            "/OUTPOST.GOAUTHENTIK.IO/ping",
+            "/%6futpost.goauthentik.io/auth/caddy",
+        ):
+            with self.subTest(path=path):
+                service = self.route_service(path=path)
+                with self.assertRaisesRegex(v2.ManagedServicesV2Error, "reserved Authentik outpost prefix"):
+                    self.compile({"schemaVersion": 3, "services": {"one": service}})
+        hostname_service = self.route_service(hostname="example.test")
+        hostname_service["routes"]["web"]["exposure"]["path"] = "/outpost.goauthentik.io/auth/caddy"
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "reserved Authentik outpost prefix"):
+            self.compile({"schemaVersion": 3, "services": {"one": hostname_service}})
+
     def test_real_seed_overlapping_routes_compile(self):
         # Real seed uses parent/child routes: /shares with /shares/admin,
         # /vault with /vault/admin, and /metrics/ with /metrics/api and

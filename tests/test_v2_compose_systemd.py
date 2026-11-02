@@ -171,10 +171,16 @@ if [ -n "${NAS_V2_PODLET_COUNT_FILE:-}" ]; then printf '1\n' >> "$NAS_V2_PODLET_
         self.assertNotIn("nas-v2-demo.target", manifest["startUnits"])
 
     def test_on_demand_proxy_uses_systemd_last_colon_host_port_contract(self) -> None:
-        # IPv6 hosts are bracketed (e.g. [::1]:8080) so socket-proxyd's
-        # last-colon split is unambiguous; brackets are stripped before
-        # resolution since the numeric host resolver rejects them.
-        for host, backend in (("::1", "[::1]:8080"), ("127.0.0.1", "127.0.0.1:8080"), ("localhost", "localhost:8080")):
+        # systemd-socket-proxyd splits its argument at the last colon and hands
+        # the remainder to getaddrinfo(), which rejects URI brackets. IPv6
+        # literals must therefore be unbracketed ("::1:8080"); a bracketed
+        # operator value is normalized to the same idempotent output.
+        for host, backend in (
+            ("::1", "::1:8080"),
+            ("[::1]", "::1:8080"),
+            ("127.0.0.1", "127.0.0.1:8080"),
+            ("localhost", "localhost:8080"),
+        ):
             with self.subTest(host=host), tempfile.TemporaryDirectory() as tmp:
                 root = pathlib.Path(tmp)
                 effective, _ = self.fixture(root, on_demand=True)
@@ -183,12 +189,101 @@ if [ -n "${NAS_V2_PODLET_COUNT_FILE:-}" ]; then printf '1\n' >> "$NAS_V2_PODLET_
                 files, _ = self.generate(effective, root)
                 proxy = files[root / "projection/units/nas-v2-activate-demo-web.service"].decode()
                 self.assertIn(f' "{backend}"\n', proxy)
+                self.assertNotIn("[", backend)
                 node, port = backend.rsplit(":", 1)
-                node = node.strip("[]")
-                self.assertEqual((node, port), (host, "8080"))
+                self.assertEqual((node, port), (host.strip("[]"), "8080"))
                 if host != "localhost":
                     addresses = socket.getaddrinfo(node, port, type=socket.SOCK_STREAM, flags=socket.AI_NUMERICHOST)
-                    self.assertEqual(addresses[0][4][0], host)
+                    self.assertEqual(addresses[0][4][0], node)
+
+    def test_compose_import_exempts_escaped_dollars_and_yaml_comments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, source = self.fixture(root)
+            source.write_text(
+                "services:\n"
+                "  web:\n"
+                "    image: example.invalid/web:1\n"
+                "    environment:\n"
+                "      - LITERAL=$$HOME\n"
+                "      - BRACED=$${HOME}\n"
+                "    labels:\n"
+                '      note: "literal $$HOME"\n'
+                "    command:\n"
+                '      - "sh"\n'
+                '      - "-c"\n'
+                '      - "printf %s \\"# uses $$HOME\\""\n'
+                "# ${HOME} in a comment is not interpolation\n",
+                encoding="utf-8",
+            )
+            files, _manifest = self.generate(effective, root)
+            self.assertIn(root / "projection/quadlet/nas-v2-demo-web.container", files)
+
+    def test_compose_import_rejects_bare_or_braced_interpolation_in_values(self) -> None:
+        bodies = (
+            "    environment:\n      - SECRET=$HOME\n",
+            "    environment:\n      - SECRET=${HOME}\n",
+            "    environment:\n      - SECRET=$$HOME$USER\n",
+            "    environment:\n      - SECRET=$$$HOME\n",
+            '    command:\n      - "sh"\n      - "-c"\n      - "echo $HOME"\n',
+            "    labels:\n      note: |\n        # block content is interpolated $HOME\n",
+        )
+        for body in bodies:
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                effective, source = self.fixture(root)
+                source.write_text(
+                    "services:\n  web:\n    image: example.invalid/web:1\n" + body,
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(systemd.SystemdProjectionError, "uses interpolation"):
+                    self.generate(effective, root)
+
+    def test_compose_import_rejects_valueless_environment_entries(self) -> None:
+        bodies = (
+            "    environment:\n      - FOO\n",
+            "    environment:\n      FOO:\n",
+            "    environment:\n      FOO: null\n",
+        )
+        for body in bodies:
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                effective, source = self.fixture(root)
+                source.write_text(
+                    "services:\n  web:\n    image: example.invalid/web:1\n" + body,
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(systemd.SystemdProjectionError, "valueless environment entry"):
+                    self.generate(effective, root)
+
+    def test_compose_import_allows_explicitly_blank_environment_values(self) -> None:
+        for body in (
+            "    environment:\n      - BLANK=\n      - SECOND=\n",
+            '    environment:\n      BLANK_MAP: ""\n      EMPTY_STRING: ""\n',
+        ):
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                effective, source = self.fixture(root)
+                source.write_text(
+                    "services:\n  web:\n    image: example.invalid/web:1\n" + body,
+                    encoding="utf-8",
+                )
+                files, _manifest = self.generate(effective, root)
+                self.assertIn(root / "projection/quadlet/nas-v2-demo-web.container", files)
+
+    def test_canonical_network_validation_bounds_depth_and_converts_recursion(self) -> None:
+        depth = compose_import._MAX_CANONICAL_DEPTH + 10
+        nested: dict = {"leaf": "value"}
+        for _ in range(depth):
+            nested = {"nested": nested}
+        canonical = b"services:\n  one:\n    networks: [x]\n  two:\n    networks: [x]\n"
+        with self.assertRaisesRegex(compose_import.ComposeImportError, "deeper than"):
+            compose_import._validate_canonical_structure("demo", nested)
+        # ruamel can raise RecursionError while expanding alias chains; it must
+        # be reported as an import error instead of escaping the boundary.
+        with mock.patch.object(compose_import.YAML, "load", side_effect=RecursionError("alias chain")):
+            with self.assertRaisesRegex(compose_import.ComposeImportError, "invalid canonical YAML"):
+                compose_import._validate_canonical_networking("demo", canonical)
 
     def test_resolver_rejects_uri_brackets_in_numeric_ipv6_host(self) -> None:
         with self.assertRaises(socket.gaierror):

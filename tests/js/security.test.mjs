@@ -39,10 +39,14 @@ test("external-target links keep opener isolation", () => {
   for (const anchor of externalAnchors) assert.match(anchor, /rel="noopener noreferrer"/);
 });
 
-test("Caddy portal escapes identity fields at output contexts", () => {
+test("Caddy portal escapes displayed identity and compares the raw user header", () => {
   const portal = text("web/portal/index.html");
   assert.match(portal, /Remote-Name" \| html/);
-  assert.match(portal, /Remote-User" \| urlquery/);
+  // The user header is only compared against the allow-list. Escaping it with
+  // urlquery rewrites characters such as "@" and breaks legitimate accounts.
+  assert.match(portal, /\$user := placeholder "http\.request\.header\.Remote-User"/);
+  assert.doesNotMatch(portal, /Remote-User" \| urlquery/);
+  assert.doesNotMatch(portal, /\{\{\s*\$user\s*\}\}/);
 });
 
 import {

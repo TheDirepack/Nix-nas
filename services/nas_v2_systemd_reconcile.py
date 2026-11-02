@@ -35,6 +35,9 @@ _QUADLET_DIRECT_NETWORK = re.compile(r"^nas-v2-net-([a-z][a-z0-9-]{0,63})\.netwo
 _QUADLET_SESSION_NETWORK = re.compile(r"^nas-v2-snet-([a-z][a-z0-9-]{0,63})\.network$")
 _QUADLET = re.compile(r"^nas-v2-[A-Za-z0-9_.@:-]+\.(?:container|pod|network|volume|kube|image|build)$")
 _SYSTEMCTL_TIMEOUT_SECONDS = 180
+# systemctl stop exits non-zero for units the manager cannot resolve; those
+# units cannot be running, so the reconcile's stop intent is already satisfied.
+_ALREADY_STOPPED_STATUSES = ("not found", "could not be found", "not loaded", "masked")
 
 
 def _read_json(path: pathlib.Path, *, required: bool) -> dict[str, Any]:
@@ -468,9 +471,10 @@ def reconcile(
             result = _run_systemctl(systemctl, "stop", unit, check=False)
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout).strip()
-                # A unit that is not loaded / not found is already stopped;
-                # tolerate it and keep stopping the rest.
-                if "not found" not in detail.lower():
+                # A unit that is unknown to the manager or cannot be started
+                # because it is not loaded/masked is already stopped; tolerate
+                # those documented statuses and keep stopping the rest.
+                if not any(marker in detail.lower() for marker in _ALREADY_STOPPED_STATUSES):
                     raise SystemdReconcileError(f"systemctl stop {unit} failed: {detail}")
         for unit in sorted(retired_units):
             _run_systemctl(systemctl, "reset-failed", unit, check=False)

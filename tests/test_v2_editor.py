@@ -342,6 +342,20 @@ class V2EditorTests(unittest.TestCase):
         self.assertTrue(hasattr(editor, "authority_lock"))
         self.assertIn("authority_lock", editor.__all__)
 
+    def test_structurally_invalid_authority_is_an_editor_error_not_a_raw_exception(self) -> None:
+        cases = (
+            ("schemaVersion: 3\nservices: []\n", "missing its services mapping"),
+            ("schemaVersion: 3\nservices:\n  demo: not-a-service\n", "structurally invalid"),
+            ("schemaVersion: 3\nservices:\n  demo:\n    name: Demo\n", "structurally invalid"),
+        )
+        for text, message in cases:
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as raw:
+                root = pathlib.Path(raw)
+                desired = root / "services.yaml"
+                desired.write_text(text, encoding="utf-8")
+                with self.assertRaisesRegex(editor.ManagedServicesEditorError, message):
+                    editor.status(desired_path=desired, effective_path=root / "effective.json")
+
 
 if __name__ == "__main__":
     unittest.main()

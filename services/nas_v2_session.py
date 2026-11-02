@@ -311,8 +311,10 @@ def _transient_command(
         f"--property=ExecStopPost={descriptor['podman']} rm --force --ignore "
         f"{container_name(descriptor['serviceId'], instance_id, user_id)}",
     ]
-    if user_id is not None:
-        command.append("--user")
+    # The authenticated user id selects unit/container naming and user-scoped
+    # storage only. systemd-run's "--user" flag means "talk to the *caller's*
+    # user manager" and takes no uid; the reconciler is a system service, so
+    # passing it would target the wrong manager (and no target uid is implied).
     command.extend(["--", *run])
     return command
 
@@ -607,6 +609,24 @@ def _sandbox_args(service: dict[str, Any]) -> list[str]:
     return args
 
 
+def _resolved_binding(resources: Any, attachment: Any, field: str) -> dict[str, Any]:
+    """Bind one attachment name to the resolved resource path and template.
+
+    Fingerprints must change when an attachment is re-associated with a
+    different resource that happens to expose the same path, and when a
+    resource's ``pathTemplate`` changes, so both the name and the template are
+    part of the value rather than a bare sorted path list.
+    """
+    name = attachment.get(field) if isinstance(attachment, dict) else None
+    resource = resources.get(name) if isinstance(resources, dict) and isinstance(name, str) else None
+    return {
+        "name": name,
+        "path": resource.get("path") if isinstance(resource, dict) else None,
+        "pathTemplate": resource.get("pathTemplate") if isinstance(resource, dict) else None,
+        "scope": resource.get("scope") if isinstance(resource, dict) else None,
+    }
+
+
 def _descriptor(
     effective: dict[str, Any],
     service_id: str,
@@ -755,20 +775,20 @@ def generate_projection(
         links.append({"target": target, "source": str(target_path)})
         owned.add(target)
         # Resolved inputs that must be captured in the fingerprint so any
-        # change to storage roots, credential paths, or resolved network
-        # references forces descriptor regeneration. The raw service
+        # change to storage roots, credential paths, templates, or resolved
+        # network references forces descriptor regeneration. The raw service
         # attachments (storage/credentials) only name resources; the actual
-        # paths live in the effective document and must be fingerprinted too.
+        # paths/templates live in the effective document and must be
+        # fingerprinted together with the resource name they belong to.
         storage_resources = effective.get("storageResources", {})
-        resolved_storage = sorted(
-            str(storage_resources.get(attachment.get("resource", ""), {}).get("path", ""))
-            for attachment in service.get("storage", [])
-        )
+        storage_bindings = [
+            _resolved_binding(storage_resources, attachment, "resource") for attachment in service.get("storage") or []
+        ]
         credential_resources = effective.get("credentials", {})
-        resolved_credentials = sorted(
-            str(credential_resources.get(attachment.get("credential", ""), {}).get("path", ""))
-            for attachment in service.get("credentials", [])
-        )
+        credential_bindings = [
+            _resolved_binding(credential_resources, attachment, "credential")
+            for attachment in service.get("credentials") or []
+        ]
         try:
             resolved_network = quadlet_network_reference(effective, service_id, service)
         except PodmanNetworkProjectionError:
@@ -782,8 +802,8 @@ def generate_projection(
                 "sandbox": service["sandbox"],
                 "storage": service["storage"],
                 "credentials": service["credentials"],
-                "storagePaths": resolved_storage,
-                "credentialPaths": resolved_credentials,
+                "storageBindings": storage_bindings,
+                "credentialBindings": credential_bindings,
                 "network": service.get("network"),
                 "networkProfile": service.get("networkProfile"),
                 "networkReference": resolved_network,

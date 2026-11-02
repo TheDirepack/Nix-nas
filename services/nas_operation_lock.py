@@ -151,7 +151,7 @@ def _read_metadata(handle: Any) -> dict[str, Any] | None:
         handle.seek(0)
         raw = handle.read(4096)
         value = json.loads(raw) if raw.strip() else None
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, RecursionError):
         return None
     return value if isinstance(value, dict) else None
 

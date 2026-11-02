@@ -15,6 +15,7 @@ from typing import Any
 
 from nas_common import ADMIN_GROUP
 from nas_v2_activation import ActivationProjectionError, socket_path
+from nas_v2_spec import RESERVED_ROUTE_PREFIXES
 
 PATH_SNIPPET = "nas_v2_managed_paths"
 HOSTNAME_RE = re.compile(
@@ -71,12 +72,20 @@ def _safe_posix(path: str, msg: str) -> pathlib.PurePosixPath:
 
 
 def _path_patterns(path: str) -> tuple[str, ...]:
-    if not path.startswith("/") or _ctl(path) or "{" in path or "}" in path:
+    if not path.startswith("/") or _ctl(path) or "{" in path or "}" in path or "*" in path:
         raise CaddyProjectionError(f"Unsafe route path {path!r}")
+    folded = path.casefold()
+    for prefix in RESERVED_ROUTE_PREFIXES:
+        reserved = prefix.casefold()
+        if folded == reserved or folded.startswith(reserved + "/"):
+            raise CaddyProjectionError(f"Route path {path!r} uses the reserved Authentik outpost prefix {prefix!r}")
     if path == "/":
         return ("/*",)
     if path.endswith("/"):
-        return (path, path + "*")
+        # Match the bare path as well: a public parent (`/app/`) would
+        # otherwise serve `/app/admin` through `/app/*` and shadow a protected
+        # child route registered at `/app/admin/`.
+        return (path, path.rstrip("/"), path + "*")
     return (path, path + "/*")
 
 

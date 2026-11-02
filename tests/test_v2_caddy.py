@@ -456,6 +456,62 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         with self.assertRaisesRegex(caddy.CaddyProjectionError, "requires identity"):
             caddy.generate_caddyfile(self.compile(service))
 
+    def test_reserved_authentik_outpost_path_cannot_be_shadowed_by_a_service_route(self):
+        effective = self.compile(self.base_service())
+        # Bypass desired-state validation to prove the renderer is a second,
+        # independent boundary against shadowing the Authentik outpost route.
+        effective["derived"]["routes"] = [
+            {
+                "service": "demo",
+                "route": "web",
+                "authMode": "public",
+                "requiredCapability": None,
+                "onDemandWake": False,
+                "target": {"type": "http", "host": "127.0.0.1", "port": 8080},
+                "exposure": {"type": "path", "paths": ["/outpost.goauthentik.io/"]},
+                "proxy": {
+                    "requestHeaders": {},
+                    "removeRequestHeaders": [],
+                    "responseHeaders": {},
+                    "trustedIdentityHeaders": [],
+                    "requireHeaders": {},
+                },
+                "portal": {"visible": False, "order": 0},
+            }
+        ]
+        with self.assertRaisesRegex(caddy.CaddyProjectionError, "reserved Authentik outpost prefix"):
+            caddy.generate_caddyfile(effective)
+        for path in ("/outpost.goauthentik.io", "/outpost.goauthentik.io/auth/caddy"):
+            with self.subTest(path=path):
+                with self.assertRaisesRegex(caddy.CaddyProjectionError, "reserved Authentik outpost prefix"):
+                    caddy._path_patterns(path)
+
+    def test_trailing_slash_route_also_matches_its_bare_path(self):
+        parent = self.base_service()
+        parent["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": 8080},
+                "exposure": {"type": "path", "paths": ["/app/"]},
+                "auth": {"mode": "public"},
+            }
+        }
+        child = self.base_service()
+        child["routes"] = {
+            "admin": {
+                "target": {"type": "http", "port": 8081},
+                "exposure": {"type": "path", "paths": ["/app/admin/"]},
+                "auth": {"mode": "identity", "capability": "admin"},
+            }
+        }
+        child["authorization"] = {"capabilities": [{"id": "admin", "title": "Admin"}]}
+        rendered = caddy.generate_caddyfile(
+            v2.compile_document({"schemaVersion": 3, "services": {"a": parent, "b": child}}, self.schema)
+        )
+        # Without the bare path, /app/admin would match the public parent's
+        # /app/* and bypass the protected child matcher.
+        self.assertIn('path "/app/admin/" "/app/admin" "/app/admin/*"', rendered)
+        self.assertLess(rendered.index('"/app/admin"'), rendered.index('"/app/*"'))
+
     def test_parent_child_routes_render_longest_first(self):
         def svc(sid: str, path: str) -> dict:
             return {

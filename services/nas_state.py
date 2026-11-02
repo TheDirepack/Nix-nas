@@ -309,6 +309,15 @@ def ensure_safe_tree(path: pathlib.Path) -> None:
 
 
 def hash_path(path: pathlib.Path) -> str:
+    """Digest a path authority for both capture and live comparison.
+
+    Every capture, validation, and drift comparison calls this function, so
+    the stored manifest digest and the live digest are always produced by the
+    same normalization. Line endings and trailing whitespace are normalized
+    (a rewrite that only changes those is not drift); any other content change
+    still changes the digest.
+    """
+
     ensure_safe_tree(path)
     digest = hashlib.sha256()
     mode = path.lstat().st_mode
@@ -368,6 +377,20 @@ def _drain_bounded(stream: Any, *, limit: int, result: list[str]) -> None:
     result.append(text)
 
 
+def _write_bounded_stdin(stream: Any, payload: bytes) -> None:
+    """Write a command payload off the caller thread and always close the pipe."""
+
+    try:
+        stream.write(payload)
+    except (BrokenPipeError, OSError):
+        pass
+    finally:
+        try:
+            stream.close()
+        except (BrokenPipeError, OSError):
+            pass
+
+
 def run_process(command: list[str], *, timeout: int, input: bytes | None = None) -> subprocess.CompletedProcess[str]:
     process = subprocess.Popen(
         command,
@@ -393,13 +416,18 @@ def run_process(command: list[str], *, timeout: int, input: bytes | None = None)
     )
     stdout_thread.start()
     stderr_thread.start()
+    stdin_thread: threading.Thread | None = None
     if input is not None:
         assert process.stdin is not None
-        try:
-            process.stdin.write(input)
-            process.stdin.close()
-        except (BrokenPipeError, OSError):
-            pass
+        # Writing a payload larger than the pipe buffer on the caller thread
+        # would block before the timeout is armed and would never be
+        # interrupted; the worker also closes the descriptor on a broken pipe.
+        stdin_thread = threading.Thread(
+            target=_write_bounded_stdin,
+            args=(process.stdin, input),
+            daemon=True,
+        )
+        stdin_thread.start()
     try:
         process.wait(timeout=timeout)
     except subprocess.TimeoutExpired as exc:
@@ -417,6 +445,8 @@ def run_process(command: list[str], *, timeout: int, input: bytes | None = None)
             process.wait()
         raise StateError(f"Command timed out: {command[0]}") from exc
     finally:
+        if stdin_thread is not None:
+            stdin_thread.join()
         stdout_thread.join()
         stderr_thread.join()
         process.stdout.close()
@@ -1373,9 +1403,7 @@ def apply_extracted(staging: pathlib.Path, manifest: dict[str, Any], *, restore_
                 authority = registry[entry["name"]]
                 destination = pathlib.Path(authority.source)
                 if authority.kind == "path" and lstat_type(destination) != 0:
-                    raise StateError(
-                        f"Restoring absence for {authority.name} requires --restore-absence"
-                    )
+                    raise StateError(f"Restoring absence for {authority.name} requires --restore-absence")
     for entry in canonical_apply_entries(manifest):
         authority = registry[entry["name"]]
         if entry["status"] == "absent":
@@ -1704,8 +1732,8 @@ def restore_bundle(
             if not drift:
                 restore_journal_update("skipped-unchanged", completedAt=int(time.time()))
                 return {"ok": True, "restoreId": restore_id, "skipped": True, "reason": "no drift"}
-        except StateError:
-            pass  # Proceed with restore; drift cannot be ruled out
+        except Exception:  # noqa: BLE001 - the pre-check is advisory; any failure means drift cannot be ruled out
+            pass
 
         rollback_ready = False
         try:

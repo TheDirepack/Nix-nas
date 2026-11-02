@@ -63,6 +63,36 @@ class IdentityModelCoverageTests(unittest.TestCase):
                 }
             )
 
+    def test_build_model_administrators_exclude_disabled_and_incompatible_accounts(self) -> None:
+        with self.assertRaisesRegex(model.SyncError, "No enabled members"):
+            model.build_model(
+                {
+                    "groups": [{"pk": "a", "name": model.ADMIN_GROUP, "users_obj": [{"username": "[EMAIL]"}]}],
+                    "users": [
+                        {"pk": 2, "username": "[EMAIL]", "is_active": True, "groups_obj": [{"name": model.ADMIN_GROUP}]}
+                    ],
+                }
+            )
+        value = model.build_model(
+            {
+                "groups": [
+                    {
+                        "pk": "a",
+                        "name": model.ADMIN_GROUP,
+                        "users_obj": [{"username": "[EMAIL]"}, {"username": "admin"}],
+                    }
+                ],
+                "users": [
+                    {"pk": 1, "username": "admin", "is_active": True, "groups": []},
+                    {"pk": 2, "username": "[EMAIL]", "is_active": True, "groups_obj": [{"name": model.ADMIN_GROUP}]},
+                ],
+            }
+        )
+        self.assertEqual(value.administrators, ("admin",))
+        incompatible = next(user for user in value.users if user.uid == "[EMAIL]")
+        self.assertIn(model.DISABLED_GROUP, incompatible.groups)
+        self.assertFalse(model.eligible_administrator(incompatible))
+
     def test_capability_and_model_status_are_assignment_driven(self) -> None:
         user = model.User(
             "admin",

@@ -104,8 +104,17 @@ class AuthentikCspPatchTests(unittest.TestCase):
         self.assertEqual(len(sources), 5)
         for source in sources:
             text = source.read_text()
+            # The CSP bypass is the rendered style attribute, which
+            # `style-src-attr 'none'` blocks. Lit property bindings write through
+            # element.style instead, so `.style=${...}` is required and the
+            # styleMap() directive is only allowed inside one of those bindings.
             self.assertNotRegex(text, r"(?<![\w.-])style=", str(source))
-            self.assertNotIn("styleMap", text, str(source))
+            self.assertNotIn('setAttribute("style"', text, str(source))
+            for line in text.splitlines():
+                if "styleMap" in line and "lit/directives/style-map.js" not in line:
+                    self.assertIn(".style=${styleMap(", line, f"unsafe styleMap binding: {source}: {line}")
+            if "styleMap(" in text:
+                self.assertIn('from "lit/directives/style-map.js"', text, f"styleMap used without its import: {source}")
             for tag in re.findall(r"<style\b[^>]*>", text):
                 self.assertIn("nonce=${window.litNonce}", tag)
         skeleton = (self.tree / "authentik/core/templates/base/skeleton.html").read_text()

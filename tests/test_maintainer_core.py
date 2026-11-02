@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import concurrent.futures
+import importlib.util
 import json
 import pathlib
 import sys
+import tempfile
 import unittest
 
 from maintainer_test_base import MaintainerScriptMixin
@@ -80,6 +83,47 @@ class MaintainerCoreTests(MaintainerScriptMixin, unittest.TestCase):
             generated.unlink(missing_ok=True)
         for generated in self.clean_root.glob(".coverage.*"):
             generated.unlink(missing_ok=True)
+
+    def test_isolated_unit_runner_cancels_pending_workers_on_interrupt(self) -> None:
+        script = self.clean_root / "scripts" / "run-unit-tests.py"
+        spec = importlib.util.spec_from_file_location("unit_runner_interrupt", script)
+        assert spec is not None and spec.loader is not None
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        with tempfile.TemporaryDirectory() as temporary:
+            tests = pathlib.Path(temporary) / "tests"
+            tests.mkdir()
+            for index in range(3):
+                (tests / f"test_sleep_{index}.py").write_text(
+                    "import time\n"
+                    "import unittest\n\n"
+                    "class SleepTests(unittest.TestCase):\n"
+                    "    def test_sleep(self):\n"
+                    "        time.sleep(0.5)\n",
+                    encoding="utf-8",
+                )
+            setattr(runner, "TESTS", tests)
+            submitted: list[concurrent.futures.Future] = []
+            real_as_completed = runner.concurrent.futures.as_completed
+
+            def interrupting_as_completed(futures, timeout=None):
+                submitted.extend(futures)
+                raise SystemExit("simulated interrupt")
+
+            runner.concurrent.futures.as_completed = interrupting_as_completed
+            argv = sys.argv
+            sys.argv = ["run-unit-tests.py", "--jobs", "1", "--timeout", "60"]
+            try:
+                with self.assertRaises(SystemExit):
+                    runner.main()
+            finally:
+                runner.concurrent.futures.as_completed = real_as_completed
+                sys.argv = argv
+        self.assertTrue(submitted)
+        # An interrupt raised by the iterator itself must reach the cancel path,
+        # not leave queued test files running.
+        self.assertTrue(any(future.cancelled() for future in submitted))
+        self.assertTrue(all(future.cancelled() or future.done() for future in submitted))
 
     def test_isolated_unit_runner_and_compatibility_wrapper_are_bounded(self) -> None:
         runner = (self.clean_root / "scripts/run-unit-tests.py").read_text(encoding="utf-8")

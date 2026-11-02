@@ -2,21 +2,44 @@
 
 let
   cfg = config.nas;
-  recoveryUsers = lib.attrValues config.users.users;
-  # sshd only admits users in nas-administrators (AllowGroups), so a recovery
-  # SSH key only counts for users who are actually allowed to log in via SSH.
+  allowGroups = config.services.openssh.settings.AllowGroups or [ ];
+  adminGroup = "nas-administrators";
+  # The setup stage promotes the selected local administrator with `usermod`
+  # after the first-start account exists, which Nix evaluation cannot observe.
+  # An operator declaring the planned administrator in
+  # users.groups.nas-administrators.members therefore counts as group
+  # membership here, so readiness is decided from the declarative plan instead
+  # of requiring a prior runtime group update.
+  declaredAdministrators = lib.attrByPath [ "users" "groups" adminGroup "members" ] [ ] config;
+  # Root is never an SSH recovery account (sshd PermitRootLogin = "no"), so it
+  # must not enter the recovery-user candidate pool at all.
+  recoveryCandidates =
+    lib.mapAttrsToList
+      (name: user: { inherit name user; })
+      (lib.removeAttrs config.users.users [ "root" ]);
+  # sshd only admits users whose primary or supplementary group matches an
+  # AllowGroups entry (OpenSSH semantics). A recovery SSH key only counts for
+  # users who are actually allowed to log in via SSH, so require both
+  # nas-administrators membership (primary, supplementary, or declared) and
+  # effective AllowGroups membership.
   sshRecoveryConfigured =
     config.services.openssh.enable
-    && lib.any (user:
-      let
-        groups = [ (user.group or "users") ] ++ (user.extraGroups or [ ]);
-      in
-      lib.elem "nas-administrators" groups
-      && (
-        lib.attrByPath [ "openssh" "authorizedKeys" "keys" ] [ ] user != [ ]
-        || lib.attrByPath [ "openssh" "authorizedKeys" "keyFiles" ] [ ] user != [ ]
+    && lib.any
+      (candidate:
+        let
+          inherit (candidate) name user;
+          groups =
+            [ (user.group or "users") ]
+            ++ (user.extraGroups or [ ])
+            ++ lib.optional (lib.elem name declaredAdministrators) adminGroup;
+          authorizedKeys = lib.attrByPath [ "openssh" "authorizedKeys" "keys" ] [ ] user;
+          authorizedKeyFiles = lib.attrByPath [ "openssh" "authorizedKeys" "keyFiles" ] [ ] user;
+        in
+        lib.elem adminGroup groups
+        && lib.any (group: lib.elem group allowGroups) groups
+        && (authorizedKeys != [ ] || authorizedKeyFiles != [ ])
       )
-    ) recoveryUsers;
+      recoveryCandidates;
 
   runtimeInputValidation = pkgs.writeShellScript "nas-installation-input-validation" ''
     set -euo pipefail
