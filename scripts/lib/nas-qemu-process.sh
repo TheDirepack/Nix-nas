@@ -84,7 +84,7 @@ nas_qemu_guard_shared_installer_state() {
   [[ -s "$pidfile" ]] || return 0
   if nas_qemu_pid_from_pidfile "$pidfile"; then
     if [[ "$persistent_mode" != 1 ]]; then
-      printf 'error: installer cannot use shared QEMU disks while a persistent VM is running: %s\n' "$pidfile" >&2
+      printf 'error: refusing to start a disposable VM while a persistent VM is running: %s\n' "$pidfile" >&2
       return 1
     fi
     if [[ "$reuse_installed" != 1 || ! -s "$os_disk" || ! -s "$data_disk" || ! -s "$ssh_key" || ! -s "$install_marker" ]]; then
