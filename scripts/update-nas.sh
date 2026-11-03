@@ -395,16 +395,19 @@ mark_manual_recovery() {
 old_system="$(readlink -f /run/current-system)"
 system_profile=/nix/var/nix/profiles/system
 old_profile="$(readlink -f "$system_profile" 2>/dev/null || true)"
+old_profile_link="$(readlink "$system_profile" 2>/dev/null || true)"
 rollback_needed=false
 runtime_activation_attempted=false
-persistent_switch_attempted=false
 rollback() {
   local rc=$?
   local -a rollback_errors=()
   if (( rc != 0 )) && $rollback_needed; then
     echo "Deployment failed; reversing only deployment phases that were entered" >&2
-    current_profile="$(readlink -f "$system_profile" 2>/dev/null || true)"
-    if $persistent_switch_attempted || [[ -n "$old_profile" && "$current_profile" != "$old_profile" ]]; then
+    current_profile_link="$(readlink "$system_profile" 2>/dev/null || true)"
+    # Compare the link text, not the resolved store path: a failed switch that
+    # never moved the profile must not roll the persistent profile back one
+    # generation.
+    if [[ -n "$old_profile_link" && "$current_profile_link" != "$old_profile_link" ]]; then
       nixos-rebuild --rollback switch || rollback_errors+=("nixos generation rollback failed")
     fi
     if $runtime_activation_attempted; then
@@ -476,10 +479,9 @@ if $apply; then
   external_management_probe
 
   echo "Health checks passed; making the generation persistent."
-  persistent_switch_attempted=true
   nixos-rebuild switch --flake "$flake_ref" --show-trace
-  new_profile="$(readlink -f "$system_profile" 2>/dev/null || true)"
-  [[ -n "$new_profile" && "$new_profile" != "$old_profile" ]] || { echo "Persistent system profile did not advance" >&2; exit 1; }
+  new_profile_link="$(readlink "$system_profile" 2>/dev/null || true)"
+  [[ -n "$new_profile_link" && "$new_profile_link" != "$old_profile_link" ]] || { echo "Persistent system profile did not advance" >&2; exit 1; }
   restart_protected
   health_check
   external_management_probe
