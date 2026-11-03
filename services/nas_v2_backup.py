@@ -464,17 +464,10 @@ def _native_dump_path(
     }
     if on_pending is not None:
         on_pending(pending)
-    try:
-        _run([systemctl_bin, "restart", preparation_unit])
-    except BackupRuntimeError:
-        # A timed-out or failed preparation unit may still be running. Stop it
-        # before any artifact cleanup so in-flight dump writes cannot race with
-        # removal of the staged artifact.
-        try:
-            _run([systemctl_bin, "stop", preparation_unit])
-        except BackupRuntimeError:
-            pass
-        raise
+    # A failed or timed-out preparation unit may still be running. The shared
+    # failure path stops it before removing the staged artifact; do not stop it
+    # here as well.
+    _run([systemctl_bin, "restart", preparation_unit])
     artifact = _validate_staged_artifact_path(resource_id, artifact_path, artifact_resource)
     try:
         produced = any(artifact.iterdir())
@@ -610,6 +603,7 @@ def prepare(
                 failures.append(str(destroy_exc))
         for entry in reversed(list(native_dumps)):
             try:
+                _stop_native_dump(entry, systemctl_bin)
                 artifact_path = entry.get("artifactPath")
                 if isinstance(artifact_path, str):
                     _remove_staged_artifact(artifact_path)
@@ -629,7 +623,18 @@ def prepare(
         raise
 
 
-def cleanup(*, state_path: pathlib.Path, paths_path: pathlib.Path, zfs_bin: str) -> dict[str, Any]:
+def _stop_native_dump(entry: dict[str, Any], systemctl_bin: str) -> None:
+    unit = entry.get("preparationUnit")
+    if not isinstance(unit, str) or not unit.endswith(".service"):
+        return
+    # systemctl start/restart is a waiting client. Its timeout does not imply
+    # the systemd unit has stopped writing to the staged backup artifact.
+    _run([systemctl_bin, "stop", unit])
+
+
+def cleanup(
+    *, state_path: pathlib.Path, paths_path: pathlib.Path, zfs_bin: str, systemctl_bin: str = "systemctl"
+) -> dict[str, Any]:
     if not state_path.exists():
         paths_path.unlink(missing_ok=True)
         return {"destroyed": []}
@@ -673,6 +678,7 @@ def cleanup(*, state_path: pathlib.Path, paths_path: pathlib.Path, zfs_bin: str)
             continue
         artifact_path = entry["artifactPath"]
         try:
+            _stop_native_dump(entry, systemctl_bin)
             _remove_staged_artifact(artifact_path)
             outstanding_dumps.remove(entry)
             _persist_runtime_state(state_path, outstanding_snapshots, outstanding_dumps)
@@ -726,6 +732,7 @@ def main(argv: list[str] | None = None) -> int:
                 state_path=pathlib.Path(args.state),
                 paths_path=pathlib.Path(args.paths),
                 zfs_bin=args.zfs,
+                systemctl_bin=args.systemctl,
             )
     except (BackupRuntimeError, OSError, json.JSONDecodeError) as exc:
         print(f"nas-v2-backup-runtime: {exc}", file=sys.stderr)
