@@ -26,7 +26,7 @@ const NESTED_SCHEMA = {
   required: [],
 };
 
-async function openEditor(page, value) {
+async function openEditor(page, value, schema = NESTED_SCHEMA) {
   const entry = `
     import React, {useState} from "react";
     import {createRoot} from "react-dom/client";
@@ -56,7 +56,7 @@ async function openEditor(page, value) {
     if (message.type() === "error") consoleErrors.push(message.text());
   });
   await page.setContent(
-    `<!doctype html><html lang="en"><head><title>Schema editor accessibility fixture</title></head><body><div id="root"></div><script>window.__SCHEMA__=${JSON.stringify(NESTED_SCHEMA)};window.__VALUE__=${JSON.stringify(value)};</script><script>${result.outputFiles[0].text}</script></body></html>`,
+    `<!doctype html><html lang="en"><head><title>Schema editor accessibility fixture</title></head><body><div id="root"></div><script>window.__SCHEMA__=${JSON.stringify(schema)};window.__VALUE__=${JSON.stringify(value)};</script><script>${result.outputFiles[0].text}</script></body></html>`,
   );
   await expect(page.locator(".nas-schema-editor")).toBeVisible();
   return {pageErrors, consoleErrors};
@@ -111,4 +111,102 @@ test("optional-field add flow reports no serious or critical axe violations", as
     ["serious", "critical"].includes(item.impact),
   );
   expect(blocking).toEqual([]);
+});
+
+test("dynamic map keys commit on blur without dropping typed characters or map values", async ({
+  page,
+}) => {
+  const schema = {
+    type: "object",
+    properties: {
+      entries: {
+        type: "object",
+        propertyNames: {pattern: "^[a-z][a-z0-9-]*$"},
+        additionalProperties: {type: "string", title: "Entry value"},
+      },
+    },
+    required: ["entries"],
+  };
+  const {pageErrors, consoleErrors} = await openEditor(
+    page,
+    {entries: {alpha: "one", beta: "two"}},
+    schema,
+  );
+  const original = page.getByRole("textbox", {name: "Key for alpha", exact: true});
+  await expect(original).toHaveValue("alpha");
+
+  await original.fill("alpha-renamed");
+  await expect(original).toHaveValue("alpha-renamed");
+  await expect(page.getByRole("textbox", {name: "Key for alpha-renamed", exact: true})).toHaveCount(
+    0,
+  );
+  await original.press("Enter");
+  const renamed = page.getByRole("textbox", {name: "Key for alpha-renamed", exact: true});
+  await expect(renamed).toHaveValue("alpha-renamed");
+  await expect(page.getByRole("textbox", {name: "Key for alpha", exact: true})).toHaveCount(0);
+  await expect(page.getByRole("textbox", {name: "Key for beta", exact: true})).toHaveValue("beta");
+  await expect(page.getByRole("textbox", {name: "Entry value"}).first()).toHaveValue("one");
+
+  await renamed.fill("beta");
+  await renamed.press("Tab");
+  await expect(renamed).toHaveValue("beta");
+  await expect(page.getByRole("alert")).toContainText("already exists");
+  await expect(renamed).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByRole("textbox", {name: "Key for beta", exact: true})).toHaveCount(1);
+
+  await renamed.fill("invalid key");
+  await renamed.press("Tab");
+  await expect(renamed).toHaveValue("invalid key");
+  await expect(page.getByRole("alert")).toContainText("Key must match");
+  await expect(renamed).toHaveAttribute("aria-describedby", /.+/);
+  await renamed.fill("alpha-renamed");
+  await renamed.press("Tab");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+  expect(
+    consoleErrors.filter((message) => message.includes("requires either an id or aria-label")),
+  ).toEqual([]);
+});
+
+test("untouched padded keys retain their exact identity on blur", async ({page}) => {
+  const schema = {
+    type: "object",
+    additionalProperties: {type: "string"},
+  };
+  await openEditor(page, {" padded ": "intact"}, schema);
+  const key = page.getByRole("textbox", {name: "Key for  padded ", exact: true});
+  await key.focus();
+  await key.press("Tab");
+  await expect(key).toHaveValue(" padded ");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
+test("IME Enter does not commit a dynamic key and rename preserves a pending Remove click", async ({
+  page,
+}) => {
+  const schema = {
+    type: "object",
+    additionalProperties: {type: "string"},
+  };
+  const {pageErrors} = await openEditor(page, {alpha: "one", beta: "two"}, schema);
+  const key = page.getByRole("textbox", {name: "Key for alpha", exact: true});
+  await key.fill("gamma");
+  await key.focus();
+  await key.evaluate((element) =>
+    element.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        isComposing: true,
+        bubbles: true,
+      }),
+    ),
+  );
+  await expect(key).toBeFocused();
+  await expect(page.getByRole("textbox", {name: "Key for gamma", exact: true})).toHaveCount(0);
+  const row = page.locator(".nas-schema-map-entry", {has: key});
+  await row.getByRole("button", {name: "Remove", exact: true}).click();
+  await expect(page.getByRole("textbox", {name: "Key for gamma", exact: true})).toHaveCount(0);
+  await expect(page.getByRole("textbox", {name: "Key for alpha", exact: true})).toHaveCount(0);
+  await expect(page.getByRole("textbox", {name: "Key for beta", exact: true})).toHaveCount(1);
+  expect(pageErrors).toEqual([]);
 });
