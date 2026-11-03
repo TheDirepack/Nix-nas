@@ -102,6 +102,71 @@ class BrowserAuthzInputTests(unittest.TestCase):
         path.chmod(0o600)
         return path
 
+    def test_shadow_discovery_uses_one_command_and_preserves_root_order(self) -> None:
+        driver = mock.Mock()
+        roots = [mock.Mock(name=name) for name in ("outer-a", "outer-b", "nested")]
+        driver.execute_script.return_value = roots
+
+        class NonHost:
+            @property
+            def shadow_root(inner_self):
+                raise self.authz.WebDriverException("not a shadow host")
+
+        driver.find_elements.return_value = [NonHost() for _ in range(300)]
+        self.assertEqual(list(self.authz.search_roots(driver)), [driver, *roots])
+        driver.execute_script.assert_called_once()
+        driver.find_elements.assert_not_called()
+
+    def test_first_prefers_document_and_selector_order_without_shadow_discovery(self) -> None:
+        driver = mock.Mock()
+        element = mock.Mock()
+        element.is_displayed.return_value = True
+        driver.find_element.return_value = element
+        self.assertIs(self.authz.first(driver, ["#preferred", "#fallback"]), element)
+        driver.find_element.assert_called_once_with(self.authz.By.CSS_SELECTOR, "#preferred")
+        driver.execute_script.assert_not_called()
+
+    def test_first_rejects_hidden_and_stale_matches_before_visible_shadow_match(self) -> None:
+        driver = mock.Mock()
+        hidden = mock.Mock()
+        hidden.is_displayed.return_value = False
+        stale = mock.Mock()
+        stale.is_displayed.side_effect = self.authz.WebDriverException("replaced")
+        visible = mock.Mock()
+        visible.is_displayed.return_value = True
+        driver.find_element.return_value = hidden
+        outer, nested = mock.Mock(), mock.Mock()
+        outer.find_element.return_value = stale
+        nested.find_element.return_value = visible
+        driver.execute_script.return_value = [outer, nested]
+        driver.find_elements.return_value = []
+        self.assertIs(self.authz.first(driver, ["input"]), visible)
+        hidden.is_displayed.assert_called_once()
+        stale.is_displayed.assert_called_once()
+        visible.is_displayed.assert_called_once()
+
+    def test_first_rediscovers_shadow_roots_after_dom_replacement(self) -> None:
+        driver = mock.Mock()
+        driver.find_element.side_effect = self.authz.NoSuchElementException("document")
+        driver.find_elements.return_value = []
+        old, fresh = mock.Mock(), mock.Mock()
+        old.find_element.side_effect = self.authz.WebDriverException("detached")
+        fresh.find_element.return_value.is_displayed.return_value = True
+        driver.execute_script.side_effect = [[old], [fresh]]
+        with self.assertRaises(self.authz.NoSuchElementException):
+            self.authz.first(driver, ["input"])
+        self.assertIs(self.authz.first(driver, ["input"]), fresh.find_element.return_value)
+        self.assertEqual(driver.execute_script.call_count, 2)
+
+    def test_shadow_discovery_failure_becomes_a_missing_match(self) -> None:
+        driver = mock.Mock()
+        driver.find_element.side_effect = self.authz.NoSuchElementException("document")
+        driver.execute_script.side_effect = self.authz.WebDriverException("navigation")
+        driver.find_elements.return_value = []
+        with self.assertRaises(self.authz.NoSuchElementException):
+            self.authz.first(driver, ["input"])
+        driver.execute_script.assert_called_once()
+
     def test_browser_cleanup_terminates_chromedriver_when_quit_blocks(self) -> None:
         release = threading.Event()
         driver = mock.Mock()

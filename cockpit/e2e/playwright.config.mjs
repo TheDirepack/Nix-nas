@@ -13,6 +13,7 @@ const testMatch = isFinalVm
       "common-xss.spec.mjs",
       "first-run-wizard.spec.mjs",
       "schema-editor-a11y.spec.mjs",
+      "authz-shadow-roots.spec.mjs",
     ];
 
 export default defineConfig({
