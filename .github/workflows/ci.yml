@@ -746,10 +746,12 @@ jobs:
           enable-kvm: "true"
       - name: Verify and import prepared Nix handoff
         run: |
+          df -h "$RUNNER_TEMP" /nix/store
           ./scripts/vm-bundles.sh verify-handoff "$RUNNER_TEMP/vm-bundles"
           bash scripts/system-handoff.sh verify "$RUNNER_TEMP/vm-bundles"
-          ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles"
+          ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles" --consume
           bash scripts/system-handoff.sh import "$RUNNER_TEMP/vm-bundles"
+          df -h "$RUNNER_TEMP" /nix/store
       - name: Run ${{ matrix.vm }} NixOS VM integration
         run: nix build ".#checks.x86_64-linux.${{ matrix.check }}" --show-trace -L
 
@@ -801,10 +803,12 @@ jobs:
           enable-kvm: "true"
       - name: Verify and import prepared Nix handoff
         run: |
+          df -h "$RUNNER_TEMP" /nix/store
           ./scripts/vm-bundles.sh verify-handoff "$RUNNER_TEMP/vm-bundles"
           bash scripts/system-handoff.sh verify "$RUNNER_TEMP/vm-bundles"
-          ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles"
+          ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles" --consume
           bash scripts/system-handoff.sh import "$RUNNER_TEMP/vm-bundles"
+          df -h "$RUNNER_TEMP" /nix/store
       - name: Install exact final-browser dependencies
         run: npm --prefix cockpit ci --no-audit --no-fund
       - name: Restore final-VM Playwright engines
@@ -928,10 +932,12 @@ jobs:
           enable-kvm: "true"
       - name: Verify and import prepared Nix handoff
         run: |
+          df -h "$RUNNER_TEMP" /nix/store
           ./scripts/vm-bundles.sh verify-handoff "$RUNNER_TEMP/vm-bundles"
           bash scripts/system-handoff.sh verify "$RUNNER_TEMP/vm-bundles"
-          ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles"
+          ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles" --consume
           bash scripts/system-handoff.sh import "$RUNNER_TEMP/vm-bundles"
+          df -h "$RUNNER_TEMP" /nix/store
       - name: Qualify native scanner transport and controls
         id: zap-controls
         continue-on-error: true

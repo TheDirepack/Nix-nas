@@ -317,6 +317,17 @@ class CiWorkflowGraphTests(unittest.TestCase):
             self.assertIn("system-handoff.sh import", text)
             self.assertNotIn("vm-bundle-core-", text)
 
+    def test_downstream_imports_consume_verified_transport_but_cache_producer_preserves_it(self) -> None:
+        for name in ("integration", "installer", "installed-security"):
+            step = next(
+                step
+                for step in self.jobs[name]["steps"]
+                if step.get("name") == "Verify and import prepared Nix handoff"
+            )
+            self.assertIn('vm-bundles.sh import "$RUNNER_TEMP/vm-bundles" --consume', step["run"], name)
+            self.assertLess(step["run"].index("system-handoff.sh verify"), step["run"].index("--consume"))
+        self.assertNotIn("--consume", self.serialized(self.handoff))
+
     def test_browser_executes_whole_suite_in_one_runner(self) -> None:
         browser = self.jobs["browser"]
         self.assertNotIn("strategy", browser)

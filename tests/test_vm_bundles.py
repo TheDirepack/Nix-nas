@@ -84,7 +84,12 @@ case "$1" in
     printf '/nix/store/%s-%s' "$hash" "$name"
     ;;
   path-info)
-    shift 2
+    if [[ ${NAS_TEST_FAIL_PATH_INFO:-0} == 1 ]]; then
+      echo 'promised store path is missing' >&2
+      exit 42
+    fi
+    shift
+    if [[ ${1:-} == -r ]]; then shift; fi
     for path in "$@"; do
       printf '%s\\n' "$path"
       case "$path" in
@@ -121,7 +126,18 @@ case "$*" in
     done
     ;;
   --import)
-    printf 'import:%s\\n' "$(head -n1)" >> "$NAS_TEST_NIX_STORE_LOG"
+    payload="$(cat)"
+    if [[ -n ${NAS_TEST_CONSUME_DIR:-} ]]; then
+      case "$payload" in
+        *-identity*) test ! -e "$NAS_TEST_CONSUME_DIR/core.nar.gz" ;;
+        *-observability*) test ! -e "$NAS_TEST_CONSUME_DIR/identity.nar.gz" ;;
+      esac
+    fi
+    if [[ -n ${NAS_TEST_FAIL_IMPORT:-} && $payload == *"$NAS_TEST_FAIL_IMPORT"* ]]; then
+      echo 'import failed' >&2
+      exit 43
+    fi
+    printf 'import:%s\\n' "${payload%%$'\\n'*}" >> "$NAS_TEST_NIX_STORE_LOG"
     ;;
 esac
 """
@@ -409,6 +425,7 @@ class VmBundleScriptTests(unittest.TestCase):
             imports,
             [f"NAR:{fake_path(name)}" for name in EXPECTED_BUNDLES],
         )
+        self.assertEqual(len(list(in_dir.glob("*.nar.gz"))), len(EXPECTED_BUNDLES))
 
     def test_import_builds_missing_core_before_restoring_cached_deltas(self) -> None:
         env, nix_log, nix_store_log = self._fake_environment()
@@ -430,6 +447,57 @@ class VmBundleScriptTests(unittest.TestCase):
             if line.startswith("import:")
         ]
         self.assertEqual(imports, [f"NAR:{fake_path('identity')}"])
+
+    def test_consuming_import_releases_each_verified_bundle_before_the_next(self) -> None:
+        env, nix_log, _ = self._fake_environment()
+        directory = self._root / "handoff"
+        saved = self._run("save", str(directory), env=env)
+        self.assertEqual(saved.returncode, 0, saved.stderr)
+        env["NAS_TEST_CONSUME_DIR"] = str(directory)
+        result = self._run("import", str(directory), "--consume", env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(list(directory.glob("*.nar.gz")), [])
+        calls = nix_log.read_text().splitlines()
+        for name in EXPECTED_BUNDLES:
+            self.assertTrue(any(call.startswith("path-info ") and fake_path(name) in call for call in calls))
+        self.assertTrue((directory / "bundle-manifest.tsv").exists())
+
+    def test_consuming_import_retains_unverified_transport(self) -> None:
+        for failure in ("checksum", "import", "path-info"):
+            with self.subTest(failure=failure):
+                env, _, _ = self._fake_environment()
+                directory = self._root / failure
+                saved = self._run("save", str(directory), env=env)
+                self.assertEqual(saved.returncode, 0, saved.stderr)
+                if failure == "checksum":
+                    (directory / "core.nar.gz").write_bytes(b"corrupt")
+                elif failure == "import":
+                    env["NAS_TEST_FAIL_IMPORT"] = "core"
+                else:
+                    env["NAS_TEST_FAIL_PATH_INFO"] = "1"
+                result = self._run("import", str(directory), "--consume", env=env)
+                self.assertNotEqual(result.returncode, 0)
+                diagnostic = {
+                    "checksum": "checksum validation failed",
+                    "import": "import failed",
+                    "path-info": "promised store path is missing",
+                }[failure]
+                self.assertIn(diagnostic, result.stderr)
+                self.assertTrue((directory / "core.nar.gz").exists())
+                self.assertTrue((directory / "vm-drivers.nar.gz").exists())
+
+    def test_consuming_import_keeps_failed_later_bundle_after_releasing_verified_core(self) -> None:
+        env, _, _ = self._fake_environment()
+        directory = self._root / "handoff"
+        saved = self._run("save", str(directory), env=env)
+        self.assertEqual(saved.returncode, 0, saved.stderr)
+        env["NAS_TEST_FAIL_IMPORT"] = "identity"
+        result = self._run("import", str(directory), "--consume", env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("import failed", result.stderr)
+        self.assertFalse((directory / "core.nar.gz").exists())
+        for name in EXPECTED_BUNDLES[1:]:
+            self.assertTrue((directory / f"{name}.nar.gz").exists())
 
     def test_save_requires_a_directory_argument(self) -> None:
         result = self._run("save")

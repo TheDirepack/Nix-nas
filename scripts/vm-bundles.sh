@@ -65,7 +65,9 @@ test drivers.
   verify-partial-handoff <dir>
                        verify a missing-only handoff artifact
   verify-handoff <dir> verify every archive checksum and the closure manifest
-  import <dir>         restore core (or rebuild it) then import cached deltas
+  import <dir> [--consume]
+                       restore core (or rebuild it) then import cached deltas;
+                       --consume verifies and removes each imported archive
 
 Environment overrides: NAS_BUNDLE_SYSTEM, NAS_BUNDLE_NIX, NAS_BUNDLE_NIX_STORE.
 USAGE
@@ -418,19 +420,35 @@ verify_partial_handoff() {
 }
 
 import() {
-  local dir=$1 name
-
-  if [[ -f "$dir/core.nar.gz" ]]; then
-    gunzip -c "$dir/core.nar.gz" | "$NIX_STORE_CMD" --import
-  else
-    printf '%s: core bundle archive is unavailable; building exact core base before cached deltas\n' "$PROG" >&2
-    "$NIX" build --no-link ".#packages.$SYSTEM.core"
+  local dir=$1 consume=${2:-} name path
+  local -a batch=()
+  if [[ "$consume" == --consume ]]; then
+    verify_handoff "$dir"
   fi
 
   while IFS= read -r name; do
-    [[ $name == core ]] && continue
     if [[ -f "$dir/$name.nar.gz" ]]; then
       gunzip -c "$dir/$name.nar.gz" | "$NIX_STORE_CMD" --import
+      if [[ "$consume" == --consume ]]; then
+        # The final system import used to retain every compressed package
+        # beside its expanded closure, exhausting downstream runner disks.
+        # Verify this bundle's promises before releasing its transport only.
+        batch=()
+        while IFS= read -r path; do
+          batch+=("$path")
+          if ((${#batch[@]} == 128)); then
+            "$NIX" path-info "${batch[@]}" >/dev/null
+            batch=()
+          fi
+        done < <(awk -F '\t' -v name="$name" '$1 == name {print $2}' "$dir/bundle-manifest.tsv")
+        if ((${#batch[@]})); then
+          "$NIX" path-info "${batch[@]}" >/dev/null
+        fi
+        rm -- "$dir/$name.nar.gz"
+      fi
+    elif [[ $name == core ]]; then
+      printf '%s: core bundle archive is unavailable; building exact core base before cached deltas\n' "$PROG" >&2
+      "$NIX" build --no-link ".#packages.$SYSTEM.core"
     fi
   done < <(list_bundles)
 }
@@ -486,11 +504,11 @@ main() {
       verify_handoff "$1"
       ;;
     import)
-      [[ $# -eq 1 ]] || die "import requires exactly one directory argument"
+      [[ $# -eq 1 || ( $# -eq 2 && $2 == --consume ) ]] || die "import requires exactly one directory argument and optional --consume"
       need "$NIX"
       need "$NIX_STORE_CMD"
       need gunzip
-      import "$1"
+      import "$@"
       ;;
     -h | --help | help) usage ;;
     '')

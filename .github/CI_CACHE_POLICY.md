@@ -79,6 +79,15 @@ After those reusable roots are available, `scripts/system-handoff.sh save` build
 
 The action then publishes one `vm-bundle-handoff` artifact for the current workflow run containing both the reusable bundle fragments and exact system closure export. Downstream integration, installer, and installed-security runners verify and import **both** layers before executing. They do not independently restore the six package caches or cold-build the full system closure again; their remaining Nix work is limited to the test/configuration delta needed by that consumer.
 
+Downstream runners use `vm-bundles.sh import <dir> --consume`: verify the full
+package checksums, import core first, and verify each bundle's promised store
+paths before removing that bundle's compressed transport. This avoids retaining
+the compressed and expanded package closures together until the system import
+finishes. Failed imports or path verification retain the affected and subsequent
+archives. The cache producer uses ordinary `import`, which preserves its
+archives for cache saving and publication. Manifests and upstream artifacts are
+not removed by consuming an archive.
+
 The successful main CI run's handoff is also the immutable Nix input consumed by automated release preparation. Release stamping still rebuilds the configuration-dependent release delta after changing version/bootstrap source, but it does not refetch the qualified base closure cold.
 
 This keeps granular caches where they are useful across runs while making a single verified artifact the source of truth inside one run. The artifact contains Nix store closures only; it does not contain mutable VM state and does not represent a passed test by itself.
