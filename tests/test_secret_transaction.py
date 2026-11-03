@@ -140,6 +140,25 @@ class SecretTransactionShellTests(unittest.TestCase):
         )
         self.assert_ok(result)
 
+    def test_failed_pre_swap_cleanup_reports_retained_stage_and_recovery_tree(self) -> None:
+        result = self.run_scenario(
+            """
+            mkdir tx; cp -a stage tx/new
+            nas_secret_tx_init "$PWD/root" "$PWD/tx/new" "$PWD/tx/previous" nas-protected-services.target "$PWD/tx"
+            rm() {
+              if [[ "${@: -1}" == "$NAS_SECRET_TX_STAGE" ]]; then return 74; fi
+              command rm "$@"
+            }
+            set +e; nas_secret_tx_cleanup 78 2>recovery.log; rc=$?; set -e
+            [[ $rc -eq 125 && "$NAS_SECRET_TX_PHASE" == rollback-incomplete ]]
+            [[ -f root/old && -f root/ready && -f tx/new/new ]]
+            grep -Fq "$PWD/tx" recovery.log
+            grep -Fq "$PWD/tx/new" recovery.log
+            [[ ! -s systemctl.log ]]
+            """
+        )
+        self.assert_ok(result)
+
     def test_failed_restart_reports_incomplete_rollback(self) -> None:
         result = self.run_scenario(
             """
@@ -392,6 +411,78 @@ nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.
             [[ $swap_rc -ne 0 && $cleanup_rc -eq 85 ]]
             [[ -f root/old && ! -e root/new && ! -e previous ]]
             grep -q '^start nas-protected-services.target$' systemctl.log
+            """
+        )
+        self.assert_ok(result)
+
+    def test_failed_restore_preserves_previous_tree_and_reports_recovery_path(self) -> None:
+        result = self.run_scenario(
+            """
+            mkdir tx; cp -a stage tx/new
+            export NAS_TX_MV_FAIL_AT=3
+            nas_secret_tx_init "$PWD/root" "$PWD/tx/new" "$PWD/tx/previous" nas-protected-services.target "$PWD/tx"
+            nas_secret_tx_swap
+            set +e; nas_secret_tx_cleanup 86 2>recovery.log; rc=$?; set -e
+            [[ $rc -eq 125 && -f tx/previous/old && ! -e root ]]
+            grep -Fq "$PWD/tx" recovery.log
+            ! grep -q '^start ' systemctl.log
+            """
+        )
+        self.assert_ok(result)
+
+    def test_failed_live_tree_removal_cannot_nest_previous_or_restart_new_consumers(self) -> None:
+        result = self.run_scenario(
+            """
+            mkdir tx; cp -a stage tx/new
+            nas_secret_tx_init "$PWD/root" "$PWD/tx/new" "$PWD/tx/previous" nas-protected-services.target "$PWD/tx"
+            nas_secret_tx_swap
+            rm() {
+              if [[ "${@: -1}" == "$NAS_SECRET_TX_ROOT" ]]; then return 74; fi
+              command rm "$@"
+            }
+            set +e; nas_secret_tx_cleanup 87; rc=$?; set -e
+            [[ $rc -eq 125 && -f tx/previous/old && -f root/new && ! -e root/previous ]]
+            ! grep -q '^start ' systemctl.log
+            """
+        )
+        self.assert_ok(result)
+
+    def test_stage_cleanup_failure_restarts_safely_restored_consumers(self) -> None:
+        result = self.run_scenario(
+            """
+            export NAS_TX_MV_FAIL_AT=2
+            nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+            set +e; nas_secret_tx_swap; swap_rc=$?; set -e
+            [[ $swap_rc -eq 74 ]]
+            rm() {
+              if [[ "${@: -1}" == "$NAS_SECRET_TX_STAGE" ]]; then return 74; fi
+              command rm "$@"
+            }
+            set +e; nas_secret_tx_cleanup 88 2>recovery.log; rc=$?; set -e
+            [[ $rc -eq 125 && "$NAS_SECRET_TX_PHASE" == rollback-incomplete ]]
+            [[ -f root/old && -f root/ready && -f stage/new && ! -e previous ]]
+            grep -q '^start nas-protected-services.target$' systemctl.log
+            grep -Fq "$PWD/stage" recovery.log
+            """
+        )
+        self.assert_ok(result)
+
+    def test_stage_cleanup_without_a_prior_tree_reports_the_remaining_stage(self) -> None:
+        result = self.run_scenario(
+            """
+            export NAS_TX_ACTIVE=0 NAS_TX_MV_FAIL_AT=1
+            rm -rf root
+            nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+            set +e; nas_secret_tx_swap; swap_rc=$?; set -e
+            [[ $swap_rc -eq 74 ]]
+            rm() {
+              if [[ "${@: -1}" == "$NAS_SECRET_TX_STAGE" ]]; then return 74; fi
+              command rm "$@"
+            }
+            set +e; nas_secret_tx_cleanup 89 2>recovery.log; rc=$?; set -e
+            [[ $rc -eq 125 && -f stage/new && ! -e root && ! -e previous ]]
+            ! grep -q '^start ' systemctl.log
+            grep -Fq "$PWD/stage" recovery.log
             """
         )
         self.assert_ok(result)
