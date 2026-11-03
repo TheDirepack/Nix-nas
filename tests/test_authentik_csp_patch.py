@@ -171,10 +171,10 @@ class AuthentikCspPatchTests(unittest.TestCase):
         self.assertEqual(len(sources), 5)
         for source in sources:
             text = source.read_text()
-            # The CSP bypass is a rendered style attribute, which
-            # `style-src-attr 'none'` blocks. `style=${styleMap(...)}` is the
-            # attribute-part binding styleMap requires; the directive writes
-            # through element.style, so it never serializes an attribute.
+            # Authentik's frontend must not serialise style attributes into
+            # templates. Runtime `element.style` writes still need
+            # `style-src-attr 'unsafe-inline'`, because Chromium enforces that
+            # directive on CSSOM writes too.
             self.assertNotIn('style="', text, str(source))
             self.assertNotIn('setAttribute("style"', text, str(source))
             for line in text.splitlines():
@@ -219,7 +219,12 @@ class AuthentikCspPatchTests(unittest.TestCase):
         self.assertIn(f"sha256-{digest}", policy_source)
         modified_digest = base64.b64encode(hashlib.sha256((stylesheet + "*").encode()).digest()).decode()
         self.assertNotIn(f"sha256-{modified_digest}", policy_source)
-        self.assertIn("'style-src-attr': [NONE]", policy_source)
+        # Authentik's SPA assigns element.style directly, so attributes must be
+        # allowed; the relaxation is scoped to attributes and <style> elements
+        # stay behind the nonce and the pinned stylesheet hash.
+        self.assertIn("'style-src-attr': [UNSAFE_INLINE]", policy_source)
+        self.assertEqual(policy_source.count("UNSAFE_INLINE"), 1)
+        self.assertIn("'style-src': [SELF, NONCE,", policy_source)
 
     @unittest.skipUnless(shutil.which("node"), "requires Node.js for the pinned PatternFly build fixture")
     def test_build_loader_uses_cssom_for_tooltips_and_refuses_dependency_drift(self):

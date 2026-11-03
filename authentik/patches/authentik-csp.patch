@@ -6,7 +6,7 @@ diff --git a/authentik/root/settings.py b/authentik/root/settings.py
  
 +import os
 +from urllib.parse import urlsplit
-+from csp.constants import NONCE, NONE, SELF
++from csp.constants import NONCE, NONE, SELF, UNSAFE_INLINE
 +
 +
 +def _saml_form_action_domains() -> tuple[str, ...]:
@@ -34,7 +34,7 @@ diff --git a/authentik/root/settings.py b/authentik/root/settings.py
  from django.utils import http as utils_http
  from sentry_sdk import set_tag
  from xmlsec import enable_debug_trace
-@@ -27,6 +28,24 @@
+@@ -27,6 +28,27 @@
  ALLOWED_HOSTS = ["*"]
  SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
  SECURE_CROSS_ORIGIN_OPENER_POLICY = None
@@ -48,7 +48,10 @@ diff --git a/authentik/root/settings.py b/authentik/root/settings.py
 +            NONCE,
 +            "'sha256-rJJyMDPmHMZS0mPmL877gjjApxGMVa4522UDb4ctw7I='",
 +        ],
-+        "style-src-attr": [NONE],
++        # Authentik's SPA assigns element.style at runtime, and Chromium
++        # enforces style-src-attr on those CSSOM writes; only attributes are
++        # relaxed, <style> elements stay nonce/hash gated by style-src.
++        "style-src-attr": [UNSAFE_INLINE],
 +        "img-src": [SELF, "data:"],
 +        "object-src": [NONE],
 +        "frame-ancestors": [SELF],

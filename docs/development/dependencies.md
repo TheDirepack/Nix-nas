@@ -215,20 +215,23 @@ Authentik's [documented CSP](https://docs.goauthentik.io/security/security-harde
 uses inline scripts and styles. `authentik-csp.patch` replaces that requirement
 with django-csp 4 per-response nonces in the canonical source package. Server
 templates nonce inline scripts/styles and set `window.litNonce` before loading
-Lit, including its stylesheet fallback. Dynamic frontend styles use CSSOM
-property bindings instead of CSP-blocked style attributes. The locked Web
-Components 2.8.0 bundle injects one fixed unresolved-element stylesheet without
-nonce support; `style-src` authorizes only its exact SHA256, tested against the
-complete upstream source fixture. Dependency changes must requalify that hash;
-style attributes and `unsafe-hashes` remain forbidden. The upstream build's
-style loader converts the locked PatternFly tooltip's two `styleMap` bindings
-to CSSOM property bindings, including its floating-position custom property;
+Lit, including its stylesheet fallback. Authentik's flow bundle writes
+`element.style` at runtime, and Chromium enforces `style-src-attr` on those
+CSSOM writes as well, so the policy allows `style-src-attr 'unsafe-inline'`
+while every other style path stays gated: `<style>` elements need the
+per-response nonce, the locked Web Components 2.8.0 unresolved-element
+stylesheet is authorized only by its exact SHA256, and `unsafe-hashes` stays
+forbidden. Inline style attributes cannot execute script, and script execution
+remains nonce-only. The upstream build's
+style loader keeps the locked PatternFly tooltip's two `styleMap` bindings on
+CSSOM property writes, including its floating-position custom property;
 unrecognized dependency styling fails the build rather than silently weakening
-CSP. The proxy preserves
+CSP. Dependency changes must requalify the stylesheet hash. The proxy preserves
 upstream response policies, including stricter uploaded-file CSP, and supplies
 a same-origin fallback only when no policy exists.
 
-Keep script/style `unsafe-inline` and `unsafe-eval` disabled. Both public proxy
+Keep script `unsafe-inline` and `unsafe-eval` disabled, and keep `<style>`
+elements nonce-gated; only inline style attributes are allowed. Both public proxy
 configurations enforce COEP `require-corp`, COOP `same-origin` and CORP
 `same-origin`; the installed avatar default uses local initials. Dependency
 updates must retain these boundaries and pass installed login, private API,
