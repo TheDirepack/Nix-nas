@@ -61,15 +61,18 @@ def _systemctl(*args: str, check: bool = True) -> None:
 def _unit_snapshot(units: list[str]) -> dict[str, dict[str, str]]:
     if not units:
         return {}
-    result = run_command(
-        [
-            SYSTEMCTL,
-            "show",
-            "--property=Id,LoadState,ActiveState,SubState,MemoryCurrent",
-            *units,
-        ],
-        timeout_seconds=30,
-    )
+    try:
+        result = run_command(
+            [
+                SYSTEMCTL,
+                "show",
+                "--property=Id,LoadState,ActiveState,SubState,MemoryCurrent",
+                *units,
+            ],
+            timeout_seconds=30,
+        )
+    except OSError as exc:
+        raise ControlError(f"unable to launch systemctl show: {exc}") from exc
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()[:2000]
         raise ControlError(detail or f"systemctl show failed with exit {result.returncode}")
