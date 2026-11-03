@@ -196,6 +196,7 @@
             pkgs.ruff
             pkgs.semgrep
             pkgs.shellcheck
+            pkgs.systemd
           ];
           buildInputs = [ pkgs.glib pkgs.json-glib ];
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.systemd ];
