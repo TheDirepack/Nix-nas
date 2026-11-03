@@ -35,8 +35,16 @@ nas_qemu_stop_pidfile() {
     kill -0 "$pid" 2>/dev/null || break
     sleep 1
   done
-  kill -KILL "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
+  if kill -0 "$pid" 2>/dev/null; then
+    # QEMU is daemonized by qemu-system-x86_64, so it is not a child of this
+    # shell and wait(2) cannot reap it. Only escalate to KILL if it is still
+    # alive after the grace period, then poll until it is gone.
+    kill -KILL "$pid" 2>/dev/null || true
+    for _ in $(seq 1 "$grace_seconds"); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 1
+    done
+  fi
   rm -f -- "$pidfile"
 }
 

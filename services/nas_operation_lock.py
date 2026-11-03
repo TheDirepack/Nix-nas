@@ -151,7 +151,8 @@ def _read_metadata(handle: Any) -> dict[str, Any] | None:
         handle.seek(0)
         raw = handle.read(4096)
         value = json.loads(raw) if raw.strip() else None
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError, RecursionError):
+        # Invalid UTF-8 is a ValueError subclass and means unreadable metadata.
         return None
     return value if isinstance(value, dict) else None
 
@@ -311,19 +312,29 @@ def operation_state() -> dict[str, Any]:
             _try_lock(handle, blocking=False)
         except BlockingIOError:
             raw_classes = value.get("classes") if isinstance(value, dict) else None
-            classes = raw_classes if isinstance(raw_classes, list) else []
-            busy = sorted(item for item in classes if isinstance(item, str))
-            active = (
-                [
+            classes = [item for item in raw_classes if isinstance(item, str)] if isinstance(raw_classes, list) else []
+            if isinstance(value, dict) and classes:
+                busy = sorted(classes)
+                active = [
                     {
                         "action": value.get("action", "operation"),
                         "classes": busy,
                         "pid": value.get("pid"),
                     }
                 ]
-                if isinstance(value, dict)
-                else []
-            )
+            else:
+                # The lock is held but its owner metadata is missing or
+                # unreadable. Report that explicitly instead of claiming the
+                # appliance is idle; no mutation class is inferred.
+                busy = []
+                active = [
+                    {
+                        "action": "unknown",
+                        "classes": [],
+                        "pid": None,
+                        "diagnostic": "operation lock is held but its metadata is missing or unreadable",
+                    }
+                ]
         else:
             fcntl.flock(handle, fcntl.LOCK_UN)
             busy = []

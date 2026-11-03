@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import sys
 import tempfile
 import unittest
+from typing import Any
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -207,6 +209,202 @@ class CommonPolicyTests(unittest.TestCase):
                 with self.subTest(name=name):
                     with self.assertRaises(ValueError, msg=name):
                         common.load_effective_authority(write(name, payload))
+
+    def test_load_effective_authority_validates_service_declarations_and_capability_values(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+
+            def write(name: str, payload: str) -> pathlib.Path:
+                path = root / name
+                path.write_text(payload, encoding="utf-8")
+                return path
+
+            def document(services: dict[str, Any], authz: dict[str, Any]) -> str:
+                return json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "services": services,
+                        "derived": {"authorization": authz},
+                    }
+                )
+
+            valid = write(
+                "valid.json",
+                document(
+                    {"demo": {"enabled": True}},
+                    {"demo": {"capabilities": {"access": "application.demo.access"}}},
+                ),
+            )
+            self.assertEqual(common.load_effective_authority(valid)["schemaVersion"], 3)
+
+            capabilities = {"access": "application.demo.access"}
+            for name, payload in [
+                (
+                    "missing-declaration.json",
+                    document({}, {"demo": {"capabilities": capabilities}}),
+                ),
+                (
+                    "empty-declaration.json",
+                    document({"demo": {}}, {"demo": {"capabilities": capabilities}}),
+                ),
+                (
+                    "non-object-declaration.json",
+                    document({"demo": "not-an-object"}, {"demo": {"capabilities": capabilities}}),
+                ),
+                (
+                    "null-capability-value.json",
+                    document({"demo": {"enabled": True}}, {"demo": {"capabilities": {"access": None}}}),
+                ),
+                (
+                    "empty-capability-value.json",
+                    document({"demo": {"enabled": True}}, {"demo": {"capabilities": {"access": ""}}}),
+                ),
+                (
+                    "numeric-capability-value.json",
+                    document({"demo": {"enabled": True}}, {"demo": {"capabilities": {"access": 7}}}),
+                ),
+            ]:
+                with self.subTest(name=name):
+                    with self.assertRaises(ValueError, msg=name):
+                        common.load_effective_authority(write(name, payload))
+
+    def test_resolve_v2_service_capability_distinguishes_dangling_ancestor_from_absent_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            env_base = {
+                "NAS_V2_SYNCTHING_SERVICE": "syncthing",
+                "NAS_V2_SYNCTHING_CAPABILITY": "access",
+            }
+
+            dangling_dir = root / "dangling"
+            dangling_dir.symlink_to(root / "does-not-exist")
+            dangling_file = dangling_dir / "effective.json"
+            absent_parent_file = root / "absent-parent" / "effective.json"
+
+            # Dangling symlink ancestor: compiled authority is unreachable -> fail closed.
+            with mock.patch.dict(os.environ, {**env_base, "NAS_V2_EFFECTIVE": str(dangling_file)}, clear=False):
+                with self.assertRaisesRegex(ValueError, "unavailable symlink"):
+                    common.resolve_v2_service_capability(
+                        "NAS_V2_SYNCTHING_SERVICE", "NAS_V2_SYNCTHING_CAPABILITY", "syncthing", "access"
+                    )
+
+            # Absent parent (no symlink): effective state not compiled yet -> bootstrap fallback.
+            with mock.patch.dict(os.environ, {**env_base, "NAS_V2_EFFECTIVE": str(absent_parent_file)}, clear=False):
+                self.assertEqual(
+                    common.resolve_v2_service_capability(
+                        "NAS_V2_SYNCTHING_SERVICE", "NAS_V2_SYNCTHING_CAPABILITY", "syncthing", "access"
+                    ),
+                    ("syncthing", "access"),
+                )
+
+    def test_resolve_v2_service_capability_fails_closed_on_dangling_leaf_and_corrupt_authority(self) -> None:
+        env_base = {"NAS_V2_SYNCTHING_SERVICE": "syncthing", "NAS_V2_SYNCTHING_CAPABILITY": "access"}
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+
+            dangling_leaf = root / "effective.json"
+            dangling_leaf.symlink_to(root / "does-not-exist")
+            with mock.patch.dict(os.environ, {**env_base, "NAS_V2_EFFECTIVE": str(dangling_leaf)}, clear=False):
+                with self.assertRaisesRegex(ValueError, "unavailable symlink"):
+                    common.resolve_v2_service_capability(
+                        "NAS_V2_SYNCTHING_SERVICE", "NAS_V2_SYNCTHING_CAPABILITY", "syncthing", "access"
+                    )
+
+            corrupt = root / "corrupt.json"
+            corrupt.write_text("{not json", encoding="utf-8")
+            with mock.patch.dict(os.environ, {**env_base, "NAS_V2_EFFECTIVE": str(corrupt)}, clear=False):
+                with self.assertRaisesRegex(ValueError, "not valid JSON"):
+                    common.resolve_v2_service_capability(
+                        "NAS_V2_SYNCTHING_SERVICE", "NAS_V2_SYNCTHING_CAPABILITY", "syncthing", "access"
+                    )
+
+            unreadable = root / "directory-authority"
+            unreadable.mkdir()
+            with mock.patch.dict(os.environ, {**env_base, "NAS_V2_EFFECTIVE": str(unreadable)}, clear=False):
+                with self.assertRaisesRegex(ValueError, "unreadable"):
+                    common.resolve_v2_service_capability(
+                        "NAS_V2_SYNCTHING_SERVICE", "NAS_V2_SYNCTHING_CAPABILITY", "syncthing", "access"
+                    )
+
+            missing_authorization = root / "no-authz.json"
+            missing_authorization.write_text(
+                json.dumps({"schemaVersion": 3, "services": {}, "derived": {}}), encoding="utf-8"
+            )
+            with mock.patch.dict(os.environ, {**env_base, "NAS_V2_EFFECTIVE": str(missing_authorization)}, clear=False):
+                with self.assertRaisesRegex(ValueError, "missing the derived.authorization"):
+                    common.resolve_v2_service_capability(
+                        "NAS_V2_SYNCTHING_SERVICE", "NAS_V2_SYNCTHING_CAPABILITY", "syncthing", "access"
+                    )
+
+            non_object = root / "list.json"
+            non_object.write_text("[]", encoding="utf-8")
+            with mock.patch.dict(os.environ, {**env_base, "NAS_V2_EFFECTIVE": str(non_object)}, clear=False):
+                with self.assertRaisesRegex(ValueError, "top-level must be an object"):
+                    common.resolve_v2_service_capability(
+                        "NAS_V2_SYNCTHING_SERVICE", "NAS_V2_SYNCTHING_CAPABILITY", "syncthing", "access"
+                    )
+
+    def test_resolve_v2_service_capability_resolves_declared_capability(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            effective_file = root / "effective.json"
+            effective_file.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "services": {"demo": {"enabled": True}},
+                        "derived": {"authorization": {"demo": {"capabilities": {"access": "application.demo.access"}}}},
+                    }
+                )
+            )
+            with mock.patch.dict(
+                os.environ,
+                {"NAS_V2_EFFECTIVE": str(effective_file)},
+                clear=False,
+            ):
+                self.assertEqual(
+                    common.resolve_v2_service_capability(
+                        "NAS_V2_SYNCTHING_SERVICE", "NAS_V2_SYNCTHING_CAPABILITY", "demo", "access"
+                    ),
+                    ("demo", "access"),
+                )
+
+
+class RunCommandBoundaryTests(unittest.TestCase):
+    def test_broken_stdin_pipe_is_tolerated(self) -> None:
+        # A child that exits without reading makes the stdin writer see EPIPE.
+        result = common.run_command(["true"], input_text="x" * (256 * 1024), timeout_seconds=30)
+        self.assertEqual(result.returncode, 0)
+
+    def test_timeout_escalates_to_kill_for_a_child_that_ignores_term(self) -> None:
+        result = common.run_command(
+            ["sh", "-c", "trap '' TERM; sleep 30"],
+            timeout_seconds=0.3,
+        )
+        self.assertEqual(result.returncode, 124)
+        self.assertIn("timed out", result.stderr)
+
+
+class EffectiveAuthorityValidationTests(unittest.TestCase):
+    def _load(self, document: Any) -> Any:
+        with tempfile.TemporaryDirectory() as raw:
+            path = pathlib.Path(raw) / "effective.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            return common.load_effective_authority(path)
+
+    def test_unsupported_schema_version_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported schemaVersion"):
+            self._load({"schemaVersion": 99, "services": {}, "derived": {"authorization": {}}})
+
+    def test_non_object_capabilities_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be object"):
+            self._load(
+                {
+                    "schemaVersion": 3,
+                    "services": {"demo": {"enabled": True}},
+                    "derived": {"authorization": {"demo": {"capabilities": ["access"]}}},
+                }
+            )
 
 
 if __name__ == "__main__":

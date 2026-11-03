@@ -48,10 +48,13 @@ nas_vm_cleanup_run() {
 }
 
 nas_vm_cleanup_trap() {
-  local status=$?
+  local status=$? cleanup_status
   # A profiler may own DEBUG while the process is running. Disable it before
   # the cleanup stack starts so cleanup bookkeeping cannot replace the failed
   # command in the final observability record.
   trap - DEBUG
   nas_vm_cleanup_run "$status"
+  cleanup_status=$?
+  # A successful workload must not report success when its cleanup failed.
+  exit "$cleanup_status"
 }

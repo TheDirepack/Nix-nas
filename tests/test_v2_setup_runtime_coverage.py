@@ -727,7 +727,11 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             token_file = root / "api-token"
             secret_key = "a" * 128
             token = "b" * 64
-            environment.write_text(f"AUTHENTIK_SECRET_KEY={secret_key}\n", encoding="utf-8")
+            bootstrap_password = "c" * 48
+            environment.write_text(
+                f"AUTHENTIK_SECRET_KEY={secret_key}\nAUTHENTIK_BOOTSTRAP_PASSWORD={bootstrap_password}\n",
+                encoding="utf-8",
+            )
             token_file.write_text(token, encoding="utf-8")
             with (
                 mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_ENVIRONMENT", environment),
@@ -742,7 +746,10 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
                 ["nas-secrets", "adopt-authentik-bootstrap-stdin"],
                 admin.call_args.args[0],
             )
-            self.assertEqual(f"keepass\n{secret_key}\n{token}\n", admin.call_args.kwargs["input_text"])
+            self.assertEqual(
+                f"keepass\n{secret_key}\n{token}\n{bootstrap_password}\n",
+                admin.call_args.kwargs["input_text"],
+            )
             activate.assert_not_called()
 
     def test_adopt_bootstrap_authentik_authority_reactivates_an_existing_runtime(self) -> None:
@@ -750,7 +757,10 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             root = pathlib.Path(directory)
             environment = root / "environment"
             token_file = root / "api-token"
-            environment.write_text(f"AUTHENTIK_SECRET_KEY={'a' * 128}\n", encoding="utf-8")
+            environment.write_text(
+                f"AUTHENTIK_SECRET_KEY={'a' * 128}\nAUTHENTIK_BOOTSTRAP_PASSWORD={'c' * 48}\n",
+                encoding="utf-8",
+            )
             token_file.write_text("b" * 64, encoding="utf-8")
             with (
                 mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_ENVIRONMENT", environment),

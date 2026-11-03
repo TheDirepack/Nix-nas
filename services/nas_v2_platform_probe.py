@@ -29,6 +29,7 @@ _VENDOR_IDS = {
 }
 _NVIDIA_DEVICE_RE = re.compile(r"^nvidia([0-9]+)$")
 _NVIDIA_SHARED_NODES = ("nvidiactl", "nvidia-uvm", "nvidia-uvm-tools", "nvidia-modeset")
+_NVIDIA_CDI_RE = re.compile(r"^nvidia\.com/gpu=([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})$")
 
 
 def _load_base(path: pathlib.Path) -> dict[str, Any]:

@@ -108,6 +108,25 @@ class IdentitySyncCoverageTests(unittest.TestCase):
                 sync.http_json("https://example.test/api")
         self.assertEqual(urlopen.call_count, 3)
 
+    def test_aborted_mutation_is_ambiguous_without_a_duplicate_retry(self) -> None:
+        with mock.patch.object(
+            sync.urllib.request, "urlopen", side_effect=ConnectionAbortedError("connection lost")
+        ) as urlopen:
+            with self.assertRaises(sync.AmbiguousMutationError):
+                sync.http_json("https://example.test/api", method="POST", body={"action": "create"})
+        self.assertEqual(urlopen.call_count, 1)
+
+    def test_aborted_read_retries_without_becoming_an_ambiguous_mutation(self) -> None:
+        with (
+            mock.patch.object(
+                sync.urllib.request, "urlopen", side_effect=ConnectionAbortedError("connection lost")
+            ) as urlopen,
+            mock.patch.object(sync.time, "sleep"),
+        ):
+            with self.assertRaisesRegex(sync.SyncError, "Upstream request failed"):
+                sync.http_json("https://example.test/api")
+        self.assertEqual(urlopen.call_count, 3)
+
     def test_authentik_token_validation(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)

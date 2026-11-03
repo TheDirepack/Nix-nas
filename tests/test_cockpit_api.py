@@ -90,6 +90,14 @@ class CockpitApiTests(unittest.TestCase):
             value = api.operation_state()
         self.assertEqual(value["managedServicesConflicts"], ["runtime"])
 
+    def test_unsafe_operation_coordinator_does_not_break_the_overview(self) -> None:
+        with mock.patch.object(
+            api, "shared_operation_state", side_effect=RuntimeError("operation root grants access to other users")
+        ):
+            value = api.operation_state()
+        self.assertEqual([], value["busyClasses"])
+        self.assertIn("operation root", value["error"])
+
     def test_overview_uses_one_managed_status_snapshot_for_operation_rows(self) -> None:
         def snapshot(identifier):
             return {

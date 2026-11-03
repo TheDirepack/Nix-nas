@@ -38,19 +38,26 @@ KeePassXC, Authentik, CopyParty, ZFS, or the feature controller.
 
 ## First-boot Authentik access
 
-The first-boot Authentik setup identity is always `akadmin`. The password depends
-on the artifact you are running:
+The first-boot Authentik setup identity is `akadmin`. Its **Authentik password is
+randomly generated on first boot**, independently of the Linux bootstrap login.
+It is kept in a private, root-owned boot-side environment file rather than in the
+Nix store, release notes, or the installer image. From a trusted local console or
+a previously authorized SSH recovery session, retrieve only the password:
 
-- a development checkout or development-built image uses the fixed
-  `nas-admin-first-boot` password so first-run, VM, and browser tests remain
-  repeatable;
-- a manually published tagged GitHub Release uses the five-word Diceware password shown
-  in that release's notes. The same password is embedded in that release-only
-  source commit and package.
+```bash
+sudo sed -n 's/^AUTHENTIK_BOOTSTRAP_PASSWORD=//p' /var/lib/nas-control-plane/authentik/environment
+```
 
-Do not copy a release password into `main`, and do not assume
-`nas-admin-first-boot` works for a tagged release. If you are installing a
-published release, use the credentials from the matching GitHub Release notes.
+Do not share the full environment file: it also contains the signing secret and
+bootstrap API token. Record the password securely until first start completes,
+then retire the bootstrap identity. An incomplete upgrade with an older
+password-less boot environment must be recovered locally; it will not start
+Authentik's initial-setup flow anonymously.
+
+The separate **Linux bootstrap login** also uses username `akadmin`. Development
+builds use `nas-admin-first-boot`; tagged releases publish the temporary Linux
+password in their release notes. The Linux login requires a password change at
+first local console login. Do not use that Linux password to sign in to Authentik.
 
 The setup workflow creates the administrator you choose, verifies that account
 as the first permanent Linux recovery administrator and as an enabled
@@ -59,7 +66,7 @@ Authentik `nas_admin` member. Its Linux home is
 the disposable local bootstrap account and retires the bootstrap Authentik
 identity. Do not use either bootstrap identity for normal administration.
 
-The initial Linux login uses the same `akadmin` credential as Authentik. The
+The initial Linux and Authentik logins have separate bootstrap passwords. The
 wizard asks separately for the KeePassXC database password because it only
 unlocks the appliance secret database; it is not an account credential.
 KeePassXC, Authentik, and PostgreSQL remain under

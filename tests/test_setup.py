@@ -57,6 +57,68 @@ class SetupApplicationRetirementTests(unittest.TestCase):
             forbidden.close()
 
 
+class BootstrapAuthentikPasswordTests(unittest.TestCase):
+    def test_first_boot_generates_password_outside_the_nix_store(self) -> None:
+        application = (ROOT / "modules/nas/config/application-services.nix").read_text()
+        services = (ROOT / "modules/nas/internal/secret-tools.nix").read_text()
+        self.assertIn("openssl rand -hex 24", application)
+        self.assertIn("AUTHENTIK_BOOTSTRAP_PASSWORD=", application)
+        self.assertIn('requires = [ "nas-bootstrap-authentik-secrets.service" ]', application)
+        self.assertIn("Missing secure first-boot Authentik password", application)
+        self.assertIn('store_value authentik-bootstrap-password "$bootstrap_password"', services)
+        self.assertNotIn("store_value authentik-bootstrap-password ${lib.escapeShellArg bootstrapPassword}", services)
+
+    def test_vm_browser_does_not_reuse_the_linux_bootstrap_password(self) -> None:
+        guest = (ROOT / "tests/vm/guest-test.sh").read_text(encoding="utf-8")
+        self.assertIn("bootstrap_authentik_password", guest)
+        self.assertIn("^AUTHENTIK_BOOTSTRAP_PASSWORD=//p", guest)
+        self.assertIn('"$bootstrap_authentik_password" > "$bootstrap_authz_secret_dir/akadmin"', guest)
+        self.assertIn('"$bootstrap_authentik_password" >"$wizard_secret_dir/akadmin"', guest)
+        self.assertNotIn("'nas-admin-first-boot' > \"$bootstrap_authz_secret_dir/akadmin\"", guest)
+        self.assertNotIn("'nas-admin-first-boot' >\"$wizard_secret_dir/akadmin\"", guest)
+
+    def test_bootstrap_adoption_carries_the_actual_runtime_password(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            environment = root / "environment"
+            token = root / "api-token"
+            secret = "a" * 128
+            password = "b" * 48
+            environment.write_text(
+                f"AUTHENTIK_SECRET_KEY={secret}\nAUTHENTIK_BOOTSTRAP_PASSWORD={password}\n",
+                encoding="utf-8",
+            )
+            token.write_text("c" * 64, encoding="utf-8")
+            with (
+                mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_ENVIRONMENT", environment),
+                mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_TOKEN", token),
+                mock.patch.object(setup, "coordinated_child", side_effect=lambda command: command),
+                mock.patch.object(setup, "run_admin") as adopt,
+                mock.patch.object(setup, "runtime_secrets_ready", return_value=False),
+            ):
+                self.assertEqual(setup.adopt_bootstrap_authentik_authority("db-pass"), {"adopted": True})
+            self.assertEqual(
+                adopt.call_args.kwargs["input_text"],
+                f"db-pass\n{secret}\n{'c' * 64}\n{password}\n",
+            )
+
+    def test_bootstrap_adoption_fails_closed_without_password(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            environment = root / "environment"
+            token = root / "api-token"
+            environment.write_text(f"AUTHENTIK_SECRET_KEY={'a' * 128}\n", encoding="utf-8")
+            token.write_text("c" * 64, encoding="utf-8")
+            with (
+                mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_ENVIRONMENT", environment),
+                mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_TOKEN", token),
+                mock.patch.object(setup, "run_admin") as adopt,
+            ):
+                with self.assertRaisesRegex(setup.SetupError, "password is missing or malformed"):
+                    setup.adopt_bootstrap_authentik_authority("db-pass")
+            adopt.assert_not_called()
+
+
 class SyncthingSetupTests(unittest.TestCase):
     def test_sync_starts_syncthing_and_waits_for_its_api(self) -> None:
         connection = mock.MagicMock()

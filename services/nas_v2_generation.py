@@ -29,6 +29,29 @@ _GENERATION_SUFFIX_MIN = 2
 _GENERATION_SUFFIX_MAX = 9999
 _GENERATION_NAME_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?(?:-(?:[2-9]|[1-9][0-9]{1,3}))?$")
 
+# Caddy validates and imports the published ``caddy-managed.conf`` after the
+# generation is sealed, so the sealed tree must be group-readable by the Caddy
+# system group.  Use the existing account/group rather than introducing a
+# second group registry that could drift from the service definition.
+CADDY_READER_GROUP = "caddy"
+
+
+def _reader_gid(reader_group: str | int | None) -> int | None:
+    if reader_group is None:
+        return None
+    import grp
+
+    try:
+        if isinstance(reader_group, int) and not isinstance(reader_group, bool):
+            return grp.getgrgid(reader_group).gr_gid
+        if isinstance(reader_group, str) and reader_group:
+            if reader_group.isdigit():
+                return grp.getgrgid(int(reader_group)).gr_gid
+            return grp.getgrnam(reader_group).gr_gid
+    except KeyError as exc:
+        raise GenerationError(f"sealed generation reader group {reader_group!r} does not exist") from exc
+    raise GenerationError(f"invalid sealed generation reader group {reader_group!r}")
+
 
 def validate_revision(revision: str) -> str:
     if not isinstance(revision, str) or _REVISION_RE.fullmatch(revision) is None:
@@ -84,21 +107,62 @@ def allocate_generation(root: pathlib.Path, revision: str) -> pathlib.Path:
     raise GenerationError(f"too many generations exist for desired revision {revision}")
 
 
-def _seal_tree(root: pathlib.Path) -> None:
-    """Make generated files immutable to ordinary runtime writers."""
+def _set_group(path: pathlib.Path, gid: int | None) -> None:
+    if gid is None:
+        return
+    try:
+        os.chown(path, -1, gid)
+    except OSError as exc:
+        raise GenerationError(f"unable to grant sealed generation group access to {path}: {exc}") from exc
+
+
+def _seal_tree(root: pathlib.Path, *, reader_group: str | int | None = None) -> None:
+    """Make generated files immutable to ordinary runtime writers.
+
+    With no reader group the tree is owner-only. When ``reader_group`` names a
+    group that a consumer service runs under (Caddy reads the managed Caddyfile
+    after publication), the tree becomes group-readable but never group- or
+    world-writable and never world-readable:
+    directories ``0o550`` and files ``0o440``.
+    """
+    gid = _reader_gid(reader_group)
+    directory_mode = 0o550 if gid is not None else 0o500
+    file_mode = 0o440 if gid is not None else 0o400
     for path in sorted(
         (item for item in root.rglob("*") if item.is_file()),
         key=lambda item: len(item.parts),
         reverse=True,
     ):
-        os.chmod(path, 0o444)
+        os.chmod(path, file_mode)
+        _set_group(path, gid)
     for path in sorted(
         (item for item in root.rglob("*") if item.is_dir()),
         key=lambda item: len(item.parts),
         reverse=True,
     ):
-        os.chmod(path, 0o555)
-    os.chmod(root, 0o555)
+        os.chmod(path, directory_mode)
+        _set_group(path, gid)
+    os.chmod(root, directory_mode)
+    _set_group(root, gid)
+
+
+def _grant_reader_traversal(generation_root: pathlib.Path, *, reader_group: str | int | None) -> None:
+    """Allow the consumer group to traverse into revision directories.
+
+    ``allocate_generation`` inherits the reconciler umask, which can leave the
+    parent ``generations`` directory unreadable to Caddy even after the
+    generation itself is sealed group-readable.
+    """
+    gid = _reader_gid(reader_group)
+    if gid is None:
+        return
+    if generation_root.is_symlink() or not generation_root.is_dir():
+        raise GenerationError(f"generation root must be a real directory: {generation_root}")
+    try:
+        os.chmod(generation_root, 0o750)
+    except OSError as exc:
+        raise GenerationError(f"unable to grant sealed generation group access to {generation_root}: {exc}") from exc
+    _set_group(generation_root, gid)
 
 
 def _replace_symlink(path: pathlib.Path, target: str) -> None:
@@ -151,6 +215,7 @@ def publish_generation(
     generation_root: pathlib.Path,
     current_link: pathlib.Path,
     compatibility_paths: Mapping[pathlib.Path, pathlib.PurePosixPath],
+    reader_group: str | int | None = None,
 ) -> pathlib.Path:
     """Seal and atomically select one completely validated generation."""
     expected_revision = validate_revision(expected_revision)
@@ -170,7 +235,8 @@ def publish_generation(
         raise GenerationError("generation directory is not keyed by the expected desired-state revision")
 
     _validate_compatibility_paths(compatibility_paths, current_link=current_link)
-    _seal_tree(generation)
+    _seal_tree(generation, reader_group=reader_group)
+    _grant_reader_traversal(generation_root, reader_group=reader_group)
     _fsync_directory(generation_root)
 
     # These links are stable after the first migration and always traverse the
@@ -238,10 +304,18 @@ def _refuse_if_current(path: pathlib.Path, current_link: pathlib.Path) -> None:
 
 
 def _unseal_tree(path: pathlib.Path) -> None:
+    """Make a sealed generation tree writable again so shutil.rmtree can remove it.
+
+    Both directories and files are restored to owner-writable modes; sealed
+    files are read-only (0o400) and would otherwise block removal.
+    """
     os.chmod(path, 0o700)
-    for directory in (item for item in path.rglob("*") if item.is_dir()):
+    for item in path.rglob("*"):
         try:
-            os.chmod(directory, 0o700)
+            if item.is_dir():
+                os.chmod(item, 0o700)
+            else:
+                os.chmod(item, 0o600)
         except OSError:
             pass
 
@@ -267,6 +341,7 @@ def discard_generation(path: pathlib.Path, *, current_link: pathlib.Path) -> Non
 
 
 __all__ = [
+    "CADDY_READER_GROUP",
     "GenerationError",
     "allocate_generation",
     "discard_generation",

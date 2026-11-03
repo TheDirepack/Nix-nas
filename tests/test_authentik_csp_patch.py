@@ -6,6 +6,7 @@ import hashlib
 import importlib
 import importlib.util
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -13,6 +14,7 @@ import subprocess
 import tempfile
 import unittest
 from html.parser import HTMLParser
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests/fixtures/authentik-csp"
@@ -70,6 +72,71 @@ class AuthentikCspPatchTests(unittest.TestCase):
         assert value is not None, f"Authentik settings have no {name} assignment"
         return value
 
+    def test_hunks_are_ordered_so_gnu_patch_can_apply_the_series(self):
+        """Nix applies these patches with GNU patch, which rejects out-of-order hunks.
+
+        ``git apply`` tolerates them, so only the tool used by the build catches
+        a reversed hunk block.
+        """
+        current_file = None
+        previous_old_start = 0
+        for line in PATCH.read_text(encoding="utf-8").splitlines():
+            if line.startswith("+++ b/"):
+                current_file = line[len("+++ b/") :]
+                previous_old_start = 0
+                continue
+            if not line.startswith("@@"):
+                continue
+            match = re.match(r"@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@", line)
+            self.assertIsNotNone(match, f"unparsable hunk header in {current_file}: {line}")
+            assert match is not None
+            old_start = int(match.group(1))
+            self.assertGreaterEqual(
+                old_start,
+                previous_old_start,
+                f"hunks in {current_file} are not in ascending source order",
+            )
+            previous_old_start = old_start
+
+    def test_saml_form_action_origins_are_validated_from_the_environment(self) -> None:
+        tree = ast.parse(self.settings_source)
+        function = next(
+            node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_saml_form_action_domains"
+        )
+        source = ast.get_source_segment(self.settings_source, function)
+        assert source is not None
+        module_path = self.tree / "saml_form_action_probe.py"
+        module_path.write_text(
+            "import os\nfrom urllib.parse import urlsplit\n\n" + source + "\n",
+            encoding="utf-8",
+        )
+        spec = importlib.util.spec_from_file_location("saml_form_action_probe", module_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with mock.patch.dict(
+            os.environ,
+            {
+                "AUTHENTIK_SAML_IDP_FORM_ACTION_DOMAINS": (
+                    "https://idp.example.org, https://idp.example.org/, "
+                    "https://login.example.net:8443, http://insecure.example.org, "
+                    "https://path.example.org/sso, https://user:pw@evil.example.org, "
+                    "https://idp.example.org?query=1, not-a-url, "
+                )
+            },
+            clear=False,
+        ):
+            origins = module._saml_form_action_domains()
+        self.assertEqual(
+            ("https://idp.example.org", "https://login.example.net:8443"),
+            origins,
+        )
+        # An absent or empty variable keeps only 'self' as the form target.
+        with mock.patch.dict(os.environ, {"AUTHENTIK_SAML_IDP_FORM_ACTION_DOMAINS": ""}, clear=False):
+            self.assertEqual((), module._saml_form_action_domains())
+        self.assertIn("form-action", self.settings_source)
+        self.assertIn("*SAML_IDP_FORM_ACTION_DOMAINS", self.settings_source)
+
     def test_nonce_middleware_preserves_csrf_session_and_uploaded_file_policies(self):
         middleware = ast.literal_eval(self.assignment("MIDDLEWARE"))
         self.assertIn("csp.middleware.CSPMiddleware", middleware)
@@ -104,12 +171,27 @@ class AuthentikCspPatchTests(unittest.TestCase):
         self.assertEqual(len(sources), 5)
         for source in sources:
             text = source.read_text()
-            self.assertNotRegex(text, r"(?<![\w.-])style=", str(source))
-            self.assertNotIn("styleMap", text, str(source))
+            # The CSP bypass is a rendered style attribute, which
+            # `style-src-attr 'none'` blocks. `style=${styleMap(...)}` is the
+            # attribute-part binding styleMap requires; the directive writes
+            # through element.style, so it never serializes an attribute.
+            self.assertNotIn('style="', text, str(source))
+            self.assertNotIn('setAttribute("style"', text, str(source))
+            for line in text.splitlines():
+                if "styleMap" in line and "lit/directives/style-map.js" not in line:
+                    self.assertIn("style=${styleMap(", line, f"unsafe styleMap binding: {source}: {line}")
+                    self.assertNotIn(
+                        ".style=${styleMap(", line, f"styleMap requires an attribute part: {source}: {line}"
+                    )
+            if "styleMap(" in text:
+                self.assertIn('from "lit/directives/style-map.js"', text, f"styleMap used without its import: {source}")
             for tag in re.findall(r"<style\b[^>]*>", text):
                 self.assertIn("nonce=${window.litNonce}", tag)
+        skeleton = (self.tree / "authentik/core/templates/base/skeleton.html").read_text()
+        self.assertIn("window.litNonce", skeleton)
+        self.assertLess(skeleton.index("window.litNonce"), skeleton.index("{% block head_before %}"))
         progress = (self.tree / "web/src/elements/ak-progress-bar.ts").read_text()
-        self.assertIn(".style=", progress)
+        self.assertIn("style=${styleMap(", progress)
         self.assertIn("Math.min(this.value, 100)", progress)
         self.assertIn("aria-valuenow", progress)
         grid = (self.tree / "web/src/user/LibraryPage/ApplicationList.ts").read_text()
@@ -200,6 +282,7 @@ class AuthentikCspPatchTests(unittest.TestCase):
             django.setup()
         constants = importlib.import_module("csp.constants")
         namespace = {name: getattr(constants, name) for name in ("SELF", "NONE", "NONCE")}
+        namespace["SAML_IDP_FORM_ACTION_DOMAINS"] = ()
         policy = self.assignment("CONTENT_SECURITY_POLICY")
         self.assertIsNotNone(policy, "Authentik does not enforce a nonce CSP")
         directives = eval(compile(ast.Expression(policy), "authentik-csp-policy", "eval"), namespace)

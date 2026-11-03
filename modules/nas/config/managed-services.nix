@@ -48,6 +48,10 @@ let
 
   seedDesiredState = pkgs.writeShellScript "nas-managed-services-v2-seed" ''
     set -euo pipefail
+    ${pkgs.util-linux}/bin/mountpoint -q -- ${lib.escapeShellArg cfg.zfsRoot} || {
+      echo "Refusing to seed Managed Services V2 outside the mounted ZFS data root" >&2
+      exit 1
+    }
 
     ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations ${zfsControlRoot}
     ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations ${zfsControlRoot}/apps
@@ -96,6 +100,13 @@ in
       description = "Seed Managed Services V2 desired state once";
       wantedBy = [ "multi-user.target" ];
       before = [ "nas-managed-services-reconcile.service" ];
+      # Never put durable desired state on the boot filesystem beneath an
+      # unmounted ZFS root. First-run storage preparation explicitly restarts
+      # this seed after mounting the new dataset; on normal boot it runs only
+      # when the real data root is already mounted.
+      unitConfig.ConditionPathIsMountPoint = cfg.zfsRoot;
+      wants = [ "nas-zfs-mount-guard.service" ];
+      after = [ "nas-zfs-mount-guard.service" ];
       serviceConfig = {
         Type = "oneshot";
         ExecStart = seedDesiredState;
@@ -118,17 +129,24 @@ in
       requires = [
         "nas-managed-services-seed.service"
         "nas-zfs-mount-guard.service"
-      ] ++ lib.optional firewalldEnabled "firewalld.service";
+      ] ++ lib.optional cfg.virtualization.enable "nas-containers-storage-check.service"
+        ++ lib.optional firewalldEnabled "firewalld.service";
       after = [
         "nas-managed-services-seed.service"
         "nas-zfs-mount-guard.service"
-      ] ++ lib.optional firewalldEnabled "firewalld.service";
+      ] ++ lib.optional cfg.virtualization.enable "nas-containers-storage-check.service"
+        ++ lib.optional firewalldEnabled "firewalld.service";
       unitConfig = {
         RequiresMountsFor = [ cfg.zfsRoot ];
+        AssertPathIsMountPoint = cfg.zfsRoot;
         # A skipped mount guard does not block Caddy's Wants. Setup itself must
         # reconcile after activating secrets, before publishing state.json.
         ConditionPathExists = [ "${nasInternal.secretRoot}/ready" ];
       };
+      # The NVIDIA toolkit is invoked by name by the probe; systemd composes
+      # PATH from this list, so the bare `nvidia-ctk` resolves without
+      # overriding the service's default PATH.
+      path = [ pkgs.nvidia-container-toolkit ];
       environment = {
         PYTHONPATH = "${v2Source}";
         NAS_V2_DESIRED = desiredPath;
@@ -146,6 +164,7 @@ in
         NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString authentikOutpostPort}";
         NAS_V2_AUTHENTIK_PATH = cfg.identity.authentikPath;
         NAS_V2_LAN_HOST = nasInternal.lanHost;
+        NAS_V2_NVIDIA_CTK_BIN = "${pkgs.nvidia-container-toolkit}/bin/nvidia-ctk";
         NAS_V2_SYSTEMD_ANALYZE_BIN = "${pkgs.systemd}/bin/systemd-analyze";
         NAS_V2_SYSTEMCTL_BIN = "${pkgs.systemd}/bin/systemctl";
         NAS_V2_PYTHON_BIN = "${v2Python}/bin/python";
@@ -156,8 +175,10 @@ in
         NAS_V2_VIRSH_BIN = "${pkgs.libvirt}/bin/virsh";
         NAS_V2_VIRT_XML_VALIDATE_BIN = "${pkgs.libvirt}/bin/virt-xml-validate";
         NAS_V2_LAN_ZONE = cfg.networking.firewall.zone;
-        NAS_V2_COCKPIT_PORT = toString nasInternal.cockpitPort;
         NAS_V2_FIREWALLD_ENABLED = if firewalldEnabled then "1" else "0";
+        # Sealed generations must stay readable by the account group that
+        # imports the managed Caddyfile; follow the configured Caddy group.
+        NAS_V2_GENERATION_READER_GROUP = config.services.caddy.group;
       };
       preStart = ''
         ${v2Python}/bin/python ${lib.escapeShellArgs platformProbeArgs}

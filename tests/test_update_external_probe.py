@@ -21,6 +21,10 @@ class ExternalProbeTests(unittest.TestCase):
         self.bash = self.host_tool("bash")
         (self.bin / "python3").symlink_to(sys.executable)
         (self.bin / "timeout").symlink_to(self.host_tool("timeout"))
+        # nas-update declares coreutils in its runtime inputs; the fixture PATH
+        # only needs the commands the extracted function actually runs.
+        (self.bin / "mktemp").symlink_to(self.host_tool("mktemp"))
+        (self.bin / "rm").symlink_to(self.host_tool("rm"))
         self.marker = self.root / "probe-launched"
         self.args = self.root / "probe-args"
         self.probe = self.root / "inert probe"
@@ -50,21 +54,32 @@ class ExternalProbeTests(unittest.TestCase):
         conditional: bool = False,
         local_only: bool = False,
         probe_exit: int = 0,
+        completion_before: str | None = None,
+        invocation: str = "external_management_probe",
+        stdin: str | None = None,
     ):
         if decoder is not None:
             python = self.bin / "python3"
             python.unlink()
             python.write_text(f"#!{self.bash}\nset -euo pipefail\n" + decoder, encoding="utf-8")
             python.chmod(0o755)
-        invocation = "external_management_probe"
         if conditional:
             invocation = "if external_management_probe; then exit 0; else exit $?; fi"
+        scheduling = ""
+        if completion_before is not None:
+            # Model the caller being descheduled until the small decoder has exited.
+            scheduling = (
+                "set -T\n"
+                f"trap 'if [[ $BASH_COMMAND == {completion_before}\\ * ]]; then "
+                'while kill -0 "$!" 2>/dev/null; do :; done; fi\' DEBUG\n'
+            )
         command = (
             "set -Eeuo pipefail\nallow_local_health_only="
             + ("true" if local_only else "false")
             + "\n"
             + self.function
             + "\n"
+            + scheduling
             + invocation
             + "\n"
         )
@@ -82,6 +97,7 @@ class ExternalProbeTests(unittest.TestCase):
                 "NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON": raw,
             },
             capture_output=True,
+            input=stdin,
             text=True,
             timeout=10,
             check=False,
@@ -120,6 +136,91 @@ class ExternalProbeTests(unittest.TestCase):
     def test_decoder_failure_remains_fatal_in_conditional_context(self):
         result = self.run_probe("[]", decoder="printf '%s\\0' \"$PROBE\" accepted-prefix\nexit 47\n", conditional=True)
         self.assert_blocked(result, 47)
+
+    def test_completed_decoder_preserves_failure_without_launching_partial_argv(self):
+        for boundary in ("mapfile", "wait"):
+            for partial in (False, True):
+                for conditional in (False, True):
+                    with self.subTest(boundary=boundary, partial=partial, conditional=conditional):
+                        decoder = "printf '%s\\0' \"$PROBE\" accepted-prefix\n" if partial else ""
+                        result = self.run_probe(
+                            "[]",
+                            decoder=decoder + "exit 47\n",
+                            conditional=conditional,
+                            completion_before=boundary,
+                        )
+                        self.assert_blocked(result, 47)
+
+    def test_completed_real_decoder_still_launches_valid_argv(self):
+        args = ["accepted-prefix", "space ; $(not-code)", "line\nbreak"]
+        for boundary in ("mapfile", "wait"):
+            with self.subTest(boundary=boundary):
+                result = self.run_probe(json.dumps([str(self.probe), *args]), completion_before=boundary)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(self.args.read_bytes(), b"".join(arg.encode() + b"\0" for arg in args))
+
+    def test_repeated_fast_decoder_failures_preserve_status_and_close_descriptors(self):
+        for partial in (False, True):
+            with self.subTest(partial=partial):
+                decoder = "printf '%s\\0' \"$PROBE\" accepted-prefix\n" if partial else ""
+                result = self.run_probe(
+                    "[]",
+                    decoder=decoder + "exit 47\n",
+                    invocation="""before=(/proc/self/fd/*)
+for ((iteration=0; iteration<128; iteration++)); do
+  if external_management_probe; then status=0; else status=$?; fi
+  [[ $status == 47 ]] || { printf 'iteration %s: exit %s\\n' "$iteration" "$status" >&2; exit 99; }
+done
+after=(/proc/self/fd/*)
+[[ ${before[*]} == "${after[*]}" ]] || { printf 'descriptor leak\\n' >&2; exit 98; }
+exit "$status"
+""",
+                )
+                self.assert_blocked(result, 47)
+                self.assertEqual(result.stderr, "")
+
+    def test_successful_decoder_without_argv_remains_blocked(self):
+        for conditional in (False, True):
+            with self.subTest(conditional=conditional):
+                result = self.run_probe("[]", decoder="exit 0\n", conditional=conditional)
+                self.assert_blocked(result, 1)
+                self.assertIn("External management probe command is empty.", result.stderr)
+
+    def test_repeated_real_probes_preserve_stdin_and_close_descriptors(self):
+        self.probe.write_text(
+            f'#!{self.bash}\nset -euo pipefail\nprintf launched > "$MARKER"\n'
+            'IFS= read -r payload\nprintf \'%s\\n\' "$payload" >> "$PROBE_ARGS.stdin"\n'
+            'printf \'%s\\0\' "$@" > "$PROBE_ARGS"\n',
+            encoding="utf-8",
+        )
+        payload = "stdin-only fixture secret\nsecond stdin-only fixture secret\n"
+        result = self.run_probe(
+            json.dumps([str(self.probe), "only-argv"]),
+            stdin=payload,
+            invocation="""before=(/proc/self/fd/*)
+external_management_probe
+external_management_probe
+after=(/proc/self/fd/*)
+[[ ${before[*]} == "${after[*]}" ]] || { printf 'descriptor leak\\n' >&2; exit 98; }
+""",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(self.args.read_bytes(), b"only-argv\0")
+        self.assertEqual(Path(str(self.args) + ".stdin").read_text(), payload)
+
+    def test_validate_mode_checks_configuration_without_launching(self) -> None:
+        valid = self.run_probe(
+            json.dumps([str(self.probe), "only-argv"]), invocation="external_management_probe --validate"
+        )
+        self.assertEqual(valid.returncode, 0, valid.stdout + valid.stderr)
+        self.assertFalse(self.marker.exists())
+        self.assertFalse(self.args.exists())
+        for raw, code in (("{}", 1), ('["probe", "bad\\u0000tail"]', 1), ("[]", 1)):
+            with self.subTest(raw=raw):
+                result = self.run_probe(raw, invocation="external_management_probe --validate")
+                self.assertEqual(code, result.returncode, result.stdout + result.stderr)
+                self.assertFalse(self.marker.exists())
 
     def test_local_only_override_does_not_allow_invalid_nonempty_probe(self):
         result = self.run_probe(json.dumps([str(self.probe), "accepted-prefix", "bad\0tail"]), local_only=True)

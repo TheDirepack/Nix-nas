@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pathlib
 import hashlib
+import ipaddress
 import re
 from typing import Any
 
@@ -62,7 +63,21 @@ def backend_target(route: dict[str, Any]) -> str:
             raise ActivationProjectionError(f"unsafe on-demand upstream host {host!r}")
         if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
             raise ActivationProjectionError(f"invalid on-demand upstream port {port!r}")
-        # systemd-socket-proxyd splits at the last colon; URI brackets reach the resolver unchanged.
+        # systemd-socket-proxyd splits the argument at the last colon and hands
+        # the remainder to getaddrinfo(), which rejects URI brackets. IPv6
+        # literals must therefore stay unbracketed ("::1:8080"); strip any
+        # brackets an operator supplied so re-normalizing is idempotent.
+        if host.startswith("[") or host.endswith("]"):
+            if not (host.startswith("[") and host.endswith("]")) or len(host) <= 2:
+                raise ActivationProjectionError(f"malformed on-demand upstream host {host!r}")
+            host = host[1:-1]
+        if "[" in host or "]" in host:
+            raise ActivationProjectionError(f"malformed on-demand upstream host {host!r}")
+        if ":" in host:
+            try:
+                ipaddress.IPv6Address(host)
+            except ValueError as exc:
+                raise ActivationProjectionError(f"invalid on-demand upstream IPv6 host {host!r}") from exc
         return f"{host}:{port}"
     if target_type == "unix-http":
         raw = target.get("socket")

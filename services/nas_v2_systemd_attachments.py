@@ -170,8 +170,15 @@ def _accelerator_lines(service: dict[str, Any]) -> list[str]:
         except ValueError as exc:
             raise SystemdAttachmentError("systemd accelerators must resolve to device nodes beneath /dev") from exc
         value = str(path)
+        if any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in value):
+            raise SystemdAttachmentError(
+                "systemd DeviceAllow cannot express a device path containing whitespace or control characters"
+            )
         if value not in seen:
-            lines.append(f"DeviceAllow={_quote_attachment(value + ' rw')}")
+            # DeviceAllow uses two distinct unit-file arguments: the device path
+            # and its access mode. Quoting both as one token makes systemd parse
+            # the mode as part of the device name.
+            lines.append(f"DeviceAllow={_quote_attachment(value)} rw")
             seen.add(value)
     return lines
 

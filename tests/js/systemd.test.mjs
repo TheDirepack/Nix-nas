@@ -2,9 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {resolve} from "node:path";
+import {fileURLToPath} from "node:url";
 import cockpit from "./systemd-cockpit-stub.mjs";
 
-const source = readFileSync(resolve(import.meta.dirname, "../../cockpit/src/systemd.js"), "utf8");
+// import.meta.dirname requires Node 20.11+; this project builds on Node 18.
+const here = fileURLToPath(new URL(".", import.meta.url));
+const source = readFileSync(resolve(here, "../../cockpit/src/systemd.js"), "utf8");
 
 test("systemd status uses Cockpit system D-Bus directly", () => {
   assert.match(source, /cockpit\.dbus\(SYSTEMD_NAME, \{bus: "system"\}\)/);
@@ -96,6 +99,25 @@ test("readSystemdState hydrates named units and failed units over D-Bus", async 
     const unit = state.units["grafana.service"];
     assert.equal(unit.active, true);
     assert.equal(unit.memoryBytes, 2048);
+  } finally {
+    delete globalThis.systemdTestClient;
+  }
+});
+
+test("readSystemdState rejects the UINT64_MAX memory sentinel", async () => {
+  globalThis.systemdTestClient = {
+    call(_path, _iface, method) {
+      if (method === "Get") {
+        return Promise.resolve([{t: "t", v: 18446744073709551615}]);
+      }
+      if (method === "ListUnitsByNames") return Promise.resolve([[unitRow("x.service")]]);
+      return Promise.resolve([[]]);
+    },
+    close() {},
+  };
+  try {
+    const state = await readSystemdState(["x.service"]);
+    assert.equal(state.units["x.service"].memoryBytes, null);
   } finally {
     delete globalThis.systemdTestClient;
   }

@@ -32,7 +32,9 @@ async function memoryCurrent(client, {unit, objectPath}) {
     ]);
     const variant = onlyReturnValue(reply);
     const value = variant && typeof variant === "object" ? variant.v : null;
-    return Number.isFinite(value) && value >= 0 ? value : null;
+    // systemd reports UINT64_MAX for a unit that does not account memory; it is
+    // not a safe integer, so it cannot be mistaken for a real byte count.
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
   } catch (_error) {
     return null;
   }

@@ -66,10 +66,20 @@ class V2BackupRuntimeTests(unittest.TestCase):
             inventory_path, paths_path, state_path = root / "inventory.json", root / "paths.txt", root / "state.json"
             inventory_path.write_text(json.dumps(self.inventory(artifact)))
 
-            def replace_artifact(_argv):
-                shutil.rmtree(artifact)
-                artifact.symlink_to(outside, target_is_directory=True)
-                return ""
+            restart_cmd = ["/bin/false", "restart", "nas-v2-database-dump.service"]
+            stop_cmd = ["/bin/false", "stop", "nas-v2-database-dump.service"]
+            commands: list[list[str]] = []
+
+            def replace_artifact(argv: list[str], timeout: int = 60) -> str:
+                commands.append(argv)
+                if argv == restart_cmd:
+                    shutil.rmtree(artifact)
+                    artifact.symlink_to(outside, target_is_directory=True)
+                    return ""
+                if argv == stop_cmd:
+                    # Stopping a failed preparation unit must succeed.
+                    return ""
+                raise AssertionError(f"unexpected command: {argv}")
 
             with (
                 mock.patch.object(runtime, "BACKUP_STAGING_ROOT", staging),
@@ -83,6 +93,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
                         zfs_bin="/bin/false",
                         systemctl_bin="/bin/false",
                     )
+            self.assertEqual(commands, [restart_cmd])
             self.assertEqual(sentinel.read_bytes(), b"must not be backed up")
             self.assertFalse(artifact.is_symlink())
             self.assertFalse(paths_path.exists())
@@ -572,6 +583,10 @@ class V2BackupRuntimeTests(unittest.TestCase):
                 runtime.BACKUP_STAGING_ROOT = original_root
             self.assertFalse(state_path.exists())
             self.assertFalse(paths_path.exists())
+
+    def test_run_wraps_os_error_into_backup_runtime_error(self):
+        with self.assertRaisesRegex(runtime.BackupRuntimeError, "unable to execute native backup command"):
+            runtime._run(["/nonexistent-path-to-native-backup-binary"])
 
 
 if __name__ == "__main__":

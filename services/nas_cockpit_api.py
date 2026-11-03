@@ -308,7 +308,7 @@ def update_status() -> dict[str, Any]:
 def operation_state(managed: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
         value = shared_operation_state()
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
         value = {"busyClasses": [], "active": [], "error": str(exc)}
     busy = set(value.get("busyClasses", []))
     job_rows = managed_job_rows(managed)

@@ -54,7 +54,7 @@ class V2GenericListenerTests(unittest.TestCase):
 
         self.assertTrue(requires_firewalld(effective))
         files, manifest = firewalld.compile_projection(effective, lan_zone="trusted")
-        target = f"policies/{firewalld.listener_policy_name('custom-discovery')}"
+        target = f"policies/{firewalld.host_listener_policy_name()}"
         policy = files[target]
 
         self.assertIn(["17321", "tcp"], policy["ports"])
@@ -96,7 +96,7 @@ class V2GenericListenerTests(unittest.TestCase):
         effective = {"schemaVersion": 3, "services": {"custom-daemon": service}, "networkProfiles": {}}
 
         files, _manifest = firewalld.compile_projection(effective, lan_zone="trusted")
-        policy = files[f"policies/{firewalld.listener_policy_name('custom-daemon')}"]
+        policy = files[f"policies/{firewalld.host_listener_policy_name()}"]
         self.assertIn(["137", "udp", "10137"], policy["forwardPorts"])
 
     def test_arbitrary_isolated_oci_service_publishes_listener_without_app_branching(self):

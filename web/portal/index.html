@@ -24,7 +24,10 @@
     <p>Signed in as <strong style="display:inline">{{placeholder "http.request.header.Remote-Name" | html}}</strong>.</p>
   </header>
   <main class="grid">
-    {{ $groups := splitList "," (placeholder "http.request.header.Remote-Groups") }}
+    {{ $groups := list }}
+    {{ range $g := splitList "," (placeholder "http.request.header.Remote-Groups") }}
+      {{ $groups = append $groups (trim $g) }}
+    {{ end }}
     {{ $portal := include "/run/nas-control/portal.json" | mustFromJson }}
     {{ range $entry := $portal.entries }}
       {{ $visible := false }}
@@ -39,7 +42,7 @@
       {{ end }}
       {{ $users_list := index $access "users" }}
       {{ if $users_list }}
-        {{ $user := placeholder "http.request.header.Remote-User" | urlquery }}
+        {{ $user := placeholder "http.request.header.Remote-User" }}
         {{ range $u := $users_list }}{{ if eq $u $user }}{{ $visible = true }}{{ end }}{{ end }}
       {{ end }}
       {{ if not $groups_list }}{{ if not $users_list }}{{ if eq $allow "any" }}{{ $visible = true }}{{ end }}{{ if eq $allow "all" }}{{ $visible = true }}{{ end }}{{ end }}{{ end }}

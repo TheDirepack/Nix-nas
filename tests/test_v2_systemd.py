@@ -22,6 +22,20 @@ import nas_v2_caddy as caddy  # noqa: E402
 
 
 class V2SystemdProjectionTests(unittest.TestCase):
+    def test_backend_target_uses_socket_proxyd_unbracketed_host_port_contract(self):
+        for host, expected in (
+            ("127.0.0.1", "127.0.0.1:8080"),
+            ("localhost", "localhost:8080"),
+            ("::1", "::1:8080"),
+            ("[::1]", "::1:8080"),
+        ):
+            with self.subTest(host=host):
+                route = {"target": {"type": "http", "host": host, "port": 8080}}
+                self.assertEqual(activation.backend_target(route), expected)
+        for host in ("[::1", "::1]", "[]", "[::1]:8080", "[::::]"):
+            with self.subTest(host=host), self.assertRaises(activation.ActivationProjectionError):
+                activation.backend_target({"target": {"type": "http", "host": host, "port": 8080}})
+
     def test_ambiguous_route_pairs_preserve_distinct_proxy_backend_and_capability(self):
         services = {}
         pairs = [("a", "b-c", 8001), ("a-b", "c", 8002)]

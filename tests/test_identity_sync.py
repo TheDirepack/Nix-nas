@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import sys
 import tempfile
@@ -35,6 +36,16 @@ class IdentityModelTests(unittest.TestCase):
         self.assertEqual([user.uid for user in model.users], ["admin", "alice", "guest"])
         self.assertEqual(model.administrators, ("admin",))
         self.assertEqual(sync.model_status(model)["capabilityModel"], "managed-services-v2")
+
+    def test_unresolved_syncthing_endpoint_fails_before_sending_the_api_key(self) -> None:
+        with (
+            mock.patch.object(sync, "SYNCTHING_URL", ""),
+            mock.patch.object(sync, "SYNCTHING_URL_ERROR", "effective state is malformed"),
+            mock.patch.object(sync, "http_json") as request,
+        ):
+            with self.assertRaisesRegex(sync.SyncError, "endpoint is unavailable"):
+                sync.syncthing_request("/rest/system/status")
+        request.assert_not_called()
 
     def test_retire_bootstrap_administrator_requires_a_verified_replacement_then_deletes_akadmin(self) -> None:
         groups = [{"pk": "admins", "name": "nas_admin", "users_obj": [{"pk": 2}]}]
@@ -405,6 +416,30 @@ class IdentityModelTests(unittest.TestCase):
                 }
             )
 
+    def test_build_model_keeps_enabled_users_after_incompatible_account(self) -> None:
+        model = identity_model.build_model(
+            {
+                "users": [
+                    {"pk": 1, "username": "akadmin", "is_active": True, "groups_obj": [{"name": "nas_admin"}]},
+                    {"pk": 2, "username": "[EMAIL]", "is_active": True, "groups_obj": [{"name": "nas_users"}]},
+                    {"pk": 6, "username": "bob", "is_active": True, "groups_obj": [{"name": "nas_users"}]},
+                ],
+                "groups": [
+                    {"pk": 4, "name": "nas_admin", "users_obj": [{"username": "akadmin"}]},
+                    {"pk": 5, "name": "nas_users", "users_obj": [{"username": "[EMAIL]"}, {"username": "bob"}]},
+                ],
+            }
+        )
+        uids = tuple(user.uid for user in model.users)
+        self.assertEqual(model.administrators, ("akadmin",))
+        # An incompatible username must not stop the model loop: enabled users
+        # recorded after the incompatible account remain in model.users.
+        self.assertIn("akadmin", uids)
+        self.assertIn("bob", uids)
+        # The incompatible account is preserved in reports (disabled/unsupported)
+        # rather than silently dropped, so administrators can see it.
+        self.assertIn("[EMAIL]", uids)
+
     def test_account_plan_accepts_only_base_roles(self) -> None:
         normalized = identity_model.normalized_account_plan(
             {"username": "alice", "groups": [identity_model.USER_GROUP]},
@@ -435,6 +470,27 @@ class IdentityModelTests(unittest.TestCase):
 
 
 class IdentitySyncTests(unittest.TestCase):
+    def test_unreadable_authority_aborts_reconciliation_before_any_syncthing_mutation(self) -> None:
+        user = identity_model.User(
+            "alice",
+            "alice@example.test",
+            "Alice",
+            frozenset({"application.syncthing.access"}),
+            {"nasSyncthingDevices": ["bad-device-payload"]},
+        )
+        model = identity_model.IdentityModel((user,), (), ("admin",))
+        with tempfile.TemporaryDirectory() as raw:
+            effective = pathlib.Path(raw) / "effective.json"
+            effective.write_text("{not json", encoding="utf-8")
+            with (
+                mock.patch.object(sync, "SYNCTHING_ENABLED", True),
+                mock.patch.dict(os.environ, {"NAS_V2_EFFECTIVE": str(effective)}, clear=False),
+                mock.patch.object(sync, "syncthing_request") as request,
+            ):
+                with self.assertRaises(ValueError):
+                    sync.reconcile_syncthing(model)
+        request.assert_not_called()
+
     def test_ensure_groups_reconciles_only_base_identity_roles(self) -> None:
         existing = [
             {"pk": name, "name": name, "is_superuser": name == identity_model.ADMIN_GROUP}

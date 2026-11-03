@@ -202,7 +202,7 @@ class V2FunctionalCoverageTests(unittest.TestCase):
         }
         eff_r = accelerator.resolve_effective(eff, inv)
         lines = attachments.attachment_lines(eff_r, eff_r["services"]["t"])
-        self.assertIn('DeviceAllow="/dev/dri/renderD128 rw"', lines)
+        self.assertIn('DeviceAllow="/dev/dri/renderD128" rw', lines)
         # VM passthrough preserved verbatim
         vm_req = {
             "kind": "gpu",

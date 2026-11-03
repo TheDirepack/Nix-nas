@@ -29,6 +29,10 @@ Some global settings require a service restart.
 
 Add shared/group volumes directly in CopyParty configuration. Reference Authentik groups with normal CopyParty group ACL syntax.
 
+## Migrating existing volume ACLs
+
+The seed file `00-local-overrides.conf` is created only when absent. Existing CopyParty configurations retain their current ACLs, so assigning a new Authentik group alone will not restore access to volumes that still reference the old group. When migrating a volume to a new group, update the CopyParty ACL on each affected volume explicitly and reload CopyParty; do not rely on group assignment alone.
+
 ## Native shares
 
 Native share links are enabled at `/share`. `nas_admin` may administer all shares. Ordinary users can create or use shares only according to their accessible volume's ACLs and share-related flags.

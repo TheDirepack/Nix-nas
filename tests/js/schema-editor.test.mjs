@@ -86,6 +86,19 @@ const NESTED_SCHEMA = {
   required: [],
 };
 
+// A titled additionalProperties schema: every map entry reuses the same value
+// title, so the legend must still carry the entry's own key.
+const TITLED_MAP_SCHEMA = {
+  type: "object",
+  properties: {},
+  additionalProperties: {
+    type: "object",
+    title: "Endpoint",
+    properties: {url: {type: "string"}},
+    required: ["url"],
+  },
+};
+
 test("schema editor renders PatternFly form controls from the canonical V3 schema", async () => {
   const {html} = await renderEditor({});
   assert.ok(html.length > 500, "editor rendered non-trivial markup");
@@ -106,6 +119,42 @@ test("schema editor reflects provided values back into controlled fields", async
   const {html} = await renderEditor({demo: {}});
   assert.match(html, /Key for demo/, "renders a keyed entry for the provided map key");
   assert.match(html, /value="demo"/, "controlled input carries the provided key");
+});
+
+test("map entry legends keep the key when the value schema has a title", async () => {
+  const {html} = await renderEditor(
+    {alpha: {url: "https://a.example"}, beta: {url: "https://b.example"}},
+    TITLED_MAP_SCHEMA,
+  );
+  assert.match(html, /<legend>\s*alpha — Endpoint/, "first entry is named for its key");
+  assert.match(html, /<legend>\s*beta — Endpoint/, "second entry is named for its key");
+  assert.doesNotMatch(
+    html,
+    /<legend>\s*Endpoint\s*<span/,
+    "the bare value title must not replace the entry key",
+  );
+});
+
+test("map key rename commits from compositionend for Safari IME ordering", () => {
+  const source = fs.readFileSync(editorPath, "utf8");
+  const keyInput = source.match(/<TextInput\s[^>]*aria-label=\{`Key for \$\{name\}`\}[\s\S]*?\/>/);
+  assert.ok(keyInput, "map key input must remain present");
+  assert.match(
+    source,
+    /const composing = useRef\(false\)/,
+    "composition state is tracked explicitly",
+  );
+  assert.match(keyInput[0], /onCompositionStart=/, "composition start is observed");
+  assert.match(
+    keyInput[0],
+    /onCompositionEnd=\{\(event\) => \{[\s\S]*renameDynamic\(name, event\.currentTarget\.value\)/,
+    "compositionend commits the composed key even when Safari lags isComposing",
+  );
+  assert.match(
+    keyInput[0],
+    /if \(composing\.current \|\| event\.nativeEvent\?\.isComposing\) return;/,
+    "onChange still ignores intermediate composition text",
+  );
 });
 
 test("server rendering emits no accessible-name warning for the optional-field picker", async () => {

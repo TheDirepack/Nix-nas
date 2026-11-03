@@ -17,6 +17,17 @@ from typing import Sequence
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
+_running_process: subprocess.Popen | None = None
+
+
+def _matrix_interrupt_handler(signum, frame):  # noqa: ARG001
+    if _running_process is not None:
+        try:
+            os.killpg(_running_process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    raise SystemExit(128 + signum)
+
 
 @dataclass(frozen=True)
 class Stage:
@@ -93,6 +104,7 @@ def missing_reason(stage: Stage) -> str | None:
 
 
 def run_bounded(command: Sequence[str], *, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
+    global _running_process
     argv = list(command)
     process = subprocess.Popen(
         argv,
@@ -103,6 +115,7 @@ def run_bounded(command: Sequence[str], *, env: dict[str, str], timeout: int) ->
         stderr=subprocess.PIPE,
         start_new_session=True,
     )
+    _running_process = process
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as exc:
@@ -112,6 +125,8 @@ def run_bounded(command: Sequence[str], *, env: dict[str, str], timeout: int) ->
             pass
         stdout, stderr = process.communicate()
         raise subprocess.TimeoutExpired(argv, timeout, output=stdout, stderr=stderr) from exc
+    finally:
+        _running_process = None
     return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
 
@@ -184,6 +199,12 @@ def main() -> int:
     args = parser.parse_args()
     if args.timeout is not None and not 1 <= args.timeout <= 86400:
         parser.error("--timeout must be from 1 through 86400 seconds")
+
+    for _sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(_sig, _matrix_interrupt_handler)
+        except ValueError:
+            pass
 
     catalog = stage_catalog()
     if args.mode == "list":

@@ -211,9 +211,6 @@ def split_groups(raw: str) -> set[str]:
                 file=sys.stderr,
             )
             return set()
-        if any(ord(character) < 32 or ord(character) == 127 for character in name):
-            print("nas-identity-policy: rejected group header containing control characters", file=sys.stderr)
-            return set()
         output.add(name)
     return output
 
@@ -255,8 +252,6 @@ def load_effective_authority(path: pathlib.Path | None = None) -> dict[str, Any]
     data = json.loads(raw)
     if not isinstance(data, dict):
         raise ValueError(f"effective state top-level must be object, got {type(data).__name__}")
-    if isinstance(data, list):
-        raise ValueError("effective state top-level must be object, not list")
     schema_version = data.get("schemaVersion")
     if schema_version not in {2, 3}:
         raise ValueError(f"effective state has unsupported schemaVersion {schema_version!r}")
@@ -269,12 +264,21 @@ def load_effective_authority(path: pathlib.Path | None = None) -> dict[str, Any]
     services = data.get("services")
     if not isinstance(services, dict):
         raise ValueError("effective state missing services object")
+    for svc_id, declaration in services.items():
+        if not isinstance(declaration, dict) or not declaration:
+            raise ValueError(f"services entry {svc_id!r} must be a non-empty object")
     for svc_id, entry in authz.items():
         if not isinstance(entry, dict):
             raise ValueError(f"authorization entry {svc_id!r} must be object")
+        if svc_id not in services:
+            raise ValueError(f"authorization entry {svc_id!r} has no services declaration")
         caps = entry.get("capabilities")
         if caps is not None and not isinstance(caps, dict):
             raise ValueError(f"authorization capabilities for {svc_id!r} must be object")
+        if isinstance(caps, dict):
+            for cap_id, cap_value in caps.items():
+                if not isinstance(cap_value, str) or not cap_value:
+                    raise ValueError(f"authorization capability {svc_id!r}.{cap_id!r} must be a non-empty string")
     return data
 
 
@@ -283,19 +287,40 @@ def resolve_v2_service_capability(
 ) -> tuple[str, str] | None:  # pragma: no cover - V2 integration branch, exercised in VM
     service = os.environ.get(service_env, fallback_service)
     capability = os.environ.get(capability_env, fallback_capability)
-    effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
+    effective = pathlib.Path(os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json"))
     try:
-        data = json.loads(pathlib.Path(effective_path).read_text(encoding="utf-8"))
-        derived = data.get("derived", {}).get("authorization", {})
-        if not isinstance(derived, dict):
-            raise ValueError("derived.authorization is not a dict")
-        caps = derived.get(service, {}).get("capabilities", {}) if isinstance(derived.get(service), dict) else {}
-        if isinstance(caps, dict) and capability in caps:
-            return service, capability
-        if isinstance(derived, dict) and derived:
-            return None
-    except (OSError, ValueError, json.JSONDecodeError):
-        pass
+        raw = effective.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        # A dangling symlink - including the final component - means compiled
+        # authority exists but is unreachable, so abort reconciliation.
+        # An ordinary absent path means effective state has not been compiled
+        # yet (bootstrap): keep the synthetic fallback.
+        if any(candidate.is_symlink() and not candidate.exists() for candidate in (effective, *effective.parents)):
+            # Unavailable compiled authority is not an empty capability grant.
+            # In particular, a None result makes Syncthing reconciliation
+            # treat the folders it manages as undesired and delete them.
+            raise ValueError(f"effective state {effective} points through an unavailable symlink")
+        return service, capability
+    except OSError as exc:
+        # Authority exists but cannot be read. Callers translate a synthetic or
+        # empty desired set into deleting managed objects, so abort instead.
+        raise ValueError(f"effective state {effective} is unreadable: {exc}") from exc
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError(f"effective state {effective} is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"effective state {effective} top-level must be an object")
+    container = data.get("derived")
+    authorization = container.get("authorization") if isinstance(container, dict) else None
+    if not isinstance(authorization, dict):
+        raise ValueError(f"effective state {effective} is missing the derived.authorization object")
+    entry = authorization.get(service)
+    caps = entry.get("capabilities") if isinstance(entry, dict) else None
+    if isinstance(caps, dict) and capability in caps:
+        return service, capability
+    if authorization:
+        return None
     return service, capability
 
 

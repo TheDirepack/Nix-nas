@@ -14,6 +14,7 @@ import json
 import os
 import pathlib
 import re
+import urllib.parse
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -538,15 +539,87 @@ def _routes_conflict(first: str, second: str) -> bool:
     ignore redundant `/` characters within each candidate. Parent/child
     conflicts are allowed only when the renderer guarantees
     longest-path-first ordering; exact duplicates and ambiguous overlaps
-    must still fail closed.
+    must still fail closed. Comparisons are case-folded because hostnames are
+    DNS-insensitive and a case variant must never bypass the conflict check.
     """
-    first = first.rstrip("/") or "/"
-    second = second.rstrip("/") or "/"
+    first = first.casefold().rstrip("/") or "/"
+    second = second.casefold().rstrip("/") or "/"
     if first == "/" or second == "/":
         return True
-    first_parts = first.strip("/").split("/")
-    second_parts = second.strip("/").split("/")
+    first_parts = [part for part in first.strip("/").split("/") if part]
+    second_parts = [part for part in second.strip("/").split("/") if part]
     return first_parts[: len(second_parts)] == second_parts or second_parts[: len(first_parts)] == first_parts
+
+
+_INVALID_ROUTE_PATH_CHARACTERS = frozenset("*?#\\")
+_PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
+RESERVED_ROUTE_PREFIXES = ("/outpost.goauthentik.io",)
+
+
+def _route_path_is_unsafe(value: str) -> bool:
+    return any(
+        ord(character) < 0x20
+        or ord(character) == 0x7F
+        or character in _INVALID_ROUTE_PATH_CHARACTERS
+        or character.isspace()
+        for character in value
+    )
+
+
+def _canonical_route_path(value: Any, *, path: str) -> str:
+    """Return the decoded, case-folded key used for route-conflict checks.
+
+    Caddy matches decoded URL paths, so percent-encoded variants of the same
+    path must conflict. The same helper rejects wildcard/query/fragment
+    characters that the schema's ``^/`` pattern alone would accept.
+    """
+    if not isinstance(value, str) or not value.startswith("/"):
+        raise ManagedServicesV2Error("Route path must be an absolute HTTP path", path=path, code="route-path")
+    if _route_path_is_unsafe(value):
+        raise ManagedServicesV2Error(
+            f"Route path {value!r} must not contain wildcard, query, fragment, backslash, whitespace, "
+            "or control characters",
+            path=path,
+            code="route-wildcard",
+        )
+    if _PERCENT_ESCAPE.search(value):
+        raise ManagedServicesV2Error(
+            f"Route path {value!r} contains an invalid percent escape",
+            path=path,
+            code="route-encoding",
+        )
+    try:
+        decoded = urllib.parse.unquote(value, errors="strict")
+    except UnicodeError as exc:
+        raise ManagedServicesV2Error(
+            f"Route path {value!r} is not valid UTF-8 after percent-decoding",
+            path=path,
+            code="route-encoding",
+        ) from exc
+    if _route_path_is_unsafe(decoded):
+        raise ManagedServicesV2Error(
+            f"Route path {value!r} decodes to wildcard, query, fragment, backslash, whitespace, or control characters",
+            path=path,
+            code="route-wildcard",
+        )
+    segments = [segment for segment in decoded.split("/") if segment]
+    if any(segment in {".", ".."} for segment in segments):
+        raise ManagedServicesV2Error(
+            f"Route path {value!r} must not contain '.' or '..' segments",
+            path=path,
+            code="route-path",
+        )
+    canonical = "/" + "/".join(segments) if segments else "/"
+    folded = canonical.casefold()
+    for prefix in RESERVED_ROUTE_PREFIXES:
+        reserved = prefix.casefold()
+        if folded == reserved or folded.startswith(reserved + "/"):
+            raise ManagedServicesV2Error(
+                f"Route path {value!r} uses the reserved Authentik outpost prefix {prefix!r}",
+                path=path,
+                code="route-reserved",
+            )
+    return folded
 
 
 def semantic_validate(
@@ -822,8 +895,9 @@ def semantic_validate(
 
             exposure = route["exposure"]
             if exposure["type"] == "path":
+                path_location = f"$.services.{service_id}.routes.{route_id}.exposure.paths"
                 for route_path in exposure["paths"]:
-                    normalized = route_path.rstrip("/") or "/"
+                    normalized = _canonical_route_path(route_path, path=path_location)
                     for registered_path, registered_owner in route_paths.items():
                         if not _routes_conflict(normalized, registered_path):
                             continue
@@ -832,26 +906,31 @@ def semantic_validate(
                         if normalized == registered_path:
                             raise ManagedServicesV2Error(
                                 f"Duplicate route path {route_path!r}; already used by {registered_owner}",
-                                path=f"$.services.{service_id}.routes.{route_id}.exposure.paths",
+                                path=path_location,
                                 code="route-conflict",
                             )
                         if normalized == "/" or registered_path == "/":
                             raise ManagedServicesV2Error(
                                 f"Route path {route_path!r} overlaps {registered_path!r} already used by {registered_owner}",
-                                path=f"$.services.{service_id}.routes.{route_id}.exposure.paths",
+                                path=path_location,
                                 code="route-overlap",
                             )
                     route_paths[normalized] = f"{service_id}:{route_id}"
             else:
+                _canonical_route_path(
+                    exposure["path"],
+                    path=f"$.services.{service_id}.routes.{route_id}.exposure.path",
+                )
                 for hostname in exposure["hostnames"]:
-                    owner = route_hostnames.get(hostname)
+                    hostname_key = hostname.casefold()
+                    owner = route_hostnames.get(hostname_key)
                     if owner is not None:
                         raise ManagedServicesV2Error(
                             f"Duplicate route hostname {hostname!r}; already used by {owner}",
                             path=f"$.services.{service_id}.routes.{route_id}.exposure.hostnames",
                             code="route-conflict",
                         )
-                    route_hostnames[hostname] = f"{service_id}:{route_id}"
+                    route_hostnames[hostname_key] = f"{service_id}:{route_id}"
 
         for listener_id, listener in service["listeners"].items():
             exposure = listener["exposure"]

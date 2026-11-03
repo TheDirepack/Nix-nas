@@ -556,6 +556,58 @@ class V2SystemdReconcileTests(unittest.TestCase):
                 )
             self.assertEqual(quadlet_target.read_text(encoding="utf-8"), "do not replace")
 
+    def test_stop_of_unresolved_units_is_treated_as_already_stopped(self):
+        for detail in (
+            "Unit nas-v2-demo.service not loaded.",
+            "Unit nas-v2-demo.service is masked.",
+            "Unit nas-v2-demo.service could not be found.",
+        ):
+            with self.subTest(detail=detail), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                projection = root / "projection"
+                units = projection / "units"
+                units.mkdir(parents=True)
+                source = units / "nas-v2-demo.service"
+                source.write_text("[Service]\nExecStart=/bin/true\n", encoding="utf-8")
+                manifest = projection / "manifest.json"
+                self.write_manifest(manifest, source)
+                runtime = root / "systemd"
+                runtime.mkdir()
+                state = root / "state.json"
+                systemctl, log = self.make_systemctl(root)
+                self.run_reconcile(
+                    manifest=manifest,
+                    projection=projection,
+                    runtime=runtime,
+                    state=state,
+                    systemctl=systemctl,
+                    log=log,
+                )
+                self.write_manifest(manifest, None)
+                stop_status = root / "systemctl-unresolved"
+                stop_status.write_text(
+                    "#!/bin/sh\n"
+                    'if [ "$1" = "stop" ]; then\n'
+                    f"  printf '%s\\n' '{detail}' >&2\n"
+                    "  exit 5\n"
+                    "fi\n"
+                    "exit 0\n",
+                    encoding="utf-8",
+                )
+                stop_status.chmod(stop_status.stat().st_mode | stat.S_IXUSR)
+                quadlet_runtime = runtime.parent / "quadlet"
+                quadlet_runtime.mkdir(parents=True, exist_ok=True)
+                result = reconcile.reconcile(
+                    manifest_path=manifest,
+                    projection_root=projection,
+                    systemd_runtime_dir=runtime,
+                    quadlet_runtime_dir=quadlet_runtime,
+                    state_path=state,
+                    systemctl=str(stop_status),
+                )
+                self.assertIn("nas-v2-demo.service", result["stopped"])
+                self.assertFalse((runtime / "nas-v2-demo.service").exists())
+
     def test_stop_failure_is_transactional_and_restores_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)

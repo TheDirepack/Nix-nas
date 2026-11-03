@@ -98,6 +98,47 @@ def _reject_duplicate_targets(
                 seen.add(target)
 
 
+def _reject_valueless_environment(service_id: str, name: str, definition: dict[str, Any]) -> None:
+    """Valueless Compose env entries inherit the provider's host environment.
+
+    The Compose provider runs from the reconciler, so a bare ``- FOO`` or a
+    null mapping value would copy a host secret into the container. V2 has one
+    deterministic secret path (credential/environment-file attachments).
+    """
+    environment = definition.get("environment")
+    if environment is None:
+        return
+    if isinstance(environment, dict):
+        entries: list[Any] = list(environment.items())
+    elif isinstance(environment, list):
+        entries = list(environment)
+    else:
+        raise ComposeProjectionError(
+            f"Compose service {service_id!r} source service {name!r} has an invalid environment mapping"
+        )
+    for entry in entries:
+        if isinstance(entry, tuple) and len(entry) == 2 and isinstance(entry[0], str):
+            if entry[1] is None:
+                raise ComposeProjectionError(
+                    f"Compose service {service_id!r} source service {name!r} has a valueless environment entry "
+                    f"{entry[0]!r}; an explicit value is required because the Compose provider would inherit it "
+                    "from the reconciler host environment"
+                )
+            continue
+        if isinstance(entry, str):
+            key, separator, _value = entry.partition("=")
+            if not separator or not key.strip():
+                raise ComposeProjectionError(
+                    f"Compose service {service_id!r} source service {name!r} has a valueless environment entry "
+                    f"{entry!r}; an explicit value is required because the Compose provider would inherit it "
+                    "from the reconciler host environment"
+                )
+            continue
+        raise ComposeProjectionError(
+            f"Compose service {service_id!r} source service {name!r} has an invalid environment entry {entry!r}"
+        )
+
+
 def _source(service_id: str, service: dict[str, Any]) -> tuple[pathlib.Path, dict[str, dict[str, Any]]]:
     raw = service["runtime"]["source"]
     candidate = pathlib.Path(raw)
@@ -127,6 +168,7 @@ def _source(service_id: str, service: dict[str, Any]) -> tuple[pathlib.Path, dic
     for name, definition in raw_services.items():
         if not isinstance(name, str) or not name or not isinstance(definition, dict):
             raise ComposeProjectionError(f"Compose service {service_id!r} contains an invalid service definition")
+        _reject_valueless_environment(service_id, name, definition)
         services[name] = definition
     return resolved, services
 

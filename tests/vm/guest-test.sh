@@ -14,8 +14,31 @@ BROWSER_PORT_FORWARD_PID=""
 BROWSER_PORT_FORWARD_LOG="/run/nas-browser-port-forward.log"
 authz_secret_dir=""
 
-log() { printf '\n==> %s\n' "$*"; }
-pass() { printf 'PASS: %s\n' "$*"; }
+# The NixOS test driver buffers a command's stdout until it returns, so a step
+# that never returns hides the last completed assertion. Mirror progress to the
+# serial console, which the driver streams live, to keep failures diagnosable.
+console_progress() {
+  local console="${NAS_TEST_CONSOLE:-/dev/console}"
+  [[ -w "$console" ]] || return 0
+  printf 'nas-vm-guest-test: %s\n' "$*" >"$console" 2>/dev/null || true
+}
+
+# Emit a breadcrumb whenever top-level execution moves to a new line so a hang
+# reports the exact blocking statement. Only coordinates are printed; command
+# arguments can contain secrets.
+_console_last_line=""
+trace_console_line() {
+  local line="${BASH_LINENO[0]}"
+  [[ -n "$line" && "$line" != "$_console_last_line" ]] || return 0
+  _console_last_line="$line"
+  if [[ "${NAS_TEST_TRACE_LINES:-1}" == 1 ]]; then
+    console_progress "line $line ${FUNCNAME[1]:-main}"
+  fi
+}
+trap trace_console_line DEBUG
+
+log() { printf '\n==> %s\n' "$*"; console_progress "$*"; }
+pass() { printf 'PASS: %s\n' "$*"; console_progress "PASS: $*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 stop_authentik_vm_outpost() {
@@ -360,16 +383,29 @@ require_commands \
   nas-zfs-create-encrypted-dataset nas-zfs-export-recovery-key nas-zfs-lock \
   nas-zfs-mount-check nas-zfs-unlock proxy python3 readlink ss systemctl zfs zpool
 
-nas-managed-services-control status >/dev/null
-pass "nas-managed-services-control status reports the V2 authority"
-nas-managed-services-control document >/dev/null
-pass "nas-managed-services-control document returns the editable YAML authority"
+# The desired-state authority lives on the ZFS data root. Until first-run
+# storage preparation creates and mounts that pool, the seed unit is
+# condition-skipped so nothing is written beneath the unmounted mountpoint.
+# The read-only CLI must fail closed instead of reporting a phantom authority;
+# the post-setup checks below cover the seeded authority.
+if nas-managed-services-control status >/tmp/nas-locked-v2-status.json 2>/tmp/nas-locked-v2-status.err; then
+  cat /tmp/nas-locked-v2-status.json >&2 || true
+  fail "Managed Services V2 authority was reported before the ZFS data root was mounted"
+fi
+grep -q 'Unable to read Managed Services V2 authority' /tmp/nas-locked-v2-status.err || {
+  cat /tmp/nas-locked-v2-status.err >&2 || true
+  fail "locked Managed Services V2 status did not fail closed on the missing authority"
+}
+[[ ! -e /var/lib/nas-control/services.yaml ]] || \
+  fail "managed services desired state was seeded onto the boot filesystem beneath the unmounted ZFS root"
+pass "managed services authority stays absent until the ZFS data root is mounted"
 
 log "Locked-state and configuration checks"
 ! systemctl is-active --quiet cockpit.socket || fail "stock Cockpit socket must stay inactive while locked"
 wait_active nas-cockpit-sso.service
-ss -tln | grep -Eq '127\.0\.0\.1:9092[[:space:]]' || fail "Cockpit SSO session is not loopback-only while locked"
-! ss -tln | grep -Eq '(0\.0\.0\.0|\[::\]):9092[[:space:]]' || fail "Cockpit listener is exposed while locked"
+[[ -S /run/nas-cockpit-sso/ws.sock ]] || fail "Cockpit permissioned Unix listener is missing"
+! ss -ltnp | grep -F 'cockpit-ws' || fail "Unauthenticated Cockpit root bridge opened a TCP listener"
+! ss -tln | grep -Eq ':9092[[:space:]]' || fail "Unauthenticated root Cockpit TCP listener is exposed"
 wait_active nas-first-start.service
 systemctl show nas-first-start.service --property=RemainAfterExit --value | grep -qx yes
 jq -e '.schemaVersion == 2 and (.status | type == "string")' /var/lib/nas-first-start/status.json >/dev/null
@@ -398,17 +434,84 @@ systemctl start nas-managed-services-authentik-reconcile.service
 systemctl restart nas-authentik-proxy-outpost.service
 wait_active nas-authentik-proxy-outpost.service
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
-expect <<'EXPECT_LINUX_BOOTSTRAP'
-set timeout 15
+# nas-bootstrap-administrator expires the bootstrap password (chage -d 0), so
+# the first login must complete the forced change before the command runs.
+# Expect's default timeout action falls through to wait(1), which blocks
+# forever while su waits for input, so every branch terminates the child.
+# Prompt patterns must start with ".*": expect's gate keeper derives a
+# case-sensitive literal prefix from an inline (?i) option and would never
+# evaluate the regex against PAM's capitalised prompts.
+bootstrap_linux_password='nas-admin-first-boot'
+rotated_linux_password='Rotated-VM-Password-2026'
+bootstrap_login_log=/tmp/nas-bootstrap-login.log
+rm -f -- "$bootstrap_login_log"
+bootstrap_login_status=0
+NAS_BOOTSTRAP_LOG="$bootstrap_login_log" \
+  NAS_BOOTSTRAP_PASSWORD="$bootstrap_linux_password" \
+  NAS_ROTATED_PASSWORD="$rotated_linux_password" \
+  expect <<'EXPECT_LINUX_BOOTSTRAP' || bootstrap_login_status=$?
+set timeout 60
+log_user 0
+log_file -a $env(NAS_BOOTSTRAP_LOG)
+proc end_login {message} {
+  puts stderr "bootstrap login: $message"
+  catch {exec kill -KILL [exp_pid]}
+  catch {wait}
+  exit 99
+}
 spawn runuser -u admin -- su - akadmin -c {test "$(id -un)" = akadmin}
-expect "Password:"
-send "nas-admin-first-boot\r"
-expect eof
-set status [lindex [wait] 3]
-exit $status
+set prompts 0
+set rotated 0
+expect {
+  -re {.*[Rr]etype new [Pp]assword:} {
+    incr prompts
+    if {$prompts > 12} { end_login "password change repeated prompts" }
+    set rotated 1
+    send "$env(NAS_ROTATED_PASSWORD)\r"
+    exp_continue
+  }
+  -re {.*[Nn]ew [Pp]assword:} {
+    incr prompts
+    if {$prompts > 12} { end_login "password change repeated prompts" }
+    set rotated 1
+    send "$env(NAS_ROTATED_PASSWORD)\r"
+    exp_continue
+  }
+  -re {.*[Cc]urrent [Pp]assword:} {
+    incr prompts
+    if {$prompts > 12} { end_login "password change repeated prompts" }
+    send "$env(NAS_BOOTSTRAP_PASSWORD)\r"
+    exp_continue
+  }
+  -re {.*[Pp]assword:} {
+    incr prompts
+    if {$prompts > 12} { end_login "login repeated password prompts" }
+    if {$rotated} {
+      send "$env(NAS_ROTATED_PASSWORD)\r"
+    } else {
+      send "$env(NAS_BOOTSTRAP_PASSWORD)\r"
+    }
+    exp_continue
+  }
+  eof {}
+  timeout { end_login "timed out after $prompts prompt(s)" }
+}
+exit [lindex [wait] 3]
 EXPECT_LINUX_BOOTSTRAP
-pass "the initial Linux login uses the same akadmin development credential as Authentik"
+if ((bootstrap_login_status != 0)); then
+  tail -n 40 -- "$bootstrap_login_log" >&2 || true
+  fail "the bootstrap Linux credential did not complete its forced first-login password change (status $bootstrap_login_status)"
+fi
+bootstrap_last_change="$(getent shadow akadmin | cut -d: -f3)"
+[[ "$bootstrap_last_change" =~ ^[0-9]+$ && "$bootstrap_last_change" != 0 ]] || \
+  fail "the forced first-login password change was not recorded for akadmin"
+pass "the bootstrap Linux credential authenticates and its forced first-login password change succeeds"
 AUTHENTIK_BOOTSTRAP_TOKEN="$(< /run/nas-authentik/api-token)"
+# This credential is created at runtime, never stored in a fixed development
+# or release artifact. Read only the password and never expose the other
+# private environment entries in browser logs or command arguments.
+bootstrap_authentik_password="$(sed -n 's/^AUTHENTIK_BOOTSTRAP_PASSWORD=//p' /var/lib/nas-control-plane/authentik/environment)"
+[[ "$bootstrap_authentik_password" =~ ^[[:xdigit:]]{48}$ ]] || fail "missing secure Authentik first-boot password"
 verify_bootstrap_authentik_proxy
 [[ -f /var/lib/nas-control-plane/authentik/environment ]] || fail "first-boot Authentik environment is missing"
 [[ -f /var/lib/nas-control-plane/authentik/api-token ]] || fail "first-boot Authentik API token is missing"
@@ -425,7 +528,7 @@ cleanup_bootstrap_authz_secrets() {
 }
 nas_vm_cleanup_add cleanup_bootstrap_authz_secrets
 chmod 0700 "$bootstrap_authz_secret_dir"
-printf '%s\n' 'nas-admin-first-boot' > "$bootstrap_authz_secret_dir/akadmin"
+printf '%s\n' "$bootstrap_authentik_password" > "$bootstrap_authz_secret_dir/akadmin"
 chmod 0600 "$bootstrap_authz_secret_dir/akadmin"
 timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
   "$(nas_vm_timeout_value browserAuthorization)" python3 /var/lib/nas-test/repo/tests/browser/authz.py \
@@ -529,7 +632,7 @@ cleanup_wizard_secrets() {
 }
 nas_vm_cleanup_add cleanup_wizard_secrets
 chmod 0700 "$wizard_secret_dir"
-printf '%s\n' 'nas-admin-first-boot' >"$wizard_secret_dir/akadmin"
+printf '%s\n' "$bootstrap_authentik_password" >"$wizard_secret_dir/akadmin"
 printf '%s\n' "$KEEPASS_PASSWORD" >"$wizard_secret_dir/keepass"
 cp /var/lib/nas-test/setup/nasadmin.password "$wizard_secret_dir/nasadmin"
 chmod 0600 "$wizard_secret_dir/akadmin" "$wizard_secret_dir/keepass" "$wizard_secret_dir/nasadmin"
@@ -638,15 +741,39 @@ curl --fail --silent --show-error \
 [[ ! -e /home/nasadmin ]] || fail "permanent administrator data was created on the system partition"
 findmnt -n -o FSTYPE -T /tank/homes/nasadmin | grep -qx zfs || \
   fail "permanent administrator home is not backed by ZFS"
-expect <<'EXPECT_LINUX_ADMINISTRATOR'
-set timeout 15
+administrator_login_log=/tmp/nas-administrator-login.log
+rm -f -- "$administrator_login_log"
+administrator_login_status=0
+NAS_BOOTSTRAP_LOG="$administrator_login_log" \
+  NAS_ADMINISTRATOR_PASSWORD="nasadmin-vm-password" \
+  expect <<'EXPECT_LINUX_ADMINISTRATOR' || administrator_login_status=$?
+set timeout 60
+log_user 0
+log_file -a $env(NAS_BOOTSTRAP_LOG)
+proc end_login {message} {
+  puts stderr "administrator login: $message"
+  catch {exec kill -KILL [exp_pid]}
+  catch {wait}
+  exit 99
+}
 spawn runuser -u admin -- su - nasadmin -c {test "$(id -un)" = nasadmin}
-expect "Password:"
-send "nasadmin-vm-password\r"
-expect eof
-set status [lindex [wait] 3]
-exit $status
+set prompts 0
+expect {
+  -re {.*[Pp]assword:} {
+    incr prompts
+    if {$prompts > 3} { end_login "repeated password prompts" }
+    send "$env(NAS_ADMINISTRATOR_PASSWORD)\r"
+    exp_continue
+  }
+  eof {}
+  timeout { end_login "timed out after $prompts password prompt(s)" }
+}
+exit [lindex [wait] 3]
 EXPECT_LINUX_ADMINISTRATOR
+if ((administrator_login_status != 0)); then
+  tail -n 40 -- "$administrator_login_log" >&2 || true
+  fail "the wizard-created administrator did not authenticate the permanent Linux account (status $administrator_login_status)"
+fi
 pass "the wizard-created administrator password authenticates the permanent Linux account"
 if printf '%s\n' "$bootstrap_keepass_password" |
   runuser -u nasadmin -- env HOME=/tank/homes/nasadmin keepassxc-cli db-info --quiet "$keepass_database" \
@@ -697,6 +824,10 @@ if [[ "$(stat -c '%a:%U:%G' /tank/shares/users/alice)" != "2770:copyparty:copypa
   fail "Alice's personal share directory has unexpected ownership or mode"
 fi
 findmnt -n -o FSTYPE,SOURCE,TARGET /tank | grep -q '^zfs tank/nas /tank$'
+nas-managed-services-control status | jq -e '.schemaVersion == 3 and (.services | length > 0)' >/dev/null
+pass "nas-managed-services-control status reports the V2 authority"
+nas-managed-services-control document | jq -e '.document.services | type == "object"' >/dev/null
+pass "nas-managed-services-control document returns the editable YAML authority"
 pass "nas-setup created storage, KeePass secrets, accounts, shares, and activated the stack"
 
 log "Adversarial command, SQL-like input, and HTTP validation"
@@ -1351,7 +1482,8 @@ wait_inactive authentik.service
 wait_inactive nas-zfs-mount-guard.service
 wait_active nas-cockpit-sso.service
 ! systemctl is-active --quiet cockpit.socket || fail "stock Cockpit socket started after setup"
-ss -tln | grep -Eq '127\.0\.0\.1:9092[[:space:]]' || fail "Cockpit SSO session is not loopback-only"
+[[ -S /run/nas-cockpit-sso/ws.sock ]] || fail "Cockpit permissioned Unix listener is missing"
+! ss -ltnp | grep -F 'cockpit-ws' || fail "Unauthenticated Cockpit root bridge opened a TCP listener"
 [[ ! -e /run/nas-secrets ]] || fail "runtime secret tree survived nas-secrets stop"
 
 activate_secrets

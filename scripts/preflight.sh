@@ -10,12 +10,10 @@ identity_fixture_lock="${NAS_IDENTITY_LOCK:-}"
 fresh_manifest=""
 
 cleanup_preflight() {
-  local status=$?
   [[ -z "$fresh_manifest" ]] || rm -f -- "$fresh_manifest"
   if [[ -z "${NAS_IDENTITY_LOCK:-}" && -n "$identity_fixture_lock" ]]; then
     rm -f -- "$identity_fixture_lock"
   fi
-  exit "$status"
 }
 
 if [[ -z "$identity_fixture_lock" ]]; then
@@ -138,7 +136,7 @@ if [[ "${NAS_PREFLIGHT_VERIFY_MANIFEST:-0}" == "1" ]]; then
   manifest_path="$manifest_tmp/MANIFEST.sha256"
   export MANIFEST_PATH="$manifest_path"
   export NAS_TEST_MANIFEST="$manifest_path"
-  trap 'rm -f -- "$identity_fixture_lock"; rm -rf -- "${manifest_tmp:-}"' EXIT INT TERM HUP
+  trap 'cleanup_preflight; rm -rf -- "${manifest_tmp:-}"' EXIT INT TERM HUP
   python3 "$repo_root/scripts/lib/manifest.py" --root "$repo_root" --out "$manifest_path"
   step "release manifest" sha256sum -c "$manifest_path"
 fi

@@ -111,8 +111,9 @@ run_as_admin_with_stdin() {
 log "Verify encrypted fixture starts locked"
 ! systemctl is-active --quiet cockpit.socket || fail "stock Cockpit socket must stay inactive while locked"
 wait_active nas-cockpit-sso.service
-ss -tln | grep -Eq '127\.0\.0\.1:9092[[:space:]]' || fail "Cockpit SSO session is not loopback-only while locked"
-! ss -tln | grep -Eq '(0\.0\.0\.0|\[::\]):9092[[:space:]]' || fail "Cockpit listener is exposed while locked"
+[[ -S /run/nas-cockpit-sso/ws.sock ]] || fail "Cockpit permissioned Unix listener is missing"
+! ss -ltnp | grep -F 'cockpit-ws' || fail "Unauthenticated Cockpit root bridge opened a TCP listener"
+! ss -tln | grep -Eq ':9092[[:space:]]' || fail "Unauthenticated root Cockpit TCP listener is exposed"
 [[ ! -e /run/nas-secrets/ready ]] || fail "runtime secrets were unexpectedly active"
 ! systemctl is-active --quiet nas-protected-services.target || fail "protected services started before unlock"
 [[ ! -e /run/nas-control/effective.json ]] || fail "managed state was compiled before unlock"
@@ -252,6 +253,9 @@ wait_oneshot_completed nas-managed-services-authentik-reconcile.service
   fail "managed Authentik projection was skipped after secret activation"
 [[ -s /var/lib/nas-control/authentik-v2-objects.json ]] || fail "managed Authentik projection did not commit its object manifest"
 pass "managed Authentik projection executes after secret activation"
+nas-managed-services-control status | jq -e '.schemaVersion == 3 and (.services | length > 0)' >/dev/null
+nas-managed-services-control document | jq -e '.document.services | type == "object"' >/dev/null
+pass "nas-managed-services-control reports the seeded V2 authority"
 [[ "$(getent passwd akadmin)" == "" ]] || fail "bootstrap administrator was not retired after first run"
 # Capability bytes must never reach backend or proxy logs.
 if journalctl -u nas-setup-api --no-pager 2>/dev/null | grep -Eo '[0-9a-f]{48}' | grep -q .; then

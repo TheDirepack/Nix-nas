@@ -453,6 +453,9 @@ class ContractTests(unittest.TestCase):
                     "NAS_PREFLIGHT_SKIP_TESTS": "1",
                     "NAS_PREFLIGHT_SKIP_NIX": "1",
                     "NAS_PREFLIGHT_SKIP_TOOLING": "1",
+                    # This fixture verifies linked-worktree provenance, not
+                    # a regenerated frontend bundle from a source-only tree.
+                    "NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE": "1",
                 },
                 text=True,
                 capture_output=True,

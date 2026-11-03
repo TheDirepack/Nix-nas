@@ -101,7 +101,7 @@ class V2VlanAndDirectListenerTests(unittest.TestCase):
             }
         }
         files, _manifest = firewalld.compile_projection(effective, lan_zone="nas-trusted")
-        policy = files[f"policies/{firewalld.listener_policy_name('tftp')}"]
+        policy = files[f"policies/{firewalld.host_listener_policy_name()}"]
         self.assertIn(["69", "udp", "3969"], policy["forwardPorts"])
         self.assertIn(["40000-40099", "udp"], policy["ports"])
 

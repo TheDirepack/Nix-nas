@@ -99,7 +99,7 @@ class RegenerationTimerTests(unittest.TestCase):
         ):
             setup.regenerate_boot_identity_databases(pathlib.Path("/nonexistent-test-control-root"))
         self.assertFalse(any("nas-syncthing-sync.service" in call.args[0] for call in root.call_args_list))
-        root.assert_any_call(["systemctl", "stop", "nas-identity-sync.service"])
+        root.assert_any_call(["systemctl", "stop", "nas-identity-sync.service"], timeout_seconds=120)
 
 
 if __name__ == "__main__":
