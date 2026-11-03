@@ -193,3 +193,76 @@ test("fits the viewport and has no serious accessibility violations", async ({pa
     [],
   );
 });
+
+test("refreshing an already approved destructive plan requires fresh consent", async ({page}) => {
+  const secondPlan = {
+    ...plan,
+    planDigest: "b".repeat(64),
+    storage: {...plan.storage, devices: ["/dev/disk/by-id/disk-three"]},
+  };
+  let requests = 0;
+  const submissions = [];
+  await mockSetupApi(page, async ({request, pathname}) => {
+    if (request.method() === "GET" && pathname.endsWith("/first-start")) {
+      requests += 1;
+      return requests === 1 ? plan : secondPlan;
+    }
+    if (request.method() === "POST" && pathname.endsWith("/first-run")) {
+      submissions.push(request.postDataJSON());
+      return {jobId: "a".repeat(24), status: "submitted", capability: "d".repeat(48)};
+    }
+    return {statusCode: 404, body: {error: "Not found"}};
+  });
+  await openWizard(page);
+  await fillAdministrator(page);
+  await page.getByRole("button", {name: "Next"}).click();
+
+  const consent = page.getByLabel("I understand the listed devices will be wiped");
+  await expect(page.getByText("/dev/disk/by-id/disk-one")).toBeVisible();
+  await consent.check();
+  await expect(consent).toBeChecked();
+  await page.getByRole("button", {name: "Refresh plan"}).click();
+  await expect(page.getByText("/dev/disk/by-id/disk-three")).toBeVisible();
+  await expect(consent).not.toBeChecked();
+
+  await page.getByRole("button", {name: "Next"}).click();
+  await expect(page.getByText("No running setup job")).toBeVisible();
+  await expect(page.getByRole("button", {name: "Run setup"})).toBeDisabled();
+  expect(submissions).toHaveLength(0);
+});
+
+test("leaving the job screen aborts a stalled status request", async ({page}) => {
+  // Record aborts from the client side: browsers disagree about whether an
+  // aborted fetch reaches the requestfailed listener.
+  await page.addInitScript(() => {
+    const original = window.fetch;
+    window.__abortedRequests = 0;
+    window.fetch = (input, init) => {
+      const pending = original(input, init);
+      pending.catch((error) => {
+        if (error && error.name === "AbortError") window.__abortedRequests += 1;
+      });
+      return pending;
+    };
+  });
+  let statusRequests = 0;
+  await mockSetupApi(page, async ({request, pathname}) => {
+    if (request.method() === "GET" && pathname.endsWith("/first-start")) return plan;
+    if (request.method() === "POST" && pathname.endsWith("/first-run")) {
+      return {jobId: "a".repeat(24), status: "running", capability: "d".repeat(48)};
+    }
+    if (request.method() === "GET" && pathname.endsWith("/first-start/job")) {
+      statusRequests += 1;
+      // Never answer: only an abort can settle this request.
+      await new Promise(() => {});
+    }
+    return {statusCode: 404, body: {error: "Not found"}};
+  });
+  await openWizard(page);
+  await fillAdministrator(page);
+  await goToConfirmation(page);
+  await page.getByRole("button", {name: "Run setup"}).click();
+  await expect.poll(() => statusRequests).toBeGreaterThan(0);
+  await page.getByRole("button", {name: "Back"}).click();
+  await expect.poll(() => page.evaluate(() => window.__abortedRequests)).toBe(1);
+});

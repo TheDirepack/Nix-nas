@@ -125,11 +125,18 @@ const ConfirmStep = ({
     if (!capability || !jobId || isTerminal) return undefined;
     let cancelled = false;
     let timer;
+    let inFlight;
     let consecutiveFailures = 0;
     const poll = async () => {
+      // A stalled request must not outlive the step: abort it on unmount and
+      // after a deadline so a hung socket cannot block the next poll forever.
+      const controller = new AbortController();
+      inFlight = controller;
+      const deadline = window.setTimeout(() => controller.abort(), 15000);
       try {
         const value = await fetchJson('api/first-start/job', {
           headers: { Accept: 'application/json', [CAPABILITY_HEADER]: capability },
+          signal: controller.signal,
         });
         const { job: polled } = splitJobDocument(value);
         if (!cancelled && polled && polled.jobId === jobId) {
@@ -141,6 +148,8 @@ const ConfirmStep = ({
         if (!cancelled) setPollingInterrupted(true);
         consecutiveFailures = Math.min(consecutiveFailures + 1, 4);
       } finally {
+        window.clearTimeout(deadline);
+        if (inFlight === controller) inFlight = undefined;
         if (!cancelled) {
           const delay = Math.min(30000, 2000 * 2 ** consecutiveFailures);
           timer = window.setTimeout(poll, delay);
@@ -151,6 +160,7 @@ const ConfirmStep = ({
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      inFlight?.abort();
     };
   }, [capability, jobId, isTerminal]);
 
