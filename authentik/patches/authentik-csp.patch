@@ -6,7 +6,7 @@ diff --git a/authentik/root/settings.py b/authentik/root/settings.py
  
 +import os
 +from urllib.parse import urlsplit
-+from csp.constants import NONCE, NONE, SELF, UNSAFE_INLINE
++from csp.constants import NONCE, NONE, SELF
 +
 +
 +def _saml_form_action_domains() -> tuple[str, ...]:
@@ -34,7 +34,7 @@ diff --git a/authentik/root/settings.py b/authentik/root/settings.py
  from django.utils import http as utils_http
  from sentry_sdk import set_tag
  from xmlsec import enable_debug_trace
-@@ -27,6 +28,27 @@
+@@ -27,6 +28,24 @@
  ALLOWED_HOSTS = ["*"]
  SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
  SECURE_CROSS_ORIGIN_OPENER_POLICY = None
@@ -48,10 +48,7 @@ diff --git a/authentik/root/settings.py b/authentik/root/settings.py
 +            NONCE,
 +            "'sha256-rJJyMDPmHMZS0mPmL877gjjApxGMVa4522UDb4ctw7I='",
 +        ],
-+        # Authentik's SPA assigns element.style at runtime, and Chromium
-+        # enforces style-src-attr on those CSSOM writes; only attributes are
-+        # relaxed, <style> elements stay nonce/hash gated by style-src.
-+        "style-src-attr": [UNSAFE_INLINE],
++        "style-src-attr": [NONE],
 +        "img-src": [SELF, "data:"],
 +        "object-src": [NONE],
 +        "frame-ancestors": [SELF],
@@ -512,31 +509,26 @@ diff --git a/web/src/admin/events/EventMap.ts b/web/src/admin/events/EventMap.ts
 diff --git a/web/bundler/style-loader-plugin/node.js b/web/bundler/style-loader-plugin/node.js
 --- a/web/bundler/style-loader-plugin/node.js
 +++ b/web/bundler/style-loader-plugin/node.js
-@@ -85,6 +85,33 @@
+@@ -8,3 +8,4 @@
++import { createHash } from "node:crypto";
+ import { readFile } from "node:fs/promises";
+ import { createRequire } from "node:module";
+ import { dirname, join, relative } from "node:path";
+@@ -85,6 +86,23 @@
  
              build.onResolve(...fontResolverArgs);
  
-+            build.onLoad({ filter: /\/@patternfly\/elements\/pf-tooltip\/pf-tooltip\.js$/ }, async (args) => {
-+                let contents = await readFile(args.path, "utf8");
-+                const replacements = [
-+                    [
-+                        "import { styleMap } from 'lit/directives/style-map.js';",
-+                        "",
-+                    ],
-+                    [
-+                        'style="${styleMap(styles)}"',
-+                        '.style="${Object.entries(styles).map(([name, value]) => `${name}: ${value};`).join("")}"',
-+                    ],
-+                    ['style="${styleMap({ display })}"', '.style="${`display: ${display};`}"'],
-+                ];
-+                for (const [original, replacement] of replacements) {
-+                    if (contents.split(original).length !== 2) {
-+                        throw new Error(`Unsupported PatternFly tooltip styling: ${args.path}`);
-+                    }
-+                    contents = contents.replace(original, replacement);
++            build.onLoad({ filter: /\/lit-html\/(?:node\/)?(?:development\/)?directives\/style-map\.js$/ }, async (args) => {
++                const contents = await readFile(args.path, "utf8");
++                const original = "return this.ft=new Set(Object.keys(r)),this.render(r);";
++                const digest = createHash("sha256").update(contents).digest("hex");
++                if (digest !== "3a7a07effa80f3fb042179863ed830c1cce23bbd4741a46d2ea3df61219c785e" || contents.split(original).length !== 2) {
++                    throw new Error(`Unsupported Lit styleMap source: ${args.path}`);
 +                }
++                // Lit's first update returns attribute text; fall through to
++                // its existing CSSOM loop instead, preserving style-src-attr 'none'.
 +                return {
-+                    contents,
++                    contents: contents.replace(original, "this.ft=new Set;"),
 +                    loader: "js",
 +                    resolveDir: dirname(args.path),
 +                    watchFiles: [args.path],
