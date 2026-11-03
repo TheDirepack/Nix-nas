@@ -384,6 +384,12 @@ class ContractTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+    def test_authentik_stop_is_bounded_below_the_systemd_default(self) -> None:
+        services = text("modules/nas/config/application-services.nix")
+        unit = services.split("systemd.services.authentik = {", 1)[1].split("systemd.services.authentik-worker", 1)[0]
+        self.assertIn('TimeoutStopSec = "30s";', unit)
+        self.assertIn('TimeoutStartSec = "4min";', unit)
+
 
 class RuntimeSelectRelinkTests(unittest.TestCase):
     """The boot-side selector must not delete pre-existing service data."""
