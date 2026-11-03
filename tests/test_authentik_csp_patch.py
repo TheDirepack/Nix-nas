@@ -286,7 +286,7 @@ class AuthentikCspPatchTests(unittest.TestCase):
             )
             django.setup()
         constants = importlib.import_module("csp.constants")
-        namespace = {name: getattr(constants, name) for name in ("SELF", "NONE", "NONCE")}
+        namespace = {name: getattr(constants, name) for name in ("SELF", "NONE", "NONCE", "UNSAFE_INLINE")}
         namespace["SAML_IDP_FORM_ACTION_DOMAINS"] = ()
         policy = self.assignment("CONTENT_SECURITY_POLICY")
         self.assertIsNotNone(policy, "Authentik does not enforce a nonce CSP")
@@ -333,8 +333,13 @@ class AuthentikCspPatchTests(unittest.TestCase):
                     self.assertEqual(set(parser.inline), {nonce})
                     self.assertNotIn(nonce, nonces)
                     nonces.add(nonce)
-                    self.assertIn(f"'nonce-{nonce}'", response["Content-Security-Policy"])
-                    self.assertNotIn("unsafe-inline", response["Content-Security-Policy"])
+                    header = response["Content-Security-Policy"]
+                    self.assertIn(f"'nonce-{nonce}'", header)
+                    # The only inline allowance is the style attribute directive
+                    # Authentik's SPA needs; scripts and <style> stay gated.
+                    self.assertEqual(header.count("'unsafe-inline'"), 1, header)
+                    self.assertIn("style-src-attr 'unsafe-inline'", header)
+                    self.assertNotIn("script-src 'self' 'unsafe-inline'", header)
             request = request_factory.get("/identity/media/uploaded.html")
             middleware.process_request(request)
             response = http_response()
