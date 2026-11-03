@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import pathlib
 import sys
 import tempfile
@@ -106,6 +107,40 @@ services:
             description = json.loads(files[output / "descriptors/agent.session.json"])
             self.assertIn("nas-v2-session-agent.target", description["requires"])
             self.assertIn("nas-v2-snet-agent-network.service", description["requires"])
+
+    def test_disabled_session_stop_target_is_owned(self):
+        effective = self.effective()
+        effective["services"]["agent"]["enabled"] = False
+        with tempfile.TemporaryDirectory() as raw:
+            files, manifest = self.generate(effective, pathlib.Path(raw) / "projection")
+        target = "nas-v2-session-agent.target"
+        self.assertIn(target, manifest["stopUnits"])
+        self.assertIn(target, manifest["ownedUnits"])
+        self.assertLessEqual(set(manifest["stopUnits"]), set(manifest["ownedUnits"]))
+        self.assertFalse(any(path.name == target for path in files))
+
+    def test_session_fingerprint_tracks_resolved_storage_and_credential_paths(self):
+        effective = self.effective()
+        effective["credentials"] = {"token": {"path": "/run/credentials/old", "required": True}}
+        effective["services"]["agent"]["credentials"] = [
+            {"credential": "token", "use": "file", "mountPath": "/run/token"}
+        ]
+        with tempfile.TemporaryDirectory() as raw:
+            output = pathlib.Path(raw) / "projection"
+            before_files, before = self.generate(effective, output)
+            for field in ("storage", "credential"):
+                with self.subTest(field=field):
+                    changed = copy.deepcopy(effective)
+                    if field == "storage":
+                        changed["storageResources"]["workspace"]["path"] = "/srv/new-sessions"
+                        changed["storageResources"]["workspace"]["pathTemplate"] = "/srv/new-sessions/{instance}"
+                    else:
+                        changed["credentials"]["token"]["path"] = "/run/credentials/new"
+                    after_files, after = self.generate(changed, output)
+                    descriptor = output / "descriptors/agent.session.json"
+                    self.assertNotEqual(before_files[descriptor], after_files[descriptor])
+                    target = "nas-v2-session-agent.target"
+                    self.assertNotEqual(before["fingerprints"][target], after["fingerprints"][target])
 
     def test_user_scoped_storage_is_deferred_to_authenticated_transient_launcher(self):
         effective = self.effective(scope="user")
