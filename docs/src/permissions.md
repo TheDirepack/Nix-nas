@@ -4,16 +4,16 @@
 
 ## Default deny
 
-An ordinary account receives **no NAS application capability merely by belonging to `nas_users`**. The administrator grants access in Authentik by adding the account to one or more explicit groups:
+An ordinary account receives **no NAS application capability merely by belonging to `nas_users`**. Managed Services V2 compiles a distinct Authentik capability group for every declared service capability, and the administrator grants access in Authentik by assigning the account to those groups:
 
-| Authentik group | Capability |
+| Authentik group | Protected capability |
 |---|---|
-| `nas_allow_files` | Authenticated CopyParty UI and personal-volume template |
-| `nas_allow_webdav` | WebDAV route |
-| `nas_allow_syncthing` | Own Syncthing-device settings and managed personal sync |
-| `nas_allow_vault` | Vaultwarden SSO enrollment/sign-in path |
+| `application.copyparty.files` | CopyParty file UI and file-scoped access |
+| `application.copyparty.webdav` | CopyParty WebDAV route |
+| `application.syncthing.access` | Own Syncthing-device settings and managed personal sync |
+| `application.vaultwarden.access` | Vaultwarden web and OIDC access |
 
-The matching `nas_deny_*` group overrides an allow grant. `nas_disabled` disables the account across shared policy.
+These four groups are the ones the default V2 service seed declares; any other application declares its own `application.<service>.<capability>` names. The retired `nas_allow_*` and `nas_deny_*` groups are not V2 authorization rules, and `nas_disabled` disables the account across shared policy.
 
 Authentik application/group bindings should mirror these grants so unauthorized applications are hidden in Authentik as well as denied by Caddy and the backend policy. The proxy checks remain authoritative even if a dashboard binding is accidentally broad.
 

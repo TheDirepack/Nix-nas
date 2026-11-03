@@ -32,7 +32,7 @@ nas.firstStart.configFile = "/etc/nixos/nixos-nas/first-run.json";
 
 `nas-setup` performs the actual appliance workflow by calling the existing
 component authorities in their required order. It does not replace NixOS,
-KeePassXC, Authentik, CopyParty, ZFS, or the feature controller.
+KeePassXC, Authentik, CopyParty, or ZFS.
 
 ## Prepare the configuration
 

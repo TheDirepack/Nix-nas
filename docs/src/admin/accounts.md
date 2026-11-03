@@ -12,12 +12,11 @@ printf '%s\n' 'new password' | \
     --username alice \
     --name 'Alice Example' \
     --email alice@nas.local \
-    --group nas_allow_files \
-    --group nas_allow_vault \
+    --group nas_users \
     --password-stdin
 ```
 
-When an account already exists, omitted name, email, enabled state, groups, and attributes are preserved. Supplying one or more `--group` options replaces the account's complete **reserved NAS** group set; unrelated custom Authentik groups are preserved.
+When an account already exists, omitted name, email, enabled state, groups, and attributes are preserved. Supplying one or more `--group` options replaces the account's complete **reserved NAS identity-role** group set; unrelated custom Authentik groups are preserved. The CLI rejects application capability groups (and the retired `nas_allow_*` groups). Grant application access separately in Authentik after creating the account.
 
 Use `--enabled` or `--disabled` only when you intend to change the account state.
 
@@ -44,23 +43,23 @@ nas-setup account disable alice
 
 Disabling an account:
 
-- removes reserved NAS administrator/capability groups;
+- removes reserved NAS administrator and identity-role groups;
 - marks the Authentik account inactive;
 - adds `nas_disabled`;
 - reconciles managed Syncthing state;
 - preserves unrelated custom Authentik groups; and
 - preserves the user's ZFS data.
 
-## Capability groups
+## Application capabilities
 
-`nas_users` is a baseline identity group, not an application-access grant. Give users only the capabilities they need:
+`nas_users` is a baseline identity group, not an application-access grant. Managed Services V2 compiles one Authentik capability group per declared service capability, and the default V2 seed declares:
 
-- `nas_allow_files`
-- `nas_allow_webdav`
-- `nas_allow_syncthing`
-- `nas_allow_vault`
+- `application.copyparty.files`
+- `application.copyparty.webdav`
+- `application.syncthing.access`
+- `application.vaultwarden.access`
 
-Matching `nas_deny_*` groups take precedence. See [Account and permission model](../permissions.md) for the enforcement model.
+Assign those groups in Authentik, not through `nas-setup account apply`. The retired `nas_allow_*` and `nas_deny_*` groups are not V2 authorization rules. See [Account and permission model](../permissions.md) for the enforcement model.
 
 ## Password handling
 

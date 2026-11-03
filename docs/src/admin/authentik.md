@@ -8,14 +8,14 @@ Authentik is the authority for human identities, passwords, MFA, groups, profile
 
 ## Application access
 
-`nas_users` is a baseline identity group, not an access grant. Give ordinary users only the capabilities they require:
+`nas_users` is a baseline identity group, not an access grant. In Authentik, explicitly assign only the V2 application capability groups a user needs. The default V2 seed declares:
 
-- `nas_allow_files`
-- `nas_allow_webdav`
-- `nas_allow_syncthing`
-- `nas_allow_vault`
+- `application.copyparty.files`: CopyParty file access
+- `application.copyparty.webdav`: WebDAV access
+- `application.syncthing.access`: personal Syncthing declarations
+- `application.vaultwarden.access`: Vaultwarden access
 
-Matching deny groups take precedence. Application bindings in Authentik should mirror the same capability groups so the dashboard matches the policy enforced by Caddy and the application backend.
+These groups exist only for enabled or deployed services; other applications declare their own `application.<service>.<capability>` names. The retired `nas_allow_*` and `nas_deny_*` groups are not V2 authorization rules. Application bindings in Authentik should mirror the same capability groups so the dashboard matches the policy enforced by Caddy and the application backend.
 
 Disabling an application binding removes its route, but the service's authorization group and existing memberships remain intact. Re-enabling the binding restores access without re-granting memberships. To revoke access, remove the group memberships explicitly; disabling alone is not sufficient.
 

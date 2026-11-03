@@ -22,8 +22,8 @@ Some global settings require a service restart.
 
 ## Seeded volumes
 
-- `/shares`: read access to the share tree for `nas_allow_files`; administrators retain full access.
-- `/shares/users/${u%+nas_allow_files}`: dynamic per-user volume.
+- `/shares`: read access to the share tree for `application.copyparty.files`; administrators retain full access.
+- `/shares/users/${u%+application.copyparty.files}`: dynamic per-user volume.
 - `/shares/admin/copyparty-config`: administrator-only configuration volume.
 - `/tftp`: optional anonymous read-only TFTP volume; an administrator may explicitly enable unauthenticated writes on a tightly trusted provisioning LAN.
 

@@ -1,73 +1,79 @@
-from __future__ import annotations
+"""Guard operator documentation against retired V1 capability instructions.
 
-import pathlib
+V2's service seed declares capability IDs, Authentik owns assignments, and
+Caddy checks application.<service>.<capability> groups. Keep user instructions
+aligned with that contract as it evolves.
+"""
+
+from pathlib import Path
 import re
-import sys
 import unittest
 
-TESTS = pathlib.Path(__file__).resolve().parents[1]
-if str(TESTS) not in sys.path:
-    sys.path.insert(0, str(TESTS))
+ROOT = Path(__file__).resolve().parents[1]
+DOC = ROOT / "docs" / "src"
 
-from repo_test_utils import ROOT, text  # noqa: E402
-
-# Authentik group names that are retired/legacy and must not be recommended as
-# access grants in operator documentation. The current grant convention is
-# nas_allow_*, nas_deny_*, nas_admin, nas_users, nas_disabled, and
-# application.* capability groups.
-RETIRED_GROUPS = {
-    "nas-files",
-    "nas-webdav",
-    "nas-syncthing",
-    "nas-vault",
-    "nas_allow_all",
-    "nas_group_files",
+CAPABILITY_DOCS = {
+    "permissions.md",
+    "admin/authentik.md",
+    "admin/accounts.md",
+    "users/applications.md",
+}
+EXPECTED_DEFAULT_GROUPS = {
+    "application.copyparty.files",
+    "application.copyparty.webdav",
+    "application.syncthing.access",
+    "application.vaultwarden.access",
 }
 
-_TABLE_LINE_RE = re.compile(r"^\s*\|.*\|\s*$")
-_SEPARATOR_LINE_RE = re.compile(r"^\s*\|[\s:|-]+\|\s*$")
 
+class V2OperatorDocumentationTests(unittest.TestCase):
+    def test_default_group_examples_match_seed(self) -> None:
+        seed = (ROOT / "modules/nas/config/managed-services-seed-v2.nix").read_text()
+        # The seed declares per-service IDs and capability IDs, and the
+        # compiler constructs canonical application.<service>.<capability>.
+        for service, capabilities in {
+            "copyparty": ("files", "webdav"),
+            "syncthing": ("access",),
+            "vaultwarden": ("access",),
+        }.items():
+            with self.subTest(service=service):
+                self.assertRegex(seed, rf"\b{re.escape(service)}\s*= ")
+                for capability in capabilities:
+                    self.assertIn(f'(capability "{capability}"', seed)
 
-def _iter_table_cells(markdown: str):
-    """Yield the text of every cell in every column of every markdown table."""
-    lines = markdown.splitlines()
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        if _TABLE_LINE_RE.match(line) and not _SEPARATOR_LINE_RE.match(line):
-            table_lines = [line]
-            next_index = index + 1
-            while next_index < len(lines) and (
-                _TABLE_LINE_RE.match(lines[next_index]) or _SEPARATOR_LINE_RE.match(lines[next_index])
-            ):
-                table_lines.append(lines[next_index])
-                next_index += 1
-            for row in table_lines:
-                if _SEPARATOR_LINE_RE.match(row):
-                    continue
-                cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
-                for cell in cells:
-                    yield cell
-            index = next_index
-        else:
-            index += 1
+        for path in sorted(CAPABILITY_DOCS):
+            text = (DOC / path).read_text()
+            with self.subTest(path=path):
+                for group in sorted(EXPECTED_DEFAULT_GROUPS):
+                    self.assertIn(group, text)
 
+    def test_no_retired_group_is_recommended(self) -> None:
+        # Explanatory mentions of retired groups are fine; actionable grants,
+        # ACLs, and CLI examples are not.
+        unsafe = re.compile(
+            r"(?:--group\s+nas_(?:allow|deny)_"
+            r"|(?:^|\n)\s*[-|]\s*`nas_(?:allow|deny)_"
+            r"|@nas_(?:allow|deny)_"
+            r"|\$\{u%\+nas_(?:allow|deny)_)"
+        )
+        for path in (
+            *CAPABILITY_DOCS,
+            "admin/copyparty.md",
+            "reference/interfaces.md",
+        ):
+            with self.subTest(path=path):
+                text = (DOC / path).read_text()
+                self.assertIsNone(unsafe.search(text), f"retired grant instruction in {path}")
 
-class OperatorDocsTests(unittest.TestCase):
-    def test_retired_groups_not_recommended_in_any_table_column(self):
-        """No docs table cell in any column may recommend a retired group.
+    def test_account_cli_uses_only_reserved_identity_roles(self) -> None:
+        accounts = (DOC / "admin/accounts.md").read_text()
+        self.assertIn("--group nas_users", accounts)
+        self.assertNotRegex(accounts, r"--group\s+application\.")
+        self.assertIn("Authentik", accounts)
 
-        The previous check only inspected the first table cell of each row, so
-        retired grant references in later columns passed undetected. Every cell
-        of every row is checked here.
-        """
-        docs_dir = ROOT / "docs" / "src"
-        for md_file in sorted(docs_dir.rglob("*.md")):
-            content = text(str(md_file.relative_to(ROOT)))
-            for cell in _iter_table_cells(content):
-                for retired in RETIRED_GROUPS:
-                    if retired in cell:
-                        self.fail(f"{md_file}: retired group {retired!r} recommended in table cell: {cell!r}")
+    def test_first_start_has_no_retired_controller_dependency(self) -> None:
+        first_run = (DOC / "admin/first-run.md").read_text()
+        self.assertNotIn("or the feature controller", first_run)
 
 
 if __name__ == "__main__":
