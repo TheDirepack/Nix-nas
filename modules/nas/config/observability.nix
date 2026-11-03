@@ -90,7 +90,7 @@ let
     [[ "$device" == /dev/* && "$device" != *".."* && "$device" != *$'\n'* ]] || die
     if [[ $# -eq 10 ]]; then
       [[ "$9" == "-d" ]] || die
-      [[ "''${10}" =~ ^[A-Za-z0-9_,:+.-]+$ ]] || die
+      [[ "''${10}" =~ ^[A-Za-z0-9_,:+./-]+$ ]] || die
     elif [[ $# -ne 8 ]]; then
       die
     fi

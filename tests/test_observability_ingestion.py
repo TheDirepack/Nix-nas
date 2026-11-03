@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import json
+import os
 import pathlib
 import re
+import shlex
+import subprocess
+import sys
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -44,6 +50,83 @@ def numeric_series_from_line_protocol(text: str) -> dict[str, list[float]]:
 
 
 class ObservabilityIngestionContractTests(unittest.TestCase):
+    def run_smart_wrapper(self, arguments: list[str], *, exit_status: int = 0) -> subprocess.CompletedProcess[str]:
+        source = OBSERVABILITY.read_text(encoding="utf-8")
+        script = source.split("smartctlReadOnly = pkgs.writeShellScript \"nas-smartctl-readonly\" ''", 1)[1].split(
+            "\n  '';", 1
+        )[0]
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            (root / "bin").mkdir()
+            smartctl = root / "bin" / "smartctl"
+            smartctl.write_text(
+                f"#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\nsys.exit({exit_status})\n",
+                encoding="utf-8",
+            )
+            smartctl.chmod(0o755)
+            script = script.replace("${pkgs.smartmontools}", shlex.quote(str(root))).replace("''${", "${")
+            self.assertEqual(re.findall(r"\$\{([^}]+)\}", script), ["10"])
+            return subprocess.run(
+                ["bash", "-c", script, "nas-smartctl-readonly", *arguments],
+                text=True,
+                capture_output=True,
+                check=False,
+                env={**os.environ, "LC_ALL": "C"},
+            )
+
+    def test_smart_wrapper_accepts_read_only_shapes_and_preserves_arguments(self) -> None:
+        base = [
+            "--info",
+            "--health",
+            "--attributes",
+            "--tolerance=verypermissive",
+            "-n",
+            "standby",
+            "--format=brief",
+            "/dev/sda",
+        ]
+        for arguments in (
+            ["--scan"],
+            ["--scan", "--device=nvme"],
+            base,
+            *[base + ["-d", kind] for kind in ("sat", "sat,12", "sntjmicron/sat", "sntasmedia/sat", "megaraid,0")],
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.run_smart_wrapper(arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), arguments)
+
+    def test_smart_wrapper_rejects_mutating_or_malformed_commands_before_exec(self) -> None:
+        base = [
+            "--info",
+            "--health",
+            "--attributes",
+            "--tolerance=verypermissive",
+            "-n",
+            "standby",
+            "--format=brief",
+            "/dev/sda",
+        ]
+        for arguments in (
+            [],
+            ["--scan", "--device=ata"],
+            ["--set=on", "/dev/sda"],
+            base + ["-d"],
+            base + ["-d", "sat", "--set=on"],
+            *[base + ["-d", kind] for kind in ("", "sat;id", "sat\n--set=on", "sat --set=on", "$(id)")],
+            base[:-1] + ["/etc/passwd"],
+            base[:-1] + ["/dev/../etc/passwd"],
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.run_smart_wrapper(arguments)
+                self.assertEqual(result.returncode, 64, result.stderr)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("refused SMART command", result.stderr)
+
+    def test_smart_wrapper_preserves_smartctl_health_exit_status(self) -> None:
+        result = self.run_smart_wrapper(["--scan"], exit_status=8)
+        self.assertEqual(result.returncode, 8)
+
     def test_alert_and_dashboard_metric_names_exist_in_golden_ingestion_shape(self) -> None:
         series = numeric_series_from_line_protocol(FIXTURE.read_text(encoding="utf-8"))
         source = OBSERVABILITY.read_text(encoding="utf-8")
