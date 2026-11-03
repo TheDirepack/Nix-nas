@@ -352,7 +352,12 @@ class CommonPolicyTests(unittest.TestCase):
                 json.dumps(
                     {
                         "schemaVersion": 3,
-                        "services": {"demo": {"enabled": True}},
+                        "services": {
+                            "demo": {
+                                "enabled": True,
+                                "authorization": {"capabilities": [{"id": "access"}]},
+                            }
+                        },
                         "derived": {"authorization": {"demo": {"capabilities": {"access": "application.demo.access"}}}},
                     }
                 )
@@ -403,6 +408,55 @@ class EffectiveAuthorityValidationTests(unittest.TestCase):
                     "schemaVersion": 3,
                     "services": {"demo": {"enabled": True}},
                     "derived": {"authorization": {"demo": {"capabilities": ["access"]}}},
+                }
+            )
+
+    def test_resolve_v2_service_capability_never_invents_a_grant(self) -> None:
+        def resolve(document: dict) -> object:
+            with tempfile.TemporaryDirectory() as raw:
+                path = pathlib.Path(raw) / "effective.json"
+                path.write_text(json.dumps(document))
+                with mock.patch.dict(os.environ, {"NAS_V2_EFFECTIVE": str(path)}, clear=False):
+                    return common.resolve_v2_service_capability(
+                        "NAS_V2_SYNCTHING_SERVICE", "NAS_V2_SYNCTHING_CAPABILITY", "demo", "access"
+                    )
+
+        declared = {"authorization": {"capabilities": [{"id": "access"}, {"id": "view"}]}}
+        granted = {"demo": {"capabilities": {"access": "application.demo.access"}}}
+        base = {"schemaVersion": 3, "services": {"demo": declared}}
+
+        # An empty compiled authorization is not a grant.
+        self.assertIsNone(resolve({**base, "derived": {"authorization": {}}}))
+        # A service that declares no capabilities cannot borrow a compiled one.
+        self.assertIsNone(
+            resolve(
+                {
+                    "schemaVersion": 3,
+                    "services": {"demo": {"authorization": {"capabilities": []}}},
+                    "derived": {"authorization": {"demo": {"capabilities": {"view": "application.demo.view"}}}},
+                }
+            )
+        )
+        # An undeclared capability is denied even when the compiled map lists it.
+        self.assertIsNone(
+            resolve(
+                {
+                    "schemaVersion": 3,
+                    "services": {"demo": declared},
+                    "derived": {"authorization": {"demo": {"capabilities": {"other": "application.demo.other"}}}},
+                }
+            )
+        )
+        # The declared and compiled capability resolves.
+        self.assertEqual(resolve({**base, "derived": {"authorization": granted}}), ("demo", "access"))
+
+    def test_non_canonical_capability_group_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "canonical group"):
+            self._load(
+                {
+                    "schemaVersion": 3,
+                    "services": {"demo": {"enabled": True}},
+                    "derived": {"authorization": {"demo": {"capabilities": {"access": "nas_admin"}}}},
                 }
             )
 

@@ -279,6 +279,11 @@ def load_effective_authority(path: pathlib.Path | None = None) -> dict[str, Any]
             for cap_id, cap_value in caps.items():
                 if not isinstance(cap_value, str) or not cap_value:
                     raise ValueError(f"authorization capability {svc_id!r}.{cap_id!r} must be a non-empty string")
+                if cap_value != application_capability_group(svc_id, cap_id):
+                    raise ValueError(
+                        f"authorization capability {svc_id!r}.{cap_id!r} must map to its canonical group, "
+                        f"not {cap_value!r}"
+                    )
     return data
 
 
@@ -315,13 +320,26 @@ def resolve_v2_service_capability(
     authorization = container.get("authorization") if isinstance(container, dict) else None
     if not isinstance(authorization, dict):
         raise ValueError(f"effective state {effective} is missing the derived.authorization object")
+    # A parsed authority is authoritative: there is no synthetic grant once
+    # compiled state exists. The bootstrap fallback applies only to an absent
+    # file, handled above.
+    declaration = data.get("services", {}).get(service)
+    declared = declaration.get("authorization") if isinstance(declaration, dict) else None
+    declared_caps = declared.get("capabilities") if isinstance(declared, dict) else None
+    if not isinstance(declared_caps, list):
+        return None
+    if not all(
+        isinstance(item, dict) and isinstance(item.get("id"), str) and _CAPABILITY_ID_RE.fullmatch(item["id"])
+        for item in declared_caps
+    ):
+        return None
+    if capability != "access" and not any(item["id"] == capability for item in declared_caps):
+        return None
     entry = authorization.get(service)
     caps = entry.get("capabilities") if isinstance(entry, dict) else None
     if isinstance(caps, dict) and capability in caps:
         return service, capability
-    if authorization:
-        return None
-    return service, capability
+    return None
 
 
 def fsync_directory(path: pathlib.Path) -> None:
