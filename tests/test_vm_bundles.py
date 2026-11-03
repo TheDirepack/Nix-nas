@@ -66,6 +66,10 @@ bundle_hash() {
 case "$1" in
   eval)
     ref=${3%.outPath}
+    if [[ -n ${NAS_TEST_FAIL_REF:-} && $ref == "$NAS_TEST_FAIL_REF" ]]; then
+      printf 'simulated root evaluation failure: %s\n' "$ref" >&2
+      exit 42
+    fi
     case "$ref" in
       .#checks.x86_64-linux.nas-vm.driver) name=nas-vm-driver ;;
       .#checks.x86_64-linux.nas-vm-encrypted.driver) name=nas-vm-encrypted-driver ;;
@@ -208,6 +212,16 @@ class VmBundleScriptTests(unittest.TestCase):
         block = block.split("\n        in {", 1)[1]
         declared = set(re.findall(r"^\s{10}([a-zA-Z0-9][a-zA-Z0-9-]*)\s*=", block, flags=re.MULTILINE))
         self.assertEqual(declared, set(EXPECTED_BUNDLES))
+
+    def test_failing_nix_eval_emits_no_partial_keys_or_key_files(self) -> None:
+        env, _, _ = self._fake_environment()
+        env["NAS_TEST_FAIL_REF"] = ".#checks.x86_64-linux.nas-vm-encrypted.driver"
+        output = self._root / "keys"
+        result = self._run("keys", str(output), env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "", "do not publish a partial GitHub Actions cache key set")
+        self.assertIn("failed to compute bundle key for vm-drivers", result.stderr)
+        self.assertFalse(output.exists(), "a failed key evaluation must not write any .key files")
 
     def test_keys_emits_github_output_lines_and_key_files(self) -> None:
         env, _, _ = self._fake_environment()
