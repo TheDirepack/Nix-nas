@@ -312,7 +312,7 @@ in
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
       unitConfig.RequiresMountsFor = [ restoreVerifyPath ]
-        ++ lib.optional (cfg.backup.repositoryFile == "") localResticRepository;
+        ++ lib.optional (cfg.backup.repositoryFile == "" && !remoteEnabled) localResticRepository;
       serviceConfig = {
         Type = "oneshot";
         Nice = 15;
@@ -353,7 +353,7 @@ in
         # Check against the restored dataset path (cfg.zfsRoot/nas-control), not
         # the live-system compatibility symlink /var/lib/nas-control, which the
         # raw restic restore does not recreate.
-        [[ -d "$restore_root${cfg.zfsRoot}/nas-control" ]]
+        [[ -d "$restore_root"${lib.escapeShellArg "${cfg.zfsRoot}/nas-control"} ]]
       '';
     };
 

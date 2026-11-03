@@ -37,6 +37,33 @@ class V2RestoreWiringTests(unittest.TestCase):
             with self.subTest(fragment=application_specific_fragment):
                 self.assertNotIn(application_specific_fragment, storage)
 
+    def test_recovery_substrate_check_uses_a_restored_quoted_path(self):
+        storage = (ROOT / "modules/nas/config/storage-monitoring.nix").read_text(encoding="utf-8")
+        control_line = next(line.strip() for line in storage.splitlines() if '[[ -d "$restore_root"' in line)
+        self.assertIn("escapeShellArg", control_line)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            zfs_root = root / "nas$archive"
+            restore_root = root / "restore"
+            restore_root.mkdir()
+            check = control_line.replace(
+                '${lib.escapeShellArg "${cfg.zfsRoot}/nas-control"}',
+                shlex.quote(str(zfs_root / "nas-control")),
+            )
+            self.assertNotIn("${lib.escapeShellArg", check)
+            command = "set -euo pipefail\nrestore_root=" + shlex.quote(str(restore_root)) + "\n" + check
+            missing = subprocess.run(["bash", "-c", command], check=False, capture_output=True, text=True, timeout=5)
+            self.assertNotEqual(missing.returncode, 0)
+            recovered = pathlib.Path(str(restore_root) + str(zfs_root / "nas-control"))
+            recovered.mkdir(parents=True)
+            present = subprocess.run(["bash", "-c", command], check=False, capture_output=True, text=True, timeout=5)
+            self.assertEqual(present.returncode, 0, present.stdout + present.stderr)
+
+    def test_remote_rclone_repository_does_not_require_the_local_restic_mount(self):
+        storage = (ROOT / "modules/nas/config/storage-monitoring.nix").read_text(encoding="utf-8")
+        block = storage.split("nas-backup-restore-verify", 1)[1].split("serviceConfig", 1)[0]
+        self.assertIn('lib.optional (cfg.backup.repositoryFile == "" && !remoteEnabled)', block)
+
     def test_verifier_has_no_application_name_branches(self):
         verifier = (ROOT / "services/nas_v2_backup.py").read_text(encoding="utf-8")
         for application_name in ("authentik", "copyparty", "syncthing", "vaultwarden"):
@@ -221,6 +248,9 @@ class V2RestoreWiringTests(unittest.TestCase):
             "config.services.postgresql.package": shlex.quote(str(postgresql)),
             "pkgs.coreutils": str(coreutils),
             "pkgs.python3": str(python_bin),
+            'lib.escapeShellArg "${cfg.zfsRoot}/nas-control"': shlex.quote(
+                str(pathlib.PurePosixPath(zfs_root) / "nas-control")
+            ),
             "cfg.zfsRoot": zfs_root,
         }
         for key in sorted(replacements, key=len, reverse=True):
