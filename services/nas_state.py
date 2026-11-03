@@ -1378,19 +1378,27 @@ def canonical_apply_entries(manifest: Mapping[str, Any]) -> list[Mapping[str, An
     return [by_name[authority.name] for authority in authorities()]
 
 
-def apply_extracted(staging: pathlib.Path, manifest: dict[str, Any], *, restore_absence: bool = False) -> None:
+def preflight_restore_absence(manifest: Mapping[str, Any], *, restore_absence: bool) -> None:
+    """Reject every absence conflict before any authority is changed.
+
+    A conflict must fail before writes start, so a stale-snapshot rollback is
+    never needed, and before quiescing, so stopping a unit with
+    CleanupOnExit=yes cannot mutate the live system first.
+    """
+    if restore_absence:
+        return
     registry = {item.name: item for item in authorities()}
-    # Preflight every absence restoration before mutating state, so a conflict on the
-    # first entry cannot leave partial state behind that a stale-snapshot rollback
-    # could not unwind. Rollback stays enabled for failures after writes have begun,
-    # including failures from apply_extracted itself.
-    if not restore_absence:
-        for entry in canonical_apply_entries(manifest):
-            if entry["status"] == "absent":
-                authority = registry[entry["name"]]
-                destination = pathlib.Path(authority.source)
-                if authority.kind == "path" and lstat_type(destination) != 0:
-                    raise StateError(f"Restoring absence for {authority.name} requires --restore-absence")
+    for entry in canonical_apply_entries(manifest):
+        if entry["status"] != "absent":
+            continue
+        authority = registry[entry["name"]]
+        if authority.kind == "path" and lstat_type(pathlib.Path(authority.source)) != 0:
+            raise StateError(f"Restoring absence for {authority.name} requires --restore-absence")
+
+
+def apply_extracted(staging: pathlib.Path, manifest: dict[str, Any], *, restore_absence: bool = False) -> None:
+    preflight_restore_absence(manifest, restore_absence=restore_absence)
+    registry = {item.name: item for item in authorities()}
     for entry in canonical_apply_entries(manifest):
         authority = registry[entry["name"]]
         if entry["status"] == "absent":
@@ -1742,13 +1750,16 @@ def restore_bundle(
         except Exception:  # noqa: BLE001 - the pre-check is advisory; any failure means drift cannot be ruled out
             pass
 
-        rollback_ready = False
+        state_mutated = False
         try:
             export_bundle(rollback, include_sensitive=True, quiesce=False)
-            rollback_ready = True
             restore_journal_update("rollback-captured", rollbackBundle=str(rollback))
+            # Reject absence conflicts while the runtime is untouched: stopping
+            # a unit with CleanupOnExit=yes already changes the live system.
+            preflight_restore_absence(manifest, restore_absence=restore_absence)
             stop_active_units(unit_snapshot)
             restore_journal_update("quiesced", unitSnapshot=unit_snapshot)
+            state_mutated = True
             # pg_restore fails against a stopped server, so database authorities
             # need PostgreSQL running again before the payload is applied.
             if any(entry["status"] == "captured" and entry["kind"] == "database" for entry in manifest["entries"]):
@@ -1761,7 +1772,7 @@ def restore_bundle(
             reapply_runtime_consumers(unit_snapshot)
             restore_journal_update("committed", completedAt=int(time.time()))
         except Exception as original:
-            if not rollback_ready:
+            if not state_mutated:
                 try:
                     restore_unit_state(unit_snapshot)
                 except Exception as unit_error:
@@ -1778,6 +1789,9 @@ def restore_bundle(
                 raise
             restore_journal_update("rolling-back", primaryError=str(original))
             try:
+                # Runtime consumers restart only after verification; re-quiesce
+                # them so rollback data cannot be overwritten mid-apply.
+                stop_active_units(capture_unit_state(restore_units()))
                 with state_temporary_directory("nas-state-rollback.") as rollback_temp:
                     rollback_staging = pathlib.Path(rollback_temp)
                     extract_bundle(rollback, rollback_staging)

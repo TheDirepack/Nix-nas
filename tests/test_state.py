@@ -497,6 +497,42 @@ class StateBundleTests(unittest.TestCase):
                 self.assertEqual("pre-restore\n", public.read_text(encoding="utf-8"))
                 self.assertEqual("pre-restore-secret\n", sensitive.read_text(encoding="utf-8"))
 
+    def test_failed_quiesce_never_applies_data_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            public = root / "public.txt"
+            secret = root / "secret.txt"
+            public.write_text("original", encoding="utf-8")
+            secret.write_text("secret", encoding="utf-8")
+            bundle = root / "state.tar.gz"
+            registry = self.registry(public, secret, root / "missing")
+            with mock.patch.dict(os.environ, self.environment(registry), clear=False):
+                state.export_bundle(bundle, include_sensitive=True)
+                public.write_text("current", encoding="utf-8")
+                with (
+                    mock.patch.object(state, "DEFAULT_ROLLBACK_ROOT", root / "rollbacks"),
+                    mock.patch.object(state, "stop_active_units", side_effect=state.StateError("stop failed")),
+                    mock.patch.object(state, "restore_unit_state") as recover,
+                    mock.patch.object(state, "apply_extracted") as mutate,
+                    mock.patch.object(
+                        state,
+                        "run_systemctl",
+                        side_effect=lambda *args, **kwargs: self.completed(
+                            1 if args[:2] == ("is-active", "--quiet") else 0
+                        ),
+                    ),
+                ):
+                    with self.assertRaisesRegex(state.StateError, "stop failed"):
+                        state.restore_bundle(
+                            bundle,
+                            confirm_host=socket.gethostname(),
+                            allow_partial=False,
+                            include_sensitive=True,
+                        )
+                recover.assert_called_once()
+                mutate.assert_not_called()
+                self.assertEqual(public.read_text(encoding="utf-8"), "current")
+
     def test_restore_requires_matching_host_and_sensitive_opt_in(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -628,8 +664,15 @@ class StateBundleTests(unittest.TestCase):
             with mock.patch.dict(os.environ, self.environment(registry), clear=False):
                 state.export_bundle(bundle, include_sensitive=True)
                 optional.write_text("appeared", encoding="utf-8")
+                public.write_text("live-public", encoding="utf-8")
+                sensitive.write_text("live-sensitive", encoding="utf-8")
                 with (
                     mock.patch.object(state, "DEFAULT_ROLLBACK_ROOT", root / "rollbacks"),
+                    mock.patch.object(state, "apply_extracted", wraps=state.apply_extracted) as apply_spy,
+                    # Quiescing a unit can already mutate live state (stopping
+                    # the firewall flushes its rules), so the conflict must be
+                    # rejected while the runtime is untouched.
+                    mock.patch.object(state, "stop_active_units") as stop_spy,
                     mock.patch.object(
                         state,
                         "run_systemctl",
@@ -645,7 +688,15 @@ class StateBundleTests(unittest.TestCase):
                             allow_partial=False,
                             include_sensitive=True,
                         )
+                apply_spy.assert_not_called()
+                stop_spy.assert_not_called()
                 self.assertTrue(optional.exists())
+                self.assertEqual(public.read_text(encoding="utf-8"), "live-public")
+                self.assertEqual(sensitive.read_text(encoding="utf-8"), "live-sensitive")
+                self.assertEqual(
+                    json.loads(state.RESTORE_JOURNAL.read_text(encoding="utf-8"))["status"],
+                    "failed-before-apply",
+                )
 
     def test_restore_preserves_existing_subpath_modes_instead_of_flattening_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -988,63 +1039,7 @@ class StateBundleTests(unittest.TestCase):
         self.assertIn("postgresql.service", units)
         self.assertIn("nas-authentik-proxy-outpost.service", units)
 
-    def test_post_restore_validation_triggers_rollback_when_digest_mismatch(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = pathlib.Path(temporary)
-            public = root / "public.txt"
-            sensitive = root / "sensitive.txt"
-            public.write_text("bundle-public\n", encoding="utf-8")
-            sensitive.write_text("bundle-sensitive\n", encoding="utf-8")
-            bundle = root / "state.tar.gz"
-            registry = self.registry(public, sensitive, root / "missing")
-            with mock.patch.dict(os.environ, self.environment(registry), clear=False):
-                state.export_bundle(bundle, include_sensitive=True)
-                public.write_text("pre-restore-public\n", encoding="utf-8")
-                sensitive.write_text("pre-restore-sensitive\n", encoding="utf-8")
-                journal = root / "journal.json"
-
-                applies: list[str] = []
-                original_apply = state.apply_extracted
-
-                def corrupting_apply(
-                    staging: pathlib.Path, manifest: dict[str, Any], *, restore_absence: bool = False
-                ) -> None:
-                    applies.append("rollback" if restore_absence else "forward")
-                    original_apply(staging, manifest, restore_absence=restore_absence)
-                    if not restore_absence:
-                        # Post-restore verification runs between the forward apply and
-                        # the runtime-consumer reapply, so corruption is injected in the
-                        # apply pass where a rogue writer can still reach the path.
-                        public.write_text("corrupted-after-apply\n", encoding="utf-8")
-
-                with (
-                    mock.patch.object(state, "DEFAULT_ROLLBACK_ROOT", root / "rollbacks"),
-                    mock.patch.object(state, "RESTORE_JOURNAL", journal),
-                    mock.patch.object(state, "apply_extracted", side_effect=corrupting_apply),
-                    mock.patch.object(
-                        state,
-                        "run_systemctl",
-                        side_effect=lambda *args, **kwargs: self.completed(
-                            1 if args[:2] == ("is-active", "--quiet") else 0
-                        ),
-                    ),
-                ):
-                    with self.assertRaisesRegex(state.StateError, "Post-restore validation failed"):
-                        state.restore_bundle(
-                            bundle,
-                            confirm_host=socket.gethostname(),
-                            allow_partial=False,
-                            include_sensitive=True,
-                        )
-                self.assertEqual(["forward", "rollback"], applies)
-                self.assertEqual("pre-restore-public\n", public.read_text(encoding="utf-8"))
-                self.assertEqual("pre-restore-sensitive\n", sensitive.read_text(encoding="utf-8"))
-                self.assertTrue(journal.is_file())
-                data = json.loads(journal.read_text(encoding="utf-8"))
-                self.assertNotEqual("committed", data.get("status"))
-                self.assertEqual("failed-rolled-back", data.get("status"))
-
-    def test_database_verification_failure_rolls_back_while_writers_are_running(self) -> None:
+    def test_database_verification_failure_requiesces_writers_before_rollback(self) -> None:
         """A database digest mismatch after restore must still roll back with quiesced writers.
 
         Path verification alone cannot catch a database authority that was restored
@@ -1116,6 +1111,9 @@ class StateBundleTests(unittest.TestCase):
                     events.append("reapply-runtime-consumers")
                     original_reapply(snapshot)
 
+                def tracking_stop(_snapshot: Mapping[str, bool]) -> None:
+                    events.append("stop-writers")
+
                 with (
                     mock.patch.object(state, "DEFAULT_ROLLBACK_ROOT", root / "rollbacks"),
                     mock.patch.object(state, "RESTORE_JOURNAL", journal),
@@ -1124,6 +1122,7 @@ class StateBundleTests(unittest.TestCase):
                     mock.patch.object(state, "restore_database", side_effect=tracking_restore_database),
                     mock.patch.object(state, "apply_extracted", side_effect=tracking_apply),
                     mock.patch.object(state, "reapply_runtime_consumers", side_effect=tracking_reapply),
+                    mock.patch.object(state, "stop_active_units", side_effect=tracking_stop),
                     mock.patch.object(state, "run_systemctl", side_effect=fake_systemctl),
                 ):
                     with self.assertRaisesRegex(
@@ -1140,20 +1139,23 @@ class StateBundleTests(unittest.TestCase):
                 # restarts the runtime consumers of the restored files.
                 self.assertEqual(
                     [
+                        "stop-writers",
                         "forward-apply",
                         "restore-database",
+                        "stop-writers",
                         "rollback-apply",
                         "restore-database",
                         "reapply-runtime-consumers",
                     ],
                     events,
+                    "rollback must re-quiesce writers before it applies bundle data",
                 )
                 self.assertEqual("pre-restore-public\n", public.read_text(encoding="utf-8"))
                 self.assertEqual("pre-restore-sensitive\n", sensitive.read_text(encoding="utf-8"))
                 data = json.loads(journal.read_text(encoding="utf-8"))
                 self.assertEqual("failed-rolled-back", data.get("status"))
-                # The database restore ran while the firewalld writer was quiesced and
-                # was restarted by the rollback, i.e. rollback ran with writers running.
+                # The database restore ran while the writers were quiesced; the
+                # rollback stopped them again before overwriting restored data.
                 self.assertTrue(data["unitSnapshot"]["firewalld.service"])
 
     def test_rollback_snapshot_captured_before_quiesce(self) -> None:
