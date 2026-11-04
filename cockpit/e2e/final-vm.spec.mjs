@@ -57,17 +57,6 @@ async function submitUsername(page, value) {
   await page.locator('button[type="submit"]').filter({visible: true}).first().click();
 }
 
-// Authentik's user banner animates, and WebKit inside the installed VM never
-// reports the "Not you?" link as stable, so a coordinate click waits until the
-// test budget expires. Following the link's own cancellation target issues the
-// same request without depending on hit testing.
-async function resetAnonymousFlow(page) {
-  const link = page.getByRole("link", {name: "Not you?", exact: true});
-  await expect(link).toBeVisible();
-  const href = await link.getAttribute("href");
-  await page.goto(new URL(href, page.url()).toString());
-}
-
 async function login(page) {
   await page.goto("/console/nas");
   await expectLogin(page);
@@ -240,25 +229,29 @@ test("invalid credentials cannot expose the NAS component", async ({page}) => {
   expect(page.frames().some(isNasComponentFrame)).toBe(false);
 });
 
-test("hostile anonymous login values stay inert", async ({page}) => {
-  const errors = [];
-  page.on("pageerror", (error) => errors.push(String(error)));
-  await page.addInitScript(() => {
-    globalThis.__nas_login_xss = 0;
-  });
-  const payloads = [
-    "<script>globalThis.__nas_login_xss=1</script>",
-    '<img src=x onerror="globalThis.__nas_login_xss=2">',
-    "<svg/onload=globalThis.__nas_login_xss=3>",
-    '\"><iframe srcdoc="<script>parent.__nas_login_xss=4<\\/script>"></iframe>',
-    "javascript:globalThis.__nas_login_xss=5",
-    "' OR 1=1 --",
-    "../../../../etc/passwd",
-    "\r\nX-Injected: yes",
-  ];
-  await page.goto("/console/");
-  for (const [index, payload] of payloads.entries()) {
-    if (index > 0) await resetAnonymousFlow(page);
+const hostileLoginPayloads = [
+  "<script>globalThis.__nas_login_xss=1</script>",
+  '<img src=x onerror="globalThis.__nas_login_xss=2">',
+  "<svg/onload=globalThis.__nas_login_xss=3>",
+  '\"><iframe srcdoc="<script>parent.__nas_login_xss=4<\\/script>"></iframe>',
+  "javascript:globalThis.__nas_login_xss=5",
+  "' OR 1=1 --",
+  "../../../../etc/passwd",
+  "\r\nX-Injected: yes",
+];
+
+// One test per payload. A single test looping all eight overran the 90 second
+// budget in WebKit on the installed VM, where the authentication form can take
+// tens of seconds to render after a flow reset; a fresh page per payload needs
+// no reset at all.
+for (const [index, payload] of hostileLoginPayloads.entries()) {
+  test(`hostile anonymous login value ${index + 1} stays inert`, async ({page}) => {
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(String(error)));
+    await page.addInitScript(() => {
+      globalThis.__nas_login_xss = 0;
+    });
+    await page.goto("/console/");
     await expectLogin(page);
     await submitUsername(page, payload);
     const pass = page.getByRole("textbox", {name: "Password", exact: true});
@@ -269,9 +262,9 @@ test("hostile anonymous login values stay inert", async ({page}) => {
     await expect(page).toHaveURL(/\/identity\//);
     expect(await page.evaluate(() => globalThis.__nas_login_xss)).toBe(0);
     expect(page.frames().some(isNasComponentFrame)).toBe(false);
-  }
-  expect(errors).toEqual([]);
-});
+    expect(errors).toEqual([]);
+  });
+}
 
 test("final VM exposes the installed Cockpit NAS component after real authentication", async ({
   page,
