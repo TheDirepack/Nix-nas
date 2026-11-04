@@ -111,7 +111,7 @@ in
       }
       {
         assertion = loopbackServicePorts == lib.unique loopbackServicePorts;
-        message = "NAS loopback listeners must use unique ports across Cockpit, identity, observability, UPS, Syncthing, Vaultwarden, and AI services.";
+        message = "NAS loopback listeners must use unique ports across Cockpit, identity, observability, UPS, Syncthing, and Vaultwarden.";
       }
       {
         assertion = cfg.observability.thresholds.filesystemCriticalPercent < cfg.observability.thresholds.filesystemWarningPercent;

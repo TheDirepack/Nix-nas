@@ -443,7 +443,7 @@ Dependencies are first-class service data and must be runtime-neutral.
 
 ```yaml
 dependencies:
-  - service: ai-config
+  - service: postgresql
     condition: completed
   - service: victoriametrics
     condition: ready

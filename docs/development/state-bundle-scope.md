@@ -9,7 +9,7 @@ The installed registry contains only configuration that is both runtime-editable
 - NetworkManager connection profiles when NAS networking is enabled;
 - Cockpit Scheduler state when that backend is selected.
 
-Application databases, service caches, generated runtime state, secrets databases, VM state, identity databases, observability data, and AI data do not belong in the state bundle. Their recovery owners are the existing native mechanisms:
+Application databases, service caches, generated runtime state, secrets databases, VM state, identity databases, and observability data do not belong in the state bundle. Their recovery owners are the existing native mechanisms:
 
 - Restic for boot/configuration material and configured V2 backup resources;
 - native database dumps for consistency-sensitive databases;

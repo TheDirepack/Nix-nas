@@ -15,7 +15,6 @@
 | `/var/lib/grafana/grafana.db` | Mutable Grafana dashboard/UI state | Restic when enabled |
 | `/var/lib/ntfy-sh` | Notification state | Restic when enabled |
 | `<zfsRoot>/virtual-machines` | VM images | ZFS snapshots/Syncoid |
-| `<zfsRoot>/ai` | AI models and configuration | ZFS snapshots/Syncoid according to policy |
 | `/boot`, `/etc/nixos`, `/etc/ssh`, machine identity | Boot and reconstruction state | `nas-boot-system` Restic job |
 
 A Restic repository on the same ZFS pool protects against boot-device failure and accidental file loss but not total pool loss. Syncoid or another independent off-pool copy is required for that failure mode.
