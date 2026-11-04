@@ -50,6 +50,9 @@ class OperationJournalTests(unittest.TestCase):
             path.write_text("[]")
             with self.assertRaisesRegex(journal_module.JournalError, "not a JSON object"):
                 journal_module.load_json(path)
+            path.write_bytes(b"\xff\xfe")
+            with self.assertRaisesRegex(journal_module.JournalError, "Invalid operation journal"):
+                journal_module.load_json(path)
 
     def test_open_resume_and_terminal_state_semantics(self) -> None:
         with (
