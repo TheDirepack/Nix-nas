@@ -135,25 +135,30 @@ test("map entry legends keep the key when the value schema has a title", async (
   );
 });
 
-test("map key rename commits from compositionend for Safari IME ordering", () => {
+test("map key rename commits on blur and ignores IME Enter", () => {
   const source = fs.readFileSync(editorPath, "utf8");
   const keyInput = source.match(/<TextInput\s[^>]*aria-label=\{`Key for \$\{name\}`\}[\s\S]*?\/>/);
   assert.ok(keyInput, "map key input must remain present");
   assert.match(
     source,
-    /const composing = useRef\(false\)/,
-    "composition state is tracked explicitly",
+    /function MapKeyInput\(\{name, names, pattern, onRename\}\)/,
+    "key editing keeps a local draft",
   );
-  assert.match(keyInput[0], /onCompositionStart=/, "composition start is observed");
+  assert.match(keyInput[0], /onBlur=\{commit\}/, "the draft commits on blur");
   assert.match(
     keyInput[0],
-    /onCompositionEnd=\{\(event\) => \{[\s\S]*renameDynamic\(name, event\.currentTarget\.value\)/,
-    "compositionend commits the composed key even when Safari lags isComposing",
+    /if \(event\.key === "Enter" && !event\.nativeEvent\.isComposing\)/,
+    "Enter commits only outside an IME composition",
   );
   assert.match(
     keyInput[0],
-    /if \(composing\.current \|\| event\.nativeEvent\?\.isComposing\) return;/,
-    "onChange still ignores intermediate composition text",
+    /aria-invalid=\{Boolean\(error\)\}/,
+    "a rejected key is announced instead of silently dropped",
+  );
+  assert.doesNotMatch(
+    source,
+    /const composing = useRef/,
+    "typing no longer renames the live key on every keystroke",
   );
 });
 
