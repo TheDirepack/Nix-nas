@@ -203,6 +203,20 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertGreaterEqual(text.count("current-coverage.outcome == 'success'"), 4)
         self.assertNotIn("main-coverage-cache=", self.run_text(coverage))
 
+    def test_coverage_baseline_cache_is_keyed_by_the_resolved_main_revision(self) -> None:
+        step = next(step for step in self.jobs["coverage-diff"]["steps"] if step.get("id") == "main-coverage")
+        key = step["with"]["key"]
+        restore = step["with"]["restore-keys"]
+        # One baseline per main revision: PRs sharing a base commit reuse it, a
+        # new main commit cannot inherit an older measurement.
+        self.assertTrue(key.endswith("-${{ steps.main-baseline.outputs.sha }}"), key)
+        self.assertIn("${{ env.CI_CACHE_SCHEMA }}-coverage-main-", key)
+        self.assertNotIn("steps.main-baseline.outputs.sha", restore)
+        self.assertIn("${{ env.CI_CACHE_SCHEMA }}-coverage-main-", restore)
+        self.assertIn("main-coverage-revision.txt", step["with"]["path"])
+        drift = next(step for step in self.jobs["coverage-diff"]["steps"] if step.get("id") == "drift")
+        self.assertIn("main-coverage-revision.txt", str(drift))
+
     def test_coverage_baseline_uses_the_same_test_population_as_current(self) -> None:
         unit_script = self.qualification_script.split("  unit)\n", 1)[1].split("    # Invoked indirectly", 1)[0]
         baseline = next(step for step in self.jobs["coverage-diff"]["steps"] if step.get("id") == "baseline-build")
@@ -302,6 +316,17 @@ class CiWorkflowGraphTests(unittest.TestCase):
             self.assertIn("system-handoff.sh verify", text)
             self.assertIn("system-handoff.sh import", text)
             self.assertNotIn("vm-bundle-core-", text)
+
+    def test_downstream_imports_consume_verified_transport_but_cache_producer_preserves_it(self) -> None:
+        for name in ("integration", "installer", "installed-security"):
+            step = next(
+                step
+                for step in self.jobs[name]["steps"]
+                if step.get("name") == "Verify and import prepared Nix handoff"
+            )
+            self.assertIn('vm-bundles.sh import "$RUNNER_TEMP/vm-bundles" --consume', step["run"], name)
+            self.assertLess(step["run"].index("system-handoff.sh verify"), step["run"].index("--consume"))
+        self.assertNotIn("--consume", self.serialized(self.handoff))
 
     def test_browser_executes_whole_suite_in_one_runner(self) -> None:
         browser = self.jobs["browser"]

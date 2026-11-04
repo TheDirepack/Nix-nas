@@ -37,6 +37,9 @@ validate_host_bind_address() {
       die "NAS_QEMU_HOST_BIND_ADDRESS must be an IPv4 address: $HOST_BIND_ADDRESS"
     fi
   done
+  # Clients, probes, and ZAP connect to this same concrete address.
+  [[ "$HOST_BIND_ADDRESS" != "0.0.0.0" ]] ||
+    die "NAS_QEMU_HOST_BIND_ADDRESS must be a concrete address, not 0.0.0.0"
 }
 
 validate_host_bind_address
@@ -81,7 +84,7 @@ log "Retaining final-VM evidence in $EVIDENCE_DIR"
 
 cleanup() {
   if [[ -n "${ssh_control_dir:-}" ]]; then
-    ssh -S "$ssh_control_dir/control" -O exit -p "$SSH_PORT" admin@127.0.0.1 >/dev/null 2>&1 || true
+    ssh -S "$ssh_control_dir/control" -O exit -p "$SSH_PORT" admin@"${HOST_BIND_ADDRESS:-127.0.0.1}" >/dev/null 2>&1 || true
     rm -f -- "$ssh_control_dir/control"
     rmdir -- "$ssh_control_dir"
     ssh_control_dir=""
@@ -93,7 +96,7 @@ cleanup() {
 
 collect_guest_diagnostics() {
   timeout --foreground --signal=TERM --kill-after=5s 30s \
-    ssh "${ssh_args[@]}" admin@127.0.0.1 'sudo -n bash -s' <<'GUEST_DIAGNOSTICS'
+    ssh "${ssh_args[@]}" admin@"${HOST_BIND_ADDRESS:-127.0.0.1}" 'sudo -n bash -s' <<'GUEST_DIAGNOSTICS'
 set -uo pipefail
 result=0
 record() {
@@ -179,17 +182,17 @@ ssh_args=(
 )
 
 for _ in $(seq 1 180); do
-  if ssh "${ssh_args[@]}" admin@127.0.0.1 true >/dev/null 2>&1; then break; fi
+  if ssh "${ssh_args[@]}" admin@"${HOST_BIND_ADDRESS:-127.0.0.1}" true >/dev/null 2>&1; then break; fi
   sleep 2
 done
-ssh "${ssh_args[@]}" admin@127.0.0.1 true >/dev/null 2>&1 || {
+ssh "${ssh_args[@]}" admin@"${HOST_BIND_ADDRESS:-127.0.0.1}" true >/dev/null 2>&1 || {
   cat "$BOOT_LOG" >&2 || true
   die "final browser VM did not become reachable over SSH"
 }
 ssh_ready=1
 
 log "Verifying canonical locked-boot activation and health in the disposable overlays"
-ssh "${ssh_args[@]}" admin@127.0.0.1 \
+ssh "${ssh_args[@]}" admin@"${HOST_BIND_ADDRESS:-127.0.0.1}" \
   'sudo -n nas-vm-guest-test --setup-reboot-e2e --verify'
 
 # Requests and sleeps share the existing 90 x 2-second readiness allowance.
@@ -200,7 +203,7 @@ for _ in $(seq 1 90); do
   ((remaining > 0)) || break
   if curl --fail --insecure --silent --show-error --connect-timeout 2 \
     --max-time "$((remaining < 2 ? remaining : 2))" \
-    --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1" "https://nas-test.local:$HTTPS_PORT/console/" >/dev/null 2>&1; then
+    --resolve "nas-test.local:$HTTPS_PORT:${HOST_BIND_ADDRESS:-127.0.0.1}" "https://nas-test.local:$HTTPS_PORT/console/" >/dev/null 2>&1; then
     if ((SECONDS < console_deadline)); then console_ready=1; fi
     break
   fi
@@ -248,7 +251,7 @@ run_http_adversarial_contracts() {
     local curl_status=0
     code="$(curl --insecure --silent --show-error --output "$body" --write-out '%{http_code}' \
       --connect-timeout 5 --max-time 20 \
-      --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1" \
+      --resolve "nas-test.local:$HTTPS_PORT:${HOST_BIND_ADDRESS:-127.0.0.1}" \
       -H 'Remote-User: akadmin' \
       -H 'Remote-Groups: nas_admin,nas_allow_files,nas_allow_ai' \
       -H 'X-authentik-username: akadmin' \
@@ -272,16 +275,16 @@ run_http_adversarial_contracts() {
   log "Running curl-based HTTP adversarial contracts"
   probe_not_5xx "Cockpit hostile query" \
     "https://nas-test.local:$HTTPS_PORT/console/?q=%3Cscript%3EglobalThis.__nas_xss%3D1%3C%2Fscript%3E" \
-    --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1"
+    --resolve "nas-test.local:$HTTPS_PORT:${HOST_BIND_ADDRESS:-127.0.0.1}"
   probe_not_5xx "Cockpit encoded traversal" \
     "https://nas-test.local:$HTTPS_PORT/console/%2e%2e/%2e%2e/etc/passwd" \
-    --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1" --path-as-is
+    --resolve "nas-test.local:$HTTPS_PORT:${HOST_BIND_ADDRESS:-127.0.0.1}" --path-as-is
   probe_not_5xx "Caddy hostile query" \
     "https://nas-test.local:$HTTPS_PORT/?q=%3Csvg%2Fonload%3Dalert%281%29%3E" \
-    --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1"
+    --resolve "nas-test.local:$HTTPS_PORT:${HOST_BIND_ADDRESS:-127.0.0.1}"
   probe_not_5xx "Caddy encoded traversal" \
     "https://nas-test.local:$HTTPS_PORT/%2e%2e/%2e%2e/etc/shadow" \
-    --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1" --path-as-is
+    --resolve "nas-test.local:$HTTPS_PORT:${HOST_BIND_ADDRESS:-127.0.0.1}" --path-as-is
 
   for path in /shares/ /shares/admin/ /console/ /syncthing/ /vault/admin /metrics/ /alerts/; do
     probe_blocked "$path"
@@ -321,7 +324,7 @@ case "$WORKLOAD" in
     http_out="${NAS_HTTP_ADVERSARIAL_OUT:-$ROOT/http-adversarial.json}"
     install -d -m 0755 "$(dirname "$fuzz_out")"
     log "Running installed-command adversarial fuzzing in the disposable VM"
-    ssh "${ssh_args[@]}" admin@127.0.0.1 \
+    ssh "${ssh_args[@]}" admin@"${HOST_BIND_ADDRESS:-127.0.0.1}" \
       'sudo -n python3 /var/lib/nas-test/repo/tests/vm/adversarial-installed.py' >"$fuzz_out"
     python3 - "$ROOT" "$fuzz_out" <<'PY'
 import importlib.util
@@ -377,22 +380,22 @@ PY
     scan_mode="${NAS_ZAP_MODE:-baseline}"
     log "Running public and Cockpit ZAP $scan_mode scans"
     NAS_ZAP_OUT_DIR="$fuzz_out" \
-    NAS_ZAP_EXTRA_HOST="nas-test.local:127.0.0.1" \
+    NAS_ZAP_EXTRA_HOST="nas-test.local:${HOST_BIND_ADDRESS:-127.0.0.1}" \
     NAS_ZAP_REPORT_PREFIX="public" \
       run_zap_check public bash "$ROOT/scripts/zap-scan.sh" "$scan_mode" "https://nas-test.local:$HTTPS_PORT/"
     NAS_ZAP_OUT_DIR="$fuzz_out" \
     NAS_ZAP_REPORT_PREFIX="cockpit" \
-    NAS_ZAP_EXTRA_HOST="nas-test.local:127.0.0.1" \
+    NAS_ZAP_EXTRA_HOST="nas-test.local:${HOST_BIND_ADDRESS:-127.0.0.1}" \
       run_zap_check cockpit bash "$ROOT/scripts/zap-scan.sh" "$scan_mode" "https://nas-test.local:$HTTPS_PORT/console/"
     log "Running state-aware unauthenticated ZAP Client Spider and active scan"
     NAS_ZAP_OUT_DIR="$fuzz_out" \
-    NAS_ZAP_EXTRA_HOST="nas-test.local:127.0.0.1" \
+    NAS_ZAP_EXTRA_HOST="nas-test.local:${HOST_BIND_ADDRESS:-127.0.0.1}" \
       run_zap_check unauthenticated bash "$ROOT/scripts/zap-automation-scan.sh" unauthenticated "https://nas-test.local:$HTTPS_PORT/console/"
     log "Running state-aware authenticated ZAP Client Spider and active scan"
     NAS_ZAP_OUT_DIR="$fuzz_out" \
     NAS_ZAP_AUTH_USER="$TEST_USER" \
     NAS_ZAP_AUTH_PASSWORD="$TEST_PASSWORD" \
-    NAS_ZAP_EXTRA_HOST="nas-test.local:127.0.0.1" \
+    NAS_ZAP_EXTRA_HOST="nas-test.local:${HOST_BIND_ADDRESS:-127.0.0.1}" \
       run_zap_check authenticated bash "$ROOT/scripts/zap-automation-scan.sh" authenticated "https://nas-test.local:$HTTPS_PORT/console/"
     CI_REPORT_TITLE="Installed ZAP scans" python3 "$ROOT/scripts/ci-check-report.py" \
       --results "$CI_RESULTS_FILE" "${zap_outcomes[@]}"

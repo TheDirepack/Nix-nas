@@ -96,19 +96,23 @@ def close_browser(driver: webdriver.Chrome) -> None:
 
 
 def search_roots(driver: webdriver.Chrome) -> Iterator[Any]:
-    roots: list[Any] = [driver]
-    for root in roots:
-        yield root
-        try:
-            children = root.find_elements(By.CSS_SELECTOR, "*")
-        except WebDriverException:
-            continue
-        for child in children:
-            try:
-                shadow_root = child.shadow_root
-            except WebDriverException:
-                continue
-            roots.append(shadow_root)
+    yield driver
+    try:
+        # Discover in one remote command, without caching across stage replacements.
+        roots = driver.execute_script(
+            """
+            const roots = [document];
+            for (let index = 0; index < roots.length; index++) {
+                for (const element of roots[index].querySelectorAll('*')) {
+                    if (element.shadowRoot) roots.push(element.shadowRoot);
+                }
+            }
+            return roots.slice(1);
+            """
+        )
+    except WebDriverException:
+        return
+    yield from roots
 
 
 def first(driver: webdriver.Chrome, selectors: list[str]) -> Any:

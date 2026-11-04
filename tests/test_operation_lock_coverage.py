@@ -44,6 +44,32 @@ class OperationLockCoverageTests(unittest.TestCase):
         self.assertEqual(state["busyClasses"], [])
         self.assertEqual(state["active"], [])
 
+    def test_held_lock_with_unreadable_metadata_reports_unknown_operation(self) -> None:
+        locks.ensure_root()
+        with locks.acquire_operation("backup", ("storage",)):
+            metadata_path = self.root / locks.LOCK_PATH_NAME
+            metadata_path.write_text("{not json", encoding="utf-8")
+            state = locks.operation_state()
+            self.assertEqual(state["busyClasses"], [], "no mutation class may be fabricated")
+            self.assertEqual(len(state["active"]), 1)
+            self.assertEqual(state["active"][0]["action"], "unknown")
+            self.assertEqual(state["active"][0]["classes"], [])
+            self.assertIsNone(state["active"][0]["pid"])
+            self.assertIn("metadata is missing or unreadable", state["active"][0]["diagnostic"])
+
+    def test_held_lock_with_malformed_classes_reports_unknown_operation(self) -> None:
+        locks.ensure_root()
+        with locks.acquire_operation("backup", ("storage",)):
+            metadata_path = self.root / locks.LOCK_PATH_NAME
+            metadata_path.write_text(
+                '{"token":"' + "a" * 32 + '","action":"backup","classes":"storage"}\n',
+                encoding="utf-8",
+            )
+            state = locks.operation_state()
+            self.assertEqual(state["busyClasses"], [])
+            self.assertEqual(state["active"][0]["action"], "unknown")
+            self.assertIn("diagnostic", state["active"][0])
+
     def test_current_token_reads_environment_for_nested_process(self) -> None:
         os.environ[locks.COORDINATION_TOKEN_ENV] = "b" * 32
         self.assertEqual(locks.current_coordination_token(), "b" * 32)

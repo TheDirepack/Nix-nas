@@ -35,6 +35,9 @@ _QUADLET_DIRECT_NETWORK = re.compile(r"^nas-v2-net-([a-z][a-z0-9-]{0,63})\.netwo
 _QUADLET_SESSION_NETWORK = re.compile(r"^nas-v2-snet-([a-z][a-z0-9-]{0,63})\.network$")
 _QUADLET = re.compile(r"^nas-v2-[A-Za-z0-9_.@:-]+\.(?:container|pod|network|volume|kube|image|build)$")
 _SYSTEMCTL_TIMEOUT_SECONDS = 180
+# systemctl stop exits non-zero for units the manager cannot resolve; those
+# units cannot be running, so the reconcile's stop intent is already satisfied.
+_ALREADY_STOPPED_STATUSES = ("not found", "could not be found", "not loaded", "masked")
 
 
 def _read_json(path: pathlib.Path, *, required: bool) -> dict[str, Any]:
@@ -167,6 +170,11 @@ def _read_owned_link(target: pathlib.Path, projection_roots: tuple[pathlib.Path,
     if target.is_symlink():
         raw = pathlib.Path(os.readlink(target))
         linked = raw if raw.is_absolute() else target.parent / raw
+        if not linked.exists():
+            # Dangling symlink: the runtime link exists but its target is
+            # missing. Treat as drift so the reconcile loop repairs it rather
+            # than failing the whole activation.
+            return None
         resolved = _is_under(linked, projection_roots, strict=True)
         if not resolved.is_file():
             raise SystemdReconcileError(f"V2 runtime link does not target a generated file: {target}")
@@ -460,7 +468,14 @@ def reconcile(
 
     try:
         for unit in sorted(units_to_stop):
-            _run_systemctl(systemctl, "stop", unit)
+            result = _run_systemctl(systemctl, "stop", unit, check=False)
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout).strip()
+                # A unit that is unknown to the manager or cannot be started
+                # because it is not loaded/masked is already stopped; tolerate
+                # those documented statuses and keep stopping the rest.
+                if not any(marker in detail.lower() for marker in _ALREADY_STOPPED_STATUSES):
+                    raise SystemdReconcileError(f"systemctl stop {unit} failed: {detail}")
         for unit in sorted(retired_units):
             _run_systemctl(systemctl, "reset-failed", unit, check=False)
 

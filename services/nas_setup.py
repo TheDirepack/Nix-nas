@@ -90,6 +90,7 @@ SHARE_ROOT = pathlib.Path(os.environ.get("NAS_SHARE_ROOT", str(ZFS_ROOT / "share
 SYNCTHING_ENABLED = os.environ.get("NAS_SYNCTHING_ENABLE", "0") == "1"
 STATE_PATH = pathlib.Path(os.environ.get("NAS_SETUP_STATE", "/var/lib/nas-setup/state.json"))
 JOURNAL_PATH = pathlib.Path(os.environ.get("NAS_SETUP_JOURNAL", "/var/lib/nas-setup/first-run-journal.json"))
+COMPLETE_SETUP_STATUSES = frozenset({"complete", "complete-unverified"})
 FIRST_START_STATUS_PATH = pathlib.Path(os.environ.get("NAS_FIRST_START_STATUS", "/var/lib/nas-first-start/status.json"))
 MANAGED_SERVICES_CONTROL = os.environ.get("NAS_MANAGED_SERVICES_CONTROL", "nas-managed-services-control")
 MANAGED_SERVICES_DESIRED = pathlib.Path(os.environ.get("NAS_V2_DESIRED", "/var/lib/nas-control/services.yaml"))
@@ -696,8 +697,8 @@ def regenerate_boot_identity_databases(control_root: pathlib.Path) -> dict[str, 
     if timers:
         progress(f"pausing identity synchronization timers: {', '.join(timers)}")
         progress(f"previously active synchronization timers: {', '.join(active_timers) or 'none'}")
-        run_root(["systemctl", "stop", *timers])
-    run_root(["systemctl", "stop", *sync_units])
+        run_root(["systemctl", "stop", *timers], timeout_seconds=120)
+    run_root(["systemctl", "stop", *sync_units], timeout_seconds=120)
     run_root(
         [
             "systemctl",
@@ -710,11 +711,17 @@ def regenerate_boot_identity_databases(control_root: pathlib.Path) -> dict[str, 
             "postgresql.service",
             "nas-bootstrap-runtime-select.service",
             "nas-bootstrap-authentik-secrets.service",
-        ]
+        ],
+        # A deadlocked database must not consume the entire outer test budget.
+        # Fail fast so the caller reports the stalled service instead of
+        # waiting for the generic command timeout.
+        timeout_seconds=120,
     )
     for path in (authentik_root, postgresql_root):
         if path.is_dir() and not path.is_symlink():
-            run_root(["find", str(path), "-mindepth", "1", "-delete"])
+            # Constrain the cleanup of service data to avoid stalling the outer
+            # budget if a process is still holding a directory open.
+            run_root(["find", str(path), "-mindepth", "1", "-delete"], timeout_seconds=60)
     run_root(
         [
             "systemctl",
@@ -723,14 +730,15 @@ def regenerate_boot_identity_databases(control_root: pathlib.Path) -> dict[str, 
             "authentik-migrate.service",
             "authentik-worker.service",
             "authentik.service",
-        ]
+        ],
+        timeout_seconds=60,
     )
-    run_root(["systemctl", "start", "nas-bootstrap-authentik-secrets.service"])
-    run_root(["systemctl", "start", "nas-bootstrap-runtime-select.service"])
+    run_root(["systemctl", "start", "nas-bootstrap-authentik-secrets.service"], timeout_seconds=120)
+    run_root(["systemctl", "start", "nas-bootstrap-runtime-select.service"], timeout_seconds=120)
     # A failed regeneration requires manual recovery; do not resume triggers
     # against partially regenerated identity state.
     if active_timers:
-        run_root(["systemctl", "start", *active_timers])
+        run_root(["systemctl", "start", *active_timers], timeout_seconds=120)
     return {"regenerated": True, "bootSide": True}
 
 
@@ -892,9 +900,8 @@ def prepare_storage_runtime(keepass_password: str, encrypt_storage: bool | None 
         run_root(["systemctl", "start", "nas-zfs-unlock.service"])
     run_storage_host(["nas-zfs-mount-check"])
     run_storage_host(["systemd-tmpfiles", "--create", "--graceful"])
-    # The initial seed runs before the new ZFS mount exists and is hidden by
-    # that mount. Re-run it against the permanent data root before any managed
-    # service reconciliation can observe a missing desired-state authority.
+    # Boot-time seeding skips an unmounted ZFS root. Run it now against the
+    # newly mounted data root before reconciling any managed services.
     run_root(["systemctl", "restart", "nas-managed-services-seed.service"])
     return {"mounted": True, "runtimeDirectoriesPrepared": True}
 
@@ -1101,6 +1108,7 @@ def _remove_setup_application() -> dict[str, Any]:
         "http://127.0.0.1:9000/api/v3",
     ]
     last_error: str | None = None
+    not_found_count = 0
     for base in bases:
         url = f"{base}/core/applications/{SETUP_APPLICATION_SLUG}/"
         request = urllib.request.Request(url, method="DELETE", headers={"Authorization": f"Bearer {token}"})
@@ -1110,13 +1118,18 @@ def _remove_setup_application() -> dict[str, Any]:
                 if response.status in (200, 201, 202, 204):
                     return {"removed": True, "slug": SETUP_APPLICATION_SLUG}
         except urllib.error.HTTPError as exc:
+            # A 404 from one API base does not mean the application is absent
+            # everywhere; only a 404 from every base proves it is gone.
             if exc.code == 404:
-                return {"removed": False, "reason": "not-found"}
+                not_found_count += 1
+                continue
             last_error = f"HTTP {exc.code}"
             continue
         except OSError as exc:
             last_error = str(exc)
             continue
+    if not_found_count == len(bases):
+        return {"removed": False, "reason": "not-found"}
     raise SetupError(f"Unable to retire the Authentik setup application: {last_error or 'unknown error'}")
 
 
@@ -1159,18 +1172,22 @@ def adopt_bootstrap_authentik_authority(keepass_password: str) -> dict[str, bool
     except OSError as exc:
         raise SetupError("The running first-boot Authentik authority is unavailable") from exc
     secret_key = ""
+    bootstrap_password = ""
     for line in environment.splitlines():
         if line.startswith("AUTHENTIK_SECRET_KEY="):
             secret_key = line.partition("=")[2].strip()
-            break
+        elif line.startswith("AUTHENTIK_BOOTSTRAP_PASSWORD="):
+            bootstrap_password = line.partition("=")[2].strip()
     if re.fullmatch(r"[0-9A-Fa-f]{128}", secret_key) is None:
         raise SetupError("The first-boot Authentik secret key is malformed")
     if re.fullmatch(r"[0-9A-Fa-f]{64}", token) is None:
         raise SetupError("The first-boot Authentik token is malformed")
+    if re.fullmatch(r"[0-9A-Fa-f]{48}", bootstrap_password) is None:
+        raise SetupError("The first-boot Authentik password is missing or malformed")
     try:
         run_admin(
             coordinated_child(["nas-secrets", "adopt-authentik-bootstrap-stdin"]),
-            input_text=f"{keepass_password}\n{secret_key}\n{token}\n",
+            input_text=f"{keepass_password}\n{secret_key}\n{token}\n{bootstrap_password}\n",
         )
         if runtime_secrets_ready():
             run_interactive_privileged(
@@ -1180,6 +1197,7 @@ def adopt_bootstrap_authentik_authority(keepass_password: str) -> dict[str, bool
     finally:
         secret_key = ""
         token = ""
+        bootstrap_password = ""
 
 
 def run_setup_stage(
@@ -1381,7 +1399,61 @@ def setup_state_matches(report: Mapping[str, Any]) -> bool:
         current = json.loads(STATE_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    return current == report
+    # Timestamps and durations change on every resume attempt, so only the
+    # stable fields decide whether the persisted report matches.
+    volatile = {"completedAt", "durationSeconds"}
+    current_stable = {k: v for k, v in current.items() if k not in volatile}
+    report_stable = {k: v for k, v in report.items() if k not in volatile}
+    return current_stable == report_stable
+
+
+def completed_setup_report() -> dict[str, Any] | None:
+    """Return the persisted completed setup report, or None when setup has not completed.
+
+    Only an absent state file is the bootstrap case. Unreadable or corrupt
+    state is fatal: treating it as absent restarts setup over an initialized
+    system and rewrites its authority.
+    """
+    try:
+        raw = STATE_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SetupError(f"Setup state {STATE_PATH} is unreadable: {exc}") from exc
+    try:
+        existing = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SetupError(f"Setup state {STATE_PATH} is corrupt: {exc}") from exc
+    if not isinstance(existing, dict):
+        raise SetupError(f"Setup state {STATE_PATH} is not a JSON object")
+    if existing.get("status") not in COMPLETE_SETUP_STATUSES:
+        return None
+    return existing
+
+
+def finish_interrupted_setup_journal(report: Mapping[str, Any]) -> None:
+    """Finish the journal left open when the process died after the final state write.
+
+    Setup writes the completed state before marking the journal complete. A
+    crash in that window must finish the journal on retry: refusing wedges
+    setup, and re-running it rewrites initialized state.
+    """
+    try:
+        existing = load_json(JOURNAL_PATH)
+    except JournalError as exc:
+        raise SetupError(str(exc)) from exc
+    if existing is None or existing.get("status") == "complete":
+        return
+    if existing.get("schemaVersion") != 1 or existing.get("workflow") != "first-run-v2":
+        raise SetupError(f"Setup state is complete but {JOURNAL_PATH} belongs to another operation; reconcile it")
+    journal = OperationJournal(JOURNAL_PATH, existing)
+    if existing.get("status") not in {"pending", "running", "resuming"} or not journal.step_complete("final-state"):
+        raise SetupError(
+            f"Setup state is complete but {JOURNAL_PATH} stopped at {existing.get('status')!r}; "
+            "acknowledge manual recovery before retrying"
+        )
+    recorded = journal.result("final-state")
+    journal.complete(recorded if isinstance(recorded, Mapping) else dict(report))
 
 
 def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
@@ -2092,9 +2164,31 @@ def first_run(args: argparse.Namespace) -> dict[str, Any]:
     reservation_token = getattr(args, "reservation_token", None)
     if not isinstance(reservation_token, str):
         reservation_token = None
+    # Fail closed before taking the lock when persisted state is unreadable or
+    # corrupt. Only an absent state file means this is a genuine first run.
+    completed_setup_report()
     try:
         with acquire_operation("first-start-v2", SETUP_OPERATION_CLASSES, reservation_token=reservation_token):
-            result = _first_run_locked(args)
+            # Re-check under the lock: a pre-lock read can be stale, and the
+            # inherited-coordination path validates a parent lock instead of
+            # taking the flock itself.
+            recorded = completed_setup_report()
+            if recorded is None:
+                result = _first_run_locked(args)
+            else:
+                requested_digest = getattr(args, "confirm_plan_digest", None)
+                recorded_digest = recorded.get("planDigest")
+                if (
+                    isinstance(requested_digest, str)
+                    and isinstance(recorded_digest, str)
+                    and requested_digest != recorded_digest
+                ):
+                    raise SetupError(
+                        "Initial setup already completed with a different plan; reconcile the configuration "
+                        "before retrying"
+                    )
+                finish_interrupted_setup_journal(recorded)
+                result = recorded
         run_root(["systemctl", "start", "nas-protected-services.target"])
         ensure_secret_gated_services()
         if (
@@ -2104,6 +2198,9 @@ def first_run(args: argparse.Namespace) -> dict[str, Any]:
             != 0
         ):
             raise SetupError("Protected services did not become active after first-start released its locks")
+        if recorded is not None:
+            # Publish current configuration and authority health after recovery.
+            prepare_first_start(args.config)
         return result
     except OperationBusyError as exc:
         raise SetupError(str(exc)) from exc

@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 from repo_test_utils import ROOT, text
@@ -55,6 +61,20 @@ class ContractTests(unittest.TestCase):
         self.assertIn("services.telegraf", observability)
         self.assertIn('path_smartctl = "${smartctlReadOnly}";', observability)
         self.assertIn("use_sudo = true", observability)
+        # The setuid sudo wrapper is only reachable through /run/wrappers/bin.
+        self.assertIn('path = [ "/run/wrappers/bin" ];', observability)
+        # SAML POST bindings need explicit CSP form-action origins, configured
+        # through the validated option and passed to every Authentik unit.
+        core = text("modules/nas/options/core.nix")
+        self.assertIn("samlFormActionOrigins = lib.mkOption", core)
+        self.assertIn(
+            "AUTHENTIK_SAML_IDP_FORM_ACTION_DOMAINS",
+            text("modules/nas/config/application-services.nix"),
+        )
+        # The UPS monitor password is read by the container at runtime; the Nix
+        # store must never contain its value.
+        self.assertNotIn("builtins.readFile cfg.power.ups.passwordFile", observability)
+        self.assertIn('NUTWG__UPSD__PASSWORD = "/run/secrets/nut-password";', observability)
         self.assertIn("services.smartd.enable = lib.mkDefault false", storage)
         schedules = text("modules/nas/config/schedules.nix")
         self.assertIn("protectedServiceUnits", schedules)
@@ -112,7 +132,7 @@ class ContractTests(unittest.TestCase):
         )[0]
         protected = text("modules/nas/config/systemd-services.nix")
 
-        self.assertNotIn("nas-zfs-mount-guard.service", seed)
+        self.assertIn("nas-zfs-mount-guard.service", seed)
         self.assertNotIn("RequiresMountsFor", seed)
         self.assertIn("nas-zfs-mount-guard.service", reconcile)
         self.assertIn("systemd-tmpfiles --create --graceful --prefix", protected)
@@ -150,7 +170,14 @@ class ContractTests(unittest.TestCase):
         setup = text("services/nas_setup.py")
         self.assertIn("nas-bootstrap-authentik-secrets", applications)
         self.assertIn("openssl rand -hex 64", applications)
-        self.assertIn("AUTHENTIK_BOOTSTRAP_PASSWORD=${bootstrapPassword}", applications)
+        # The bootstrap password must never be embedded from the Nix
+        # evaluation, where it would be recoverable from /nix/store. The unit
+        # generates it at runtime with openssl and only ever assigns the
+        # generated shell variable.
+        self.assertNotIn("AUTHENTIK_BOOTSTRAP_PASSWORD=${", applications)
+        self.assertNotIn("AUTHENTIK_BOOTSTRAP_PASSWORD=" + "${bootstrapPassword}", applications)
+        self.assertIn("AUTHENTIK_BOOTSTRAP_PASSWORD='\"$bootstrap_password", applications)
+        self.assertIn("openssl rand -hex 24", applications)
         self.assertIn('authentikRuntimeEnvironmentFile = "/run/nas-authentik/environment";', base)
         self.assertIn('authentikRuntimeApiTokenFile = "/run/nas-authentik/api-token";', base)
         self.assertIn("sudo systemctl reset-failed", secrets)
@@ -183,7 +210,9 @@ class ContractTests(unittest.TestCase):
         self.assertIn("--local-session", services)
         self.assertNotIn("settings.bearer", services)
         self.assertNotIn("nas-cockpit-oauth", services)
-        self.assertIn("--address 127.0.0.1", services)
+        self.assertNotIn("--address", services)
+        self.assertNotIn("--port", services)
+        self.assertIn('ListenStream = "/run/nas-cockpit-sso/ws.sock";', services)
         self.assertIn("AllowUnencrypted = false", services)
         self.assertIn("activate-stdin)", secrets)
 
@@ -230,6 +259,14 @@ class ContractTests(unittest.TestCase):
         self.assertIn("pkgs.nodejs_22", zfs)
         self.assertIn("cfg.observability.serviceGid", validation)
         self.assertIn('${if cfg.tftp.writable then "rw" else "r"}: *', text("modules/nas/config/system.nix"))
+
+    def test_legacy_podman_graphroot_fails_fast_instead_of_being_ignored(self) -> None:
+        virtualization = text("modules/nas/config/virtualization.nix")
+        check = virtualization.split("containersStorageCheck =", 1)[1].split("'';", 1)[0]
+        self.assertIn('[[ -L "$legacy" || ! -d "$legacy" ]]', check)
+        self.assertIn("exit 1", check)
+        self.assertIn('requires = [ "nas-containers-storage-check.service" ];', virtualization)
+        self.assertIn('after = [ "nas-containers-storage-check.service" ];', virtualization)
 
     def test_observability_consumes_compiled_v2_service_state(self) -> None:
         observability = text("modules/nas/config/observability.nix")
@@ -346,3 +383,74 @@ class ContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RuntimeSelectRelinkTests(unittest.TestCase):
+    """The boot-side selector must not delete pre-existing service data."""
+
+    def guard(self, root: pathlib.Path):
+        applications = text("modules/nas/config/application-services.nix")
+        script = applications.split("ExecStart = pkgs.writeShellScript \"nas-bootstrap-runtime-select\" ''", 1)[
+            1
+        ].split("\n      '';", 1)[0]
+        start = script.index("link_root=")
+        end = script.index("done", script.index('ln -s "$target/$name"')) + len("done")
+        snippet = script[start:end].replace("''${", "${")
+        snippet = re.sub(r"\$\{pkgs\.[^}]+\}/bin/", "", snippet)
+        return 'set -Eeuo pipefail\ntarget="$LINK_ROOT/target"\nmkdir -p "$target"\n' + snippet + "\n"
+
+    def run_guard(self, root: pathlib.Path):
+        bash = shutil.which("bash")
+        assert bash is not None, "test tool unavailable: bash"
+        return subprocess.run(
+            [bash, "--noprofile", "--norc", "-c", self.guard(root)],
+            env={**os.environ, "LINK_ROOT": str(root), "NAS_CONTROL_PLANE_LINK_ROOT": str(root)},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def test_populated_service_directory_is_refused_and_left_intact(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            populated = root / "authentik"
+            populated.mkdir()
+            (populated / "database.sqlite3").write_text("keep me\n", encoding="utf-8")
+            result = self.run_guard(root)
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+            self.assertIn("Refusing to replace populated service data", result.stderr)
+            self.assertEqual("keep me\n", (populated / "database.sqlite3").read_text(encoding="utf-8"))
+            self.assertFalse((root / "nas-secrets").is_symlink())
+
+    def test_skel_only_home_directory_is_replaced(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            home = root / "authentik"
+            home.mkdir()
+            (home / ".bashrc").write_text("# skel\n", encoding="utf-8")
+            (home / ".profile").write_text("# skel\n", encoding="utf-8")
+            result = self.run_guard(root)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertTrue((root / "authentik").is_symlink())
+
+    def test_empty_or_linked_destinations_are_relinked(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            (root / "authentik").mkdir()
+            (root / "postgresql").symlink_to(root / "old-postgresql")
+            result = self.run_guard(root)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            for name in ("authentik", "postgresql", "nas-secrets"):
+                destination = root / name
+                self.assertTrue(destination.is_symlink(), name)
+                self.assertEqual(root / "target" / name, destination.resolve(), name)
+
+    def test_unexpected_regular_file_is_refused(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            (root / "nas-secrets").write_text("unexpected\n", encoding="utf-8")
+            result = self.run_guard(root)
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+            self.assertIn("Refusing to replace unexpected service data", result.stderr)
+            self.assertTrue((root / "nas-secrets").is_file())
+            self.assertFalse((root / "nas-secrets").is_symlink())

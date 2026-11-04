@@ -6,6 +6,7 @@ import hashlib
 import importlib
 import importlib.util
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -13,6 +14,7 @@ import subprocess
 import tempfile
 import unittest
 from html.parser import HTMLParser
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests/fixtures/authentik-csp"
@@ -70,6 +72,84 @@ class AuthentikCspPatchTests(unittest.TestCase):
         assert value is not None, f"Authentik settings have no {name} assignment"
         return value
 
+    def policy(self):
+        namespace = {
+            "SELF": "'self'",
+            "NONE": "'none'",
+            "NONCE": object(),
+            "UNSAFE_INLINE": "'unsafe-inline'",
+            "SAML_IDP_FORM_ACTION_DOMAINS": (),
+        }
+        return eval(
+            compile(ast.Expression(self.assignment("CONTENT_SECURITY_POLICY")), "authentik-csp-policy", "eval"),
+            namespace,
+        )["DIRECTIVES"]
+
+    def test_hunks_are_ordered_so_gnu_patch_can_apply_the_series(self):
+        """Nix applies these patches with GNU patch, which rejects out-of-order hunks.
+
+        ``git apply`` tolerates them, so only the tool used by the build catches
+        a reversed hunk block.
+        """
+        current_file = None
+        previous_old_start = 0
+        for line in PATCH.read_text(encoding="utf-8").splitlines():
+            if line.startswith("+++ b/"):
+                current_file = line[len("+++ b/") :]
+                previous_old_start = 0
+                continue
+            if not line.startswith("@@"):
+                continue
+            match = re.match(r"@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@", line)
+            self.assertIsNotNone(match, f"unparsable hunk header in {current_file}: {line}")
+            assert match is not None
+            old_start = int(match.group(1))
+            self.assertGreaterEqual(
+                old_start,
+                previous_old_start,
+                f"hunks in {current_file} are not in ascending source order",
+            )
+            previous_old_start = old_start
+
+    def test_saml_form_action_origins_are_validated_from_the_environment(self) -> None:
+        tree = ast.parse(self.settings_source)
+        function = next(
+            node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_saml_form_action_domains"
+        )
+        source = ast.get_source_segment(self.settings_source, function)
+        assert source is not None
+        module_path = self.tree / "saml_form_action_probe.py"
+        module_path.write_text(
+            "import os\nfrom urllib.parse import urlsplit\n\n" + source + "\n",
+            encoding="utf-8",
+        )
+        spec = importlib.util.spec_from_file_location("saml_form_action_probe", module_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with mock.patch.dict(
+            os.environ,
+            {
+                "AUTHENTIK_SAML_IDP_FORM_ACTION_DOMAINS": (
+                    "https://idp.example.org, https://idp.example.org/, "
+                    "https://login.example.net:8443, http://insecure.example.org, "
+                    "https://path.example.org/sso, https://user:pw@evil.example.org, "
+                    "https://idp.example.org?query=1, not-a-url, "
+                )
+            },
+            clear=False,
+        ):
+            origins = module._saml_form_action_domains()
+        self.assertEqual(
+            ("https://idp.example.org", "https://login.example.net:8443"),
+            origins,
+        )
+        # An absent or empty variable keeps only 'self' as the form target.
+        with mock.patch.dict(os.environ, {"AUTHENTIK_SAML_IDP_FORM_ACTION_DOMAINS": ""}, clear=False):
+            self.assertEqual((), module._saml_form_action_domains())
+        self.assertIn("form-action", self.settings_source)
+        self.assertIn("*SAML_IDP_FORM_ACTION_DOMAINS", self.settings_source)
+
     def test_nonce_middleware_preserves_csrf_session_and_uploaded_file_policies(self):
         middleware = ast.literal_eval(self.assignment("MIDDLEWARE"))
         self.assertIn("csp.middleware.CSPMiddleware", middleware)
@@ -78,7 +158,12 @@ class AuthentikCspPatchTests(unittest.TestCase):
         policy = self.assignment("CONTENT_SECURITY_POLICY")
         self.assertIsNotNone(policy, "Authentik does not enforce a nonce CSP")
         policy_source = ast.unparse(policy)
-        self.assertNotIn("unsafe-inline", policy_source)
+        directives = self.policy()
+        self.assertEqual(directives["style-src-attr"], ["'none'"])
+        for sources in directives.values():
+            self.assertNotIn("'unsafe-inline'", sources)
+            self.assertNotIn("'unsafe-eval'", sources)
+            self.assertNotIn("'unsafe-hashes'", sources)
         self.assertNotIn("https:", policy_source)
         self.assertIn("NONCE", policy_source)
         self.assertNotIn("EXCLUDE_URL_PREFIXES", policy_source)
@@ -104,12 +189,25 @@ class AuthentikCspPatchTests(unittest.TestCase):
         self.assertEqual(len(sources), 5)
         for source in sources:
             text = source.read_text()
-            self.assertNotRegex(text, r"(?<![\w.-])style=", str(source))
-            self.assertNotIn("styleMap", text, str(source))
+            # styleMap requires an attribute part; the build loader repairs its
+            # initial update so even the first render uses CSSOM property writes.
+            self.assertNotIn('style="', text, str(source))
+            self.assertNotIn('setAttribute("style"', text, str(source))
+            for line in text.splitlines():
+                if "styleMap" in line and "lit/directives/style-map.js" not in line:
+                    self.assertIn("style=${styleMap(", line, f"unsafe styleMap binding: {source}: {line}")
+                    self.assertNotIn(
+                        ".style=${styleMap(", line, f"styleMap requires an attribute part: {source}: {line}"
+                    )
+            if "styleMap(" in text:
+                self.assertIn('from "lit/directives/style-map.js"', text, f"styleMap used without its import: {source}")
             for tag in re.findall(r"<style\b[^>]*>", text):
                 self.assertIn("nonce=${window.litNonce}", tag)
+        skeleton = (self.tree / "authentik/core/templates/base/skeleton.html").read_text()
+        self.assertIn("window.litNonce", skeleton)
+        self.assertLess(skeleton.index("window.litNonce"), skeleton.index("{% block head_before %}"))
         progress = (self.tree / "web/src/elements/ak-progress-bar.ts").read_text()
-        self.assertIn(".style=", progress)
+        self.assertIn("style=${styleMap(", progress)
         self.assertIn("Math.min(this.value, 100)", progress)
         self.assertIn("aria-valuenow", progress)
         grid = (self.tree / "web/src/user/LibraryPage/ApplicationList.ts").read_text()
@@ -137,57 +235,60 @@ class AuthentikCspPatchTests(unittest.TestCase):
         self.assertIn(f"sha256-{digest}", policy_source)
         modified_digest = base64.b64encode(hashlib.sha256((stylesheet + "*").encode()).digest()).decode()
         self.assertNotIn(f"sha256-{modified_digest}", policy_source)
-        self.assertIn("'style-src-attr': [NONE]", policy_source)
+        self.assertEqual(self.policy()["style-src-attr"], ["'none'"])
+        self.assertIn("'style-src': [SELF, NONCE,", policy_source)
 
-    @unittest.skipUnless(shutil.which("node"), "requires Node.js for the pinned PatternFly build fixture")
-    def test_build_loader_uses_cssom_for_tooltips_and_refuses_dependency_drift(self):
-        loader = self.tree / "web/bundler/style-loader-plugin/node.js"
-        tooltip = self.tree / "patternfly/pf-tooltip.js"
+    def test_pinned_lit_fixture_integrity(self):
+        manifest = json.loads((FIXTURES / "lit-html.json").read_text())
+        self.assertEqual(manifest["authentikRevision"], "e1c90f3fae9d86d6a7a4f36018dafa9a1554f670")
+        self.assertEqual(manifest["package"]["version"], "3.3.2")
+        for name, digest in manifest["files"].items():
+            self.assertEqual(
+                hashlib.sha256((FIXTURES / "lit-html" / f"{name}.txt").read_bytes()).hexdigest(), digest, name
+            )
+
+    @unittest.skipUnless(shutil.which("node"), "requires Node.js for the pinned Lit build fixture")
+    def test_build_loader_repairs_first_style_map_update_and_refuses_dependency_drift(self):
         probe = r"""
             import assert from 'node:assert/strict';
             import {readFileSync, writeFileSync} from 'node:fs';
-            const [loaderPath, tooltipPath] = process.argv.slice(2);
-            const source = readFileSync(loaderPath, 'utf8')
-                .replace('import { ConsoleLogger } from "#logger/node";',
-                    'const ConsoleLogger = {child: () => ({})};')
-                .replace('import { resolvePackage } from "@goauthentik/core/paths/node";',
-                    'const resolvePackage = () => "owned-patternfly-fixture";')
-                .replace('createRequire(import.meta.url)',
-                    'createRequire("file:///owned-style-loader.js")');
-            const {styleLoaderPlugin} = await import(
-                `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
-            const loads = [];
-            styleLoaderPlugin().setup({initialOptions: {}, onDispose() {}, onResolve() {},
-                onLoad(options, callback) {loads.push({options, callback});}});
-            const loader = loads.find(({options}) => !options.namespace && options.filter.test(
-                '/node_modules/@patternfly/elements/pf-tooltip/pf-tooltip.js'));
-            assert.ok(loader, 'No CSP-safe PatternFly dependency loader registered');
-            assert.equal(loader.options.filter.test('/owned/pf-tooltip.js'), false);
-            const result = await loader.callback({path: tooltipPath});
-            assert.equal(result.loader, 'js');
-            assert.deepEqual(result.watchFiles, [tooltipPath]);
-            const binding = result.contents.match(/\.style="\$\{(Object\.entries\(styles\)[^\n]+)\}"/);
-            assert.ok(binding, 'Tooltip binding must preserve CSS custom properties');
-            const serialize = new Function('styles', 'return ' + binding[1]);
-            assert.equal(serialize({'--_floating-content-translate': '14px -25px'}),
-                '--_floating-content-translate: 14px -25px;');
-            assert.equal(serialize({}), '');
-            const original = readFileSync(tooltipPath, 'utf8');
-            writeFileSync(tooltipPath, original.replace('styleMap(styles)', 'styleMap(changedStyles)'));
-            await assert.rejects(() => loader.callback({path: tooltipPath}), /Unsupported PatternFly tooltip/);
-            console.log(JSON.stringify(result.contents));
+            import path from 'node:path';
+            import {pathToFileURL} from 'node:url';
+            const {createAuthentikCspFixture} = await import(pathToFileURL(process.argv[2]).href);
+            const fixture = await createAuthentikCspFixture();
+            try {
+                const loads = [];
+                fixture.styleLoaderPlugin().setup({initialOptions: {}, onDispose() {}, onResolve() {},
+                    onLoad(options, callback) {loads.push({options, callback});}});
+                const loader = loads.find(({options}) => !options.namespace && options.filter.test(
+                    '/node_modules/lit-html/directives/style-map.js'));
+                assert.ok(loader, 'No CSP-safe Lit dependency loader registered');
+                assert.equal(loader.options.filter.test('/owned/directives/style-map.js'), false);
+                assert.equal(loader.options.filter.test('/node_modules/@patternfly/elements/pf-tooltip/pf-tooltip.js'), false);
+                assert.equal(loader.options.filter.test('/node_modules/lit-html/development/directives/style-map.js'), true);
+                const sourcePath = path.join(fixture.lit, 'directives/style-map.js');
+                const original = readFileSync(sourcePath, 'utf8');
+                const result = await loader.callback({path: sourcePath});
+                assert.equal(result.loader, 'js');
+                assert.equal(result.resolveDir, path.dirname(sourcePath));
+                assert.deepEqual(result.watchFiles, [sourcePath]);
+                const initial = 'return this.ft=new Set(Object.keys(r)),this.render(r);';
+                assert.equal(result.contents, original.replace(initial, 'this.ft=new Set;'));
+                for (const drift of [original + '\n', original.replace(initial, ''), original + initial]) {
+                    writeFileSync(sourcePath, drift);
+                    await assert.rejects(() => loader.callback({path: sourcePath}), /Unsupported Lit styleMap/);
+                }
+            } finally {
+                await fixture.dispose();
+            }
         """
         result = subprocess.run(
-            ["node", "--input-type=module", "-", str(loader), str(tooltip)],
+            ["node", "--input-type=module", "-", str(ROOT / "tests/lib/authentik-csp-fixture.mjs")],
             input=probe,
             text=True,
             capture_output=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        compiled_source = json.loads(result.stdout)
-        self.assertNotIn("styleMap", compiled_source)
-        self.assertEqual(compiled_source.count(".style="), 2)
-        self.assertIn("display", compiled_source)
 
     @unittest.skipUnless(importlib.util.find_spec("csp"), "requires the Nix test shell's django-csp")
     def test_real_middleware_renders_unique_nonces_and_preserves_stricter_response_csp(self):
@@ -199,10 +300,14 @@ class AuthentikCspPatchTests(unittest.TestCase):
             )
             django.setup()
         constants = importlib.import_module("csp.constants")
-        namespace = {name: getattr(constants, name) for name in ("SELF", "NONE", "NONCE")}
+        namespace = {name: getattr(constants, name) for name in ("SELF", "NONE", "NONCE", "UNSAFE_INLINE")}
+        namespace["SAML_IDP_FORM_ACTION_DOMAINS"] = ()
         policy = self.assignment("CONTENT_SECURITY_POLICY")
         self.assertIsNotNone(policy, "Authentik does not enforce a nonce CSP")
         directives = eval(compile(ast.Expression(policy), "authentik-csp-policy", "eval"), namespace)
+        self.assertEqual(directives["DIRECTIVES"]["style-src-attr"], [constants.NONE])
+        for sources in directives["DIRECTIVES"].values():
+            self.assertNotIn(constants.UNSAFE_INLINE, sources)
         middleware_class = importlib.import_module("csp.middleware").CSPMiddleware
         request_factory = importlib.import_module("django.test").RequestFactory()
         override_settings = importlib.import_module("django.test").override_settings
@@ -245,8 +350,12 @@ class AuthentikCspPatchTests(unittest.TestCase):
                     self.assertEqual(set(parser.inline), {nonce})
                     self.assertNotIn(nonce, nonces)
                     nonces.add(nonce)
-                    self.assertIn(f"'nonce-{nonce}'", response["Content-Security-Policy"])
-                    self.assertNotIn("unsafe-inline", response["Content-Security-Policy"])
+                    header = response["Content-Security-Policy"]
+                    self.assertIn(f"'nonce-{nonce}'", header)
+                    self.assertNotIn("'unsafe-inline'", header)
+                    self.assertNotIn("'unsafe-eval'", header)
+                    self.assertNotIn("'unsafe-hashes'", header)
+                    self.assertIn("style-src-attr 'none'", header)
             request = request_factory.get("/identity/media/uploaded.html")
             middleware.process_request(request)
             response = http_response()

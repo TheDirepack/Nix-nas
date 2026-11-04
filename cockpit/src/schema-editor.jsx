@@ -1,4 +1,4 @@
-import React, {useMemo, useState} from "react";
+import React, {useMemo, useRef, useState} from "react";
 import {
   Button,
   Checkbox,
@@ -34,9 +34,18 @@ function description(schema) {
 }
 
 function replaceObjectKey(value, oldKey, newKey) {
-  const result = {};
+  // Object.create(null) yields a prototype-less object so "__proto__" is
+  // always an own data property, never resolved through the prototype chain.
+  // Object.defineProperty copies each entry explicitly so "__proto__" is
+  // preserved as an enumerable own key rather than triggering the setter.
+  const result = Object.create(null);
   for (const [key, entry] of Object.entries(value || {})) {
-    result[key === oldKey ? newKey : key] = entry;
+    Object.defineProperty(result, key === oldKey ? newKey : key, {
+      enumerable: true,
+      writable: true,
+      configurable: true,
+      value: entry,
+    });
   }
   return result;
 }
@@ -161,6 +170,7 @@ function ObjectEditor({root, schema, value, onChange, path}) {
   const [fieldToAdd, setFieldToAdd] = useState("");
   const [newKey, setNewKey] = useState("");
   const [keyError, setKeyError] = useState("");
+  const composing = useRef(false);
   const namePattern = propertyNamePattern(root, resolved);
 
   const setProperty = (name, next) => {
@@ -168,6 +178,13 @@ function ObjectEditor({root, schema, value, onChange, path}) {
     if (next === undefined) delete copy[name];
     else copy[name] = next;
     onChange(copy);
+  };
+
+  const renameDynamic = (from, next) => {
+    if (!next || hasOwn(object, next) || (namePattern && !new RegExp(namePattern).test(next))) {
+      return;
+    }
+    onChange(replaceObjectKey(object, from, next));
   };
 
   const addDynamic = () => {
@@ -239,21 +256,26 @@ function ObjectEditor({root, schema, value, onChange, path}) {
         </div>
       ) : null}
 
-      {dynamicEntries.map(([name, entry]) => (
-        <div className="nas-schema-map-entry" key={`${path}.${name}`}>
+      {dynamicEntries.map(([name, entry], index) => (
+        <div className="nas-schema-map-entry" key={`${path}-map-${index}`}>
           <div className="nas-schema-map-key">
             <TextInput
               value={name}
               aria-label={`Key for ${name}`}
-              onChange={(_event, next) => {
-                if (
-                  !next ||
-                  hasOwn(object, next) ||
-                  (namePattern && !new RegExp(namePattern).test(next))
-                ) {
-                  return;
-                }
-                onChange(replaceObjectKey(object, name, next));
+              onCompositionStart={() => {
+                composing.current = true;
+              }}
+              onCompositionEnd={(event) => {
+                // Safari may dispatch the final input event after compositionend
+                // with isComposing still true, so commit the composed key here.
+                // The subsequent onChange sees the new key and is a no-op.
+                composing.current = false;
+                renameDynamic(name, event.currentTarget.value);
+              }}
+              onChange={(event, next) => {
+                // Ignore intermediate IME text; compositionend commits it.
+                if (composing.current || event.nativeEvent?.isComposing) return;
+                renameDynamic(name, next);
               }}
             />
             <Button variant="danger" size="sm" onClick={() => setProperty(name, undefined)}>
@@ -267,6 +289,7 @@ function ObjectEditor({root, schema, value, onChange, path}) {
             onChange={(next) => setProperty(name, next)}
             path={`${path}.${name}`}
             label={name}
+            keyLabel={name}
             required
           />
         </div>
@@ -293,18 +316,29 @@ function ObjectEditor({root, schema, value, onChange, path}) {
   );
 }
 
-function SchemaNode({root, schema, value, onChange, path, label, required = false}) {
+function SchemaNode({
+  root,
+  schema,
+  value,
+  onChange,
+  path,
+  label,
+  required = false,
+  keyLabel = null,
+}) {
   const resolved = resolveSchema(root, schema);
   const options = variantOptions(root, resolved);
   const selected = options.length ? selectVariantIndex(root, resolved, value) : -1;
   const active = options.length ? selectedSchema(root, resolved, value, selected) : resolved;
   const type = schemaType(root, active);
   const id = `nas-schema-${path.replaceAll(/[^A-Za-z0-9_-]/g, "-")}`;
+  const title = titleFor(active, label);
+  const legend = keyLabel ? (title === label ? keyLabel : `${keyLabel} — ${title}`) : title;
 
   return (
     <fieldset className={`nas-schema-node nas-schema-node--${type}`}>
       <legend>
-        {titleFor(active, label)} {required ? <Label isCompact>required</Label> : null}
+        {legend} {required ? <Label isCompact>required</Label> : null}
       </legend>
       {description(active)}
       {options.length ? (

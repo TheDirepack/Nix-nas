@@ -382,15 +382,18 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
             self.assertEqual(json.loads(state.read_text())["devices"], [])
             self.assertFalse(journal.exists())
 
-    def test_reconcile_recovers_after_state_commit_before_journal_commit(self) -> None:
+    def test_reconcile_recovers_after_journal_commit_before_state_commit(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
             state, journal = root / "state.json", root / "journal.json"
             original_write = sync.atomic_write_json
+            fail_state_commit = True
 
             def fail_commit(path, value):
-                if path == journal and value.get("phase") == "committed":
-                    raise OSError("interrupted journal commit")
+                nonlocal fail_state_commit
+                if path == state and fail_state_commit:
+                    fail_state_commit = False
+                    raise OSError("interrupted state commit")
                 return original_write(path, value)
 
             def request(path: str, **_kwargs: Any) -> object:
@@ -405,13 +408,84 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
             ):
                 model = identity_model.IdentityModel((), (), ("admin",))
                 with mock.patch.object(sync, "atomic_write_json", side_effect=fail_commit):
-                    with self.assertRaisesRegex(OSError, "interrupted journal commit"):
+                    with self.assertRaisesRegex(OSError, "interrupted state commit"):
                         sync.reconcile_syncthing(model)
-                self.assertTrue(state.exists())
-                self.assertEqual(json.loads(journal.read_text())["phase"], "mutated")
+                self.assertFalse(state.exists())
+                self.assertEqual(json.loads(journal.read_text())["phase"], "committed")
                 result = sync.reconcile_syncthing(model)
                 self.assertEqual(result["folders"], 0)
                 self.assertFalse(journal.exists())
+                committed = json.loads(state.read_text(encoding="utf-8"))
+                self.assertEqual(committed["schemaVersion"], 2)
+                self.assertEqual(committed["folders"], [])
+                self.assertEqual(committed["devices"], [])
+
+    def test_reconcile_records_repaired_state_as_previous_state_so_retry_resumes(self) -> None:
+        folders = {"nas-alice-backup": {"id": "nas-alice-backup", "path": "/shares/users/alice/syncthing"}}
+        devices = {"DEVICE": {"deviceID": "DEVICE", "name": "Alice"}}
+        generation = sync.syncthing_generation(folders, devices)
+        committed_state = {
+            "schemaVersion": 2,
+            "generation": generation,
+            "folders": ["nas-alice-backup"],
+            "devices": ["DEVICE"],
+        }
+        stale_state = {"schemaVersion": 2, "generation": "old", "folders": [], "devices": []}
+        fail_put = {"active": True}
+        requests: list[tuple[str, str]] = []
+
+        def request(path: str, *, method: str = "GET", body: object = None) -> object:
+            requests.append((path, method))
+            if path == "/rest/config/folders":
+                return list(folders.values())
+            if path == "/rest/config/devices":
+                return list(devices.values())
+            if path == "/rest/config/restart-required":
+                return {"requiresRestart": False}
+            if method == "PUT" and fail_put["active"]:
+                # Interrupt after the prepared journal is durable so the retry
+                # has to compare previousState against the repaired state file.
+                raise OSError("interrupted mutation")
+            return {}
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            state = root / "state.json"
+            journal = root / "journal.json"
+            state.write_text(json.dumps(stale_state), encoding="utf-8")
+            journal.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "phase": "committed",
+                        "generation": generation,
+                        "previousState": {},
+                        "desired": {"folders": folders, "devices": devices},
+                        "retainedDevices": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(sync, "SYNCTHING_ENABLED", True),
+                mock.patch.object(sync, "STATE_PATH", state),
+                mock.patch.object(sync, "SYNCTHING_JOURNAL_PATH", journal),
+                mock.patch.object(sync, "desired_syncthing", return_value=(folders, devices)),
+                mock.patch.object(sync, "ensure_syncthing_folder"),
+                mock.patch.object(sync, "syncthing_request", side_effect=request),
+            ):
+                model = identity_model.IdentityModel((), (), ("admin",))
+                with self.assertRaises(OSError):
+                    sync.reconcile_syncthing(model)
+                prepared = json.loads(journal.read_text(encoding="utf-8"))
+                self.assertEqual(prepared["phase"], "prepared")
+                self.assertEqual(prepared["previousState"], committed_state)
+                fail_put["active"] = False
+                result = sync.reconcile_syncthing(model)
+            self.assertEqual(result["folders"], 1)
+            self.assertEqual(result["devices"], 1)
+            self.assertFalse(journal.exists())
+            self.assertEqual(json.loads(state.read_text(encoding="utf-8")), committed_state)
 
     def test_matching_generation_does_not_hide_malformed_journal_or_wrong_ownership(self) -> None:
         generation = sync.syncthing_generation({}, {})

@@ -2,7 +2,7 @@
 
 nas_vm_stop_process() {
   local pid=${1:-} grace_seconds=${2:-30}
-  [[ "$pid" =~ ^0*[1-9][0-9]*$ ]] || return 2
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 2
   [[ "$grace_seconds" =~ ^[0-9]+$ ]] || return 2
   kill -0 "$pid" >/dev/null 2>&1 || return 0
 

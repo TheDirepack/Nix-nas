@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import json
 import pathlib
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -754,6 +756,79 @@ fail() { echo "$*" >&2; exit 1; }
             self.assertTrue(cache.exists())
             self.assertIn("unrecognized QEMU cache", clean.stderr)
 
+    def test_refused_disposable_run_does_not_stop_the_live_persistent_vm(self) -> None:
+        payload = b"payload\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            cache = root / "cache"
+            state = cache / "state"
+            state.mkdir(parents=True)
+            (cache / ".nas-qemu-cache").write_text("nixos-nas-qemu-cache-v1\n", encoding="utf-8")
+            source = root / "source"
+            source.mkdir()
+            (source / "payload.txt").write_bytes(payload)
+            (source / "MANIFEST.sha256").write_text(
+                f"{hashlib.sha256(payload).hexdigest()}  payload.txt\n", encoding="utf-8"
+            )
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            # The pidfile guard identifies a live VM by /proc/<pid>/exe, so the
+            # stand-in process must be a real ELF executable with that basename.
+            # Copying sys.executable is not sufficient on NixOS (it is a wrapper
+            # that re-execs a store path), and copying a coreutils binary does
+            # not work either (coreutils is a multicall binary that dispatches on
+            # argv[0]). Bash is a plain ELF and accepts -c, so it stays alive.
+            fake_qemu = bin_dir / "qemu-system-x86_64"
+            bash_bin = shutil.which("bash")
+            assert bash_bin is not None, "host tool unavailable: bash"
+            shutil.copyfile(bash_bin, fake_qemu)
+            fake_qemu.chmod(0o755)
+            for tool in ("curl", "realpath", "readlink", "qemu-img", "expect", "bsdtar", "ssh", "ssh-keygen", "tar"):
+                if shutil.which(tool) is None:
+                    stub = bin_dir / tool
+                    stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                    stub.chmod(0o755)
+            pidfile = state / "qemu.pid"
+            # A simple `bash -c 'sleep 120'` would exec sleep in place, so the
+            # process image would no longer be our qemu-named binary. A loop that
+            # spawns sleep would also leave an orphaned child behind when the
+            # test terminates bash, which the unit runner reports as a leaked
+            # descendant. A blocking builtin `read` keeps bash as the only
+            # process and needs no children.
+            vm = subprocess.Popen([str(fake_qemu), "-c", "read -r -t 600 _ </dev/zero"])
+            try:
+                pidfile.write_text(f"{vm.pid}\n", encoding="utf-8")
+                # BASH_XTRACEFD keeps the trace separate from the refusal message.
+                env = {
+                    **os.environ,
+                    "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+                    "NAS_QEMU_CACHE_DIR": str(cache),
+                    "NAS_QEMU_STATE_DIR": str(state),
+                    "NAS_QEMU_SOURCE_ROOT": str(source),
+                    "NAS_QEMU_OUTER_TIMEOUT_ACTIVE": "1",
+                }
+                result = subprocess.run(
+                    ["bash", "-x", str(QEMU), "installer"],
+                    cwd=ROOT,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=300,
+                )
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("refusing to start a disposable VM", result.stderr)
+                self.assertNotIn("nas_qemu_stop_pidfile", result.stderr)
+                self.assertEqual(vm.poll(), None, "refused run stopped the live VM")
+                self.assertTrue(pidfile.exists(), "refused run removed the live pidfile")
+            finally:
+                vm.terminate()
+                try:
+                    vm.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    vm.kill()
+                    vm.wait(timeout=30)
+
     def test_source_stage_fails_on_a_manifest_entry_missing_from_the_tree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source = pathlib.Path(tmp) / "source"
@@ -875,3 +950,52 @@ fail() { echo "$*" >&2; exit 1; }
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QemuSourceStagingTests(unittest.TestCase):
+    """The source stager must ignore a nix build link but reject real symlinks."""
+
+    def stager(self, root: pathlib.Path, stage: pathlib.Path):
+        text = QEMU.read_text(encoding="utf-8")
+        script = text.split("<<'PYSTAGE'", 1)[1].split("\nPYSTAGE\n", 1)[0]
+        fixture_dir = pathlib.Path(tempfile.mkdtemp(prefix="nas-stage-fixture-"))
+        self.addCleanup(shutil.rmtree, fixture_dir, True)
+        python = fixture_dir / "stage.py"
+        python.write_text(script, encoding="utf-8")
+        return subprocess.run(
+            ["python3", str(python), str(root), str(stage)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def fixture(self, root: pathlib.Path) -> None:
+        payload = root / "payload.txt"
+        payload.write_text("payload\n", encoding="utf-8")
+        digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+        (root / "MANIFEST.sha256").write_text(f"{digest}  payload.txt\n", encoding="utf-8")
+        (root / "result").symlink_to("/nix/store/not-a-real-system")
+
+    def test_toplevel_nix_result_link_is_ignored(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw) / "root"
+            stage = pathlib.Path(raw) / "stage"
+            root.mkdir()
+            stage.mkdir()
+            self.fixture(root)
+            result = self.stager(root, stage)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual("payload\n", (stage / "payload.txt").read_text(encoding="utf-8"))
+            self.assertFalse((stage / "result").exists())
+
+    def test_other_source_symlinks_are_still_rejected(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw) / "root"
+            stage = pathlib.Path(raw) / "stage"
+            root.mkdir()
+            stage.mkdir()
+            self.fixture(root)
+            (root / "payload-link").symlink_to(root / "payload.txt")
+            result = self.stager(root, stage)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("QEMU source contains a symlink", result.stderr)

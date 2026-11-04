@@ -94,6 +94,52 @@ class PortalProjectionTests(unittest.TestCase):
         entries = compile_portal_projection(self.compile(effective))["entries"]
         self.assertEqual([entry["access"]["allow"] for entry in entries], ["any", "any"])
 
+    def test_missing_service_enabled_is_treated_as_disabled(self) -> None:
+        effective = {
+            "schemaVersion": 3,
+            "services": {
+                "files": {
+                    "name": "Files",
+                    # No "enabled" key: must be treated as disabled, not enabled.
+                },
+            },
+            "derived": {
+                "routes": [
+                    {
+                        "service": "files",
+                        "route": "web",
+                        "authMode": "public",
+                        "portal": {"visible": True},
+                        "exposure": {"type": "path", "paths": ["/shares/"]},
+                    }
+                ]
+            },
+        }
+        entries = compile_portal_projection(effective)["entries"]
+        self.assertEqual(entries, [])
+
+    def test_portal_link_rejects_backslash_and_control_characters(self) -> None:
+        for url in ("/shares\\evil", "/shares\x07evil"):
+            with self.subTest(url=url):
+                effective = {
+                    "schemaVersion": 3,
+                    "services": {
+                        "files": {
+                            "name": "Files",
+                            "enabled": True,
+                            "routes": {
+                                "web": {
+                                    "exposure": {"type": "path", "paths": ["/shares/"]},
+                                    "auth": {"mode": "public"},
+                                    "portal": {"visible": True, "url": url},
+                                }
+                            },
+                        }
+                    },
+                }
+                with self.assertRaises(PortalProjectionError):
+                    compile_portal_projection(self.compile(effective))
+
     def test_visible_route_without_safe_url_fails_closed(self) -> None:
         effective = {
             "schemaVersion": 3,

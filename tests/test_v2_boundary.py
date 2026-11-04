@@ -40,6 +40,12 @@ class ManagedServicesV2BoundaryTests(unittest.TestCase):
         self.assertNotIn("nas-v2-lease-", native)
         self.assertNotIn("nas-v2-idle-", native)
 
+    def test_sealed_generation_reader_group_follows_the_caddy_account_group(self):
+        module = (ROOT / "modules" / "nas" / "config" / "managed-services.nix").read_text(encoding="utf-8")
+        entry = (SERVICES / "nas_v2_entry.py").read_text(encoding="utf-8")
+        self.assertIn("NAS_V2_GENERATION_READER_GROUP = config.services.caddy.group;", module)
+        self.assertIn('setting("NAS_V2_GENERATION_READER_GROUP", CADDY_READER_GROUP)', entry)
+
     def test_deleted_wake_protocol_cannot_reenter_authorization_boundary(self):
         self.assertFalse((SERVICES / "nas_v2_wake.py").exists())
         caddy = (SERVICES / "nas_v2_caddy.py").read_text(encoding="utf-8")

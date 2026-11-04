@@ -84,8 +84,9 @@ class V2ReferenceTests(unittest.TestCase):
         rendered = caddy.generate_caddyfile(effective)
         # Longest-path-first: /metrics/admin and /metrics/api must appear before /metrics/
         # Use specific path patterns to avoid substring matches
-        self.assertLess(rendered.index('"/metrics/admin/"'), rendered.index('"/metrics/" "/metrics/*"'))
-        self.assertLess(rendered.index('"/metrics/api/"'), rendered.index('"/metrics/" "/metrics/*"'))
+        parent = '"/metrics/" "/metrics" "/metrics/*"'
+        self.assertLess(rendered.index('"/metrics/admin/"'), rendered.index(parent))
+        self.assertLess(rendered.index('"/metrics/api/"'), rendered.index(parent))
 
     def test_nix_authority_path_consistency(self):
         nix_files = {
@@ -158,16 +159,17 @@ class V2ReferenceTests(unittest.TestCase):
         effective = spec.compile_document(doc, schema)
         self.assertIn("derived", effective)
 
-    def test_cockpit_port_consistency(self):
-        # Cockpit remains private on 9092; browser clients use the Caddy route.
+    def test_cockpit_socket_consistency(self):
+        # Caddy reaches Cockpit through a permissioned Unix socket on /console.
+        # No TCP port may be reserved for it in the remote-admin firewall policy.
         network = (ROOT / "services/nas_v2_network.py").read_text(encoding="utf-8")
-        self.assertIn("NAS_V2_COCKPIT_PORT", network)
         self.assertIn("_remote_admin_ports", network)
-        self.assertIn('"9092"', network)
+        self.assertNotIn("NAS_V2_COCKPIT_PORT", network)
+        self.assertNotIn('"9092"', network)
         self.assertNotIn('("9090", "tcp")', network)
-        # Check the private listener declaration and public interface documentation.
-        base = (ROOT / "modules/nas/internal/base.nix").read_text(encoding="utf-8")
-        self.assertIn("cockpitPort = 9092", base)
+        interfaces = (ROOT / "docs/src/reference/interfaces.md").read_text(encoding="utf-8")
+        self.assertIn("`/console/`", interfaces)
+        self.assertNotIn("9092", interfaces)
         interfaces = (ROOT / "docs/src/reference/interfaces.md").read_text(encoding="utf-8")
         self.assertIn("`/console/`", interfaces)
         self.assertNotIn("9092", interfaces)

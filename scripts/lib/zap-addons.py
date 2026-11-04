@@ -354,8 +354,8 @@ def main() -> int:
         prepare(lock, args.home, args.bundled)
         verify_artifacts(lock, args.home, args.installation)
     else:
-        verify_loaded(lock, args.home / "add-ons-state.xml")
         verify_artifacts(lock, args.home, args.installation)
+        verify_loaded(lock, args.home / "add-ons-state.xml")
         if args.evidence:
             evidence = {
                 "image": os.environ.get("NAS_ZAP_IMAGE", ""),

@@ -125,6 +125,7 @@ const ConfirmStep = ({
     if (!capability || !jobId || isTerminal) return undefined;
     let cancelled = false;
     let timer;
+    let consecutiveFailures = 0;
     const poll = async () => {
       try {
         const value = await fetchJson('api/first-start/job', {
@@ -134,11 +135,16 @@ const ConfirmStep = ({
         if (!cancelled && polled && polled.jobId === jobId) {
           setJob(polled);
           setPollingInterrupted(false);
+          consecutiveFailures = 0;
         }
       } catch (_reason) {
         if (!cancelled) setPollingInterrupted(true);
+        consecutiveFailures = Math.min(consecutiveFailures + 1, 4);
       } finally {
-        if (!cancelled) timer = window.setTimeout(poll, 2000);
+        if (!cancelled) {
+          const delay = Math.min(30000, 2000 * 2 ** consecutiveFailures);
+          timer = window.setTimeout(poll, delay);
+        }
       }
     };
     timer = window.setTimeout(poll, 2000);

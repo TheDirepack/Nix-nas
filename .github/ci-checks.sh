@@ -4,6 +4,7 @@
 
 : "${CI_LOG_DIR:=ci-logs}"
 : "${CI_RESULTS_FILE:=$CI_LOG_DIR/results.tsv}"
+: "${CI_FAILED_RUNS_FILE:=$CI_LOG_DIR/failed-runs.tsv}"
 mkdir -p "$CI_LOG_DIR"
 
 ci_run() {
@@ -51,6 +52,16 @@ ci_run() {
   fi
 
   if ((rc != 0)); then
+    # Persist the failure context before returning so it survives a caller's
+    # `set -e` abort. This is best-effort: it must never change the reported
+    # status or the annotation, which stay authoritative.
+    if [[ -n "$CI_FAILED_RUNS_FILE" ]]; then
+      if [[ ! -f "$CI_FAILED_RUNS_FILE" ]]; then
+        printf 'section\tslug\tlabel\texit_code\telapsed\tlog_path\tcommand\n' > "$CI_FAILED_RUNS_FILE" 2>/dev/null || true
+      fi
+      printf '%s\t%s\t%s\t%d\t%d\t%s\t%s\n' \
+        "$section" "$slug" "$label" "$rc" "$elapsed" "$log" "$command_text" >> "$CI_FAILED_RUNS_FILE" 2>/dev/null || true
+    fi
     printf '::error title=%s::exit %d after %ds; full log: %s\n' "$label" "$rc" "$elapsed" "$log"
   fi
   return "$rc"

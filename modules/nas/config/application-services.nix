@@ -66,6 +66,9 @@ let
   authentikEnvironment = {
     AUTHENTIK_ENV = "production";
     HOME = authentikDataDir;
+    # The CSP patch reads this list; it is empty unless the operator configures
+    # IdP origins for SAML HTTP-POST bindings.
+    AUTHENTIK_SAML_IDP_FORM_ACTION_DOMAINS = lib.concatStringsSep "," cfg.identity.samlFormActionOrigins;
   };
   authentikServiceConfig = {
     User = "authentik";
@@ -103,36 +106,18 @@ let
       '';
   });
 
-  cockpitWebService = pkgs.writeShellScript "nas-cockpit-webservice" ''
-    set -euo pipefail
-    export PATH="${pkgs.procps}/bin:$PATH"
-    # Caddy + Authentik are the only authorization boundary for /console.
-    # cockpit-ws serves the shared no-password --local-session bridge; if the
-    # bridge ever dies, ws alone would fall back to its own PAM login, so the
-    # supervisor kills ws immediately and systemd respawns the whole unit.
-    term() {
-      [[ -n "''${WSPID:-}" ]] && kill -TERM "''${WSPID}" 2>/dev/null || true
-      exit 0
-    }
-    trap term TERM INT
-    while true; do
-      ${cockpitPatched}/libexec/cockpit-ws \
-        --address 127.0.0.1 \
-        --port ${toString cockpitPort} \
-        --no-tls \
-        --local-session ${cockpitPatched}/bin/cockpit-bridge &
-      WSPID=$!
-      while kill -0 "$WSPID" 2>/dev/null; do
-        sleep 2
-        if ! pgrep -P "$WSPID" -f 'cockpit-bridge' >/dev/null 2>&1; then
-          kill -TERM "$WSPID" 2>/dev/null || true
-          break
-        fi
-      done
-      wait "$WSPID" 2>/dev/null || true
-      sleep 1
-    done
-  '';
+  # systemd passes the permissioned Unix listener to the service main process.
+  # A supervisor shell would make LISTEN_PID refer to the shell, so cockpit-ws
+  # would not see the inherited socket and would fall back to binding
+  # 0.0.0.0:9090. Starting the binary directly keeps LISTEN_PID correct, and
+  # Restart=always still respawns ws (and therefore the local-session bridge).
+  cockpitWebService = "${cockpitPatched}/libexec/cockpit-ws";
+  cockpitWebServiceArgs = [
+    "--no-tls"
+    "--local-session"
+    "${cockpitPatched}/bin/cockpit-bridge"
+  ];
+
   authentikProxyOutpost = pkgs.writeShellScript "nas-authentik-proxy-outpost" ''
     set -euo pipefail
     if [[ -s ${lib.escapeShellArg authentikOutpostTokenFile} ]]; then
@@ -189,12 +174,26 @@ in
       };
     };
 
+    systemd.sockets.nas-cockpit-sso = {
+      description = "Caddy-only Cockpit root session Unix listener";
+      wantedBy = [ "sockets.target" ];
+      socketConfig = {
+        ListenStream = "/run/nas-cockpit-sso/ws.sock";
+        SocketUser = "root";
+        SocketGroup = config.services.caddy.group;
+        SocketMode = "0660";
+        DirectoryMode = "0755";
+        Service = "nas-cockpit-sso.service";
+        RemoveOnStop = true;
+      };
+    };
+
     systemd.services.nas-cockpit-sso = {
       description = "Cockpit web service behind the Caddy Authentik gate";
       path = [ nasCockpitApi nasPythonApplication nasSecrets ];
       wantedBy = [ "multi-user.target" ];
-      after = [ "nas-first-start.service" ];
-      requires = [ "nas-first-start.service" ];
+      after = [ "nas-first-start.service" "nas-cockpit-sso.socket" ];
+      requires = [ "nas-first-start.service" "nas-cockpit-sso.socket" ];
       # NixOS activation restarts first-start while switching generations;
       # propagate that restart so the shared Cockpit bridge is not left dead.
       partOf = [ "nas-first-start.service" ];
@@ -202,7 +201,12 @@ in
       # Authentik gate; it needs a writable HOME for agent/ssh state.
       environment.HOME = "/var/lib/nas-cockpit-sso";
       serviceConfig = {
-        ExecStart = cockpitWebService;
+        Sockets = [ "nas-cockpit-sso.socket" ];
+        # Fail closed if Cockpit loses its activation FD: it must never
+        # fall back to binding 0.0.0.0:9090 or another TCP listener.
+        # This restricts AF_INET/AF_INET6 binds, not the inherited AF_UNIX FD.
+        SocketBindDeny = "any";
+        ExecStart = lib.concatStringsSep " " ([ cockpitWebService ] ++ cockpitWebServiceArgs);
         # A crashed shared bridge must never degrade into a second login
         # prompt; restarting ws respawns the local session within seconds.
         Restart = "always";
@@ -489,7 +493,8 @@ in
   config.systemd.services.nas-bootstrap-runtime-select = {
     description = "Prepare boot-side identity and unlock control storage";
     before = [ "postgresql.service" "authentik-migrate.service" "authentik-worker.service" "authentik.service" ];
-    requires = lib.optional cfg.firstStart.enable "nas-bootstrap-administrator.service";
+    requires = [ "nas-bootstrap-authentik-secrets.service" ]
+      ++ lib.optional cfg.firstStart.enable "nas-bootstrap-administrator.service";
     # Pull the identity stack from the selector itself. The runtime files are
     # created by this unit, so multi-user.target may evaluate the dependent
     # ConditionPathExists checks too early and permanently skip them.
@@ -519,9 +524,32 @@ in
         ${pkgs.coreutils}/bin/install -d -m 0750 -o authentik -g authentik "$target/authentik"
         ${pkgs.coreutils}/bin/install -d -m 0700 -o postgres -g postgres "$target/postgresql"
         ${pkgs.coreutils}/bin/install -d -m 0700 -o "$secret_owner" -g users "$target/nas-secrets"
+        link_root="''${NAS_CONTROL_PLANE_LINK_ROOT:-/var/lib}"
+        # Check every destination before changing any of them. A real directory
+        # holding service entries is pre-existing data, not a link this unit
+        # owns. NixOS also seeds a user's home with /etc/skel dotfiles, which
+        # are not service data and are safe to replace.
         for name in authentik postgresql nas-secrets; do
-          ${pkgs.coreutils}/bin/rm -rf -- "/var/lib/$name"
-          ${pkgs.coreutils}/bin/ln -s "$target/$name" "/var/lib/$name"
+          destination="$link_root/$name"
+          if [[ -L "$destination" ]]; then
+            :
+          elif [[ -d "$destination" ]]; then
+            # Directory scaffolding and home skeleton dotfiles carry no service
+            # state; any other file or a symlink does.
+            unexpected="$(${pkgs.findutils}/bin/find "$destination" -mindepth 1 \
+              \( -type l -o \( -type f ! -name '.*' \) \) -print -quit)"
+            if [[ -n "$unexpected" ]]; then
+              echo "Refusing to replace populated service data at $destination (found $unexpected)" >&2
+              exit 1
+            fi
+          elif [[ -e "$destination" ]]; then
+            echo "Refusing to replace unexpected service data at $destination" >&2
+            exit 1
+          fi
+        done
+        for name in authentik postgresql nas-secrets; do
+          ${pkgs.coreutils}/bin/rm -rf -- "$link_root/$name"
+          ${pkgs.coreutils}/bin/ln -s "$target/$name" "$link_root/$name"
         done
         ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g authentik /run/nas-authentik
         ${pkgs.coreutils}/bin/rm -f -- ${lib.escapeShellArg authentikRuntimeEnvironmentFile}
@@ -541,7 +569,14 @@ in
       ExecStart = pkgs.writeShellScript "nas-bootstrap-authentik-secrets" ''
         set -euo pipefail
         environment=${lib.escapeShellArg "${bootstrapAuthentikDataDir}/environment"}
-        [[ -e "$environment" ]] && exit 0
+        if [[ -e "$environment" ]]; then
+          if [[ ! -e /var/lib/nas-setup/state.json ]] &&
+             ! ${pkgs.gnugrep}/bin/grep -Eq "^AUTHENTIK_BOOTSTRAP_PASSWORD=[[:xdigit:]]{48}$" "$environment"; then
+            echo "Missing secure first-boot Authentik password; recover locally" >&2
+            exit 1
+          fi
+          exit 0
+        fi
         ${pkgs.coreutils}/bin/install -d -m 0750 -o authentik -g authentik ${lib.escapeShellArg bootstrapAuthentikDataDir}
         temporary="$(${pkgs.coreutils}/bin/mktemp ${lib.escapeShellArg "${bootstrapAuthentikDataDir}/environment.XXXXXX"})"
         token_file="$temporary.token"
@@ -550,7 +585,10 @@ in
           token="$(${pkgs.openssl}/bin/openssl rand -hex 32)"
           printf '%s\n' 'AUTHENTIK_SECRET_KEY='"$(${pkgs.openssl}/bin/openssl rand -hex 64)"
           printf '%s\n' 'AUTHENTIK_BOOTSTRAP_TOKEN='"$token"
-          printf '%s\n' 'AUTHENTIK_BOOTSTRAP_PASSWORD=${bootstrapPassword}'
+          # Generate private first-boot credentials at runtime, not in Nix output.
+          bootstrap_password="$(${pkgs.openssl}/bin/openssl rand -hex 24)"
+          printf '%s\n' 'AUTHENTIK_BOOTSTRAP_PASSWORD='"$bootstrap_password"
+          unset bootstrap_password
           printf '%s\n' 'AUTHENTIK_BOOTSTRAP_EMAIL=${cfg.identity.bootstrapEmail}'
         } > "$temporary"
         ${pkgs.coreutils}/bin/install -m 0640 -o root -g authentik "$temporary" "$environment"

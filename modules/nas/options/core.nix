@@ -63,6 +63,14 @@
         default = "/identity/";
         description = "Public subpath where Authentik is served. It must begin and end with a slash.";
       };
+      samlFormActionOrigins = lib.mkOption {
+        type = lib.types.listOf (
+          lib.types.strMatching "^https://[A-Za-z0-9.-]+(:[0-9]+)?$"
+        );
+        default = [ ];
+        example = [ "https://idp.example.org" ];
+        description = "External SAML identity-provider origins allowed as CSP form-action targets for HTTP-POST bindings. Origins only: https scheme and host, no path.";
+      };
       authentikOutpostPort = lib.mkOption {
         type = lib.types.port;
         default = 9010;

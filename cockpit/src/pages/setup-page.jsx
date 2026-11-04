@@ -39,19 +39,36 @@ export function SetupPage({data, mutate, busy}) {
   const [confirmPasswordReapply, setConfirmPasswordReapply] = useState(false);
   const [job, setJob] = useState(null);
   const [recoveryNote, setRecoveryNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
   const devices = Array.isArray(model.storage?.devices) ? model.storage.devices : [];
 
-  const submit = async () => {
-    const value = await startFirstRun(password, administrator, {
-      planDigest: model.planDigest,
-      devices: selectedDevices,
-      allowDestructiveStorage: allowDestructive,
-      confirmPasswordReapply,
-    });
-    setPassword("");
-    setPasswordConfirm("");
-    setAdministrator({...administrator, password: ""});
-    setJob(value);
+  const submit = async (event) => {
+    if (event) event.preventDefault();
+    if (submitting) return;
+    setSubmitting(true);
+    setSubmitError("");
+    try {
+      const value = await startFirstRun(password, administrator, {
+        planDigest: model.planDigest,
+        devices: selectedDevices,
+        allowDestructiveStorage: allowDestructive,
+        confirmPasswordReapply,
+      });
+      setPassword("");
+      setPasswordConfirm("");
+      setAdministrator({...administrator, password: ""});
+      // Track the accepted job immediately so polling can proceed without
+      // awaiting refresh(). startFirstRun is invoked directly (not through
+      // mutate), so no "Operation completed" notice is emitted while the job
+      // is still running; completion is reported only once polling observes a
+      // terminal job status or the refreshed setup state becomes complete.
+      setJob(value);
+    } catch (reason) {
+      setSubmitError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   useEffect(() => {
@@ -105,7 +122,12 @@ export function SetupPage({data, mutate, busy}) {
               <CardTitle>Review and start setup</CardTitle>
             </CardHeader>
             <CardBody>
-              <Form>
+              {submitError ? (
+                <Alert variant="danger" isInline title="Unable to start setup">
+                  {submitError}
+                </Alert>
+              ) : null}
+              <Form onSubmit={submit}>
                 <FormGroup
                   label="KeePassXC database password"
                   fieldId="first-start-keepass-password"
@@ -204,9 +226,10 @@ export function SetupPage({data, mutate, busy}) {
                   onChange={(_event, checked) => setConfirmPasswordReapply(checked)}
                 />
                 <Button
-                  onClick={submit}
+                  type="submit"
                   isDisabled={
                     busy ||
+                    submitting ||
                     !model.ready ||
                     !password ||
                     password !== passwordConfirm ||

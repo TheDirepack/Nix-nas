@@ -98,15 +98,7 @@ printf '%s\n' "$(nas_vm_ci_installer_timeout_seconds)"
             int, result.stdout.splitlines()
         )
         outer = self.manifest["outer"]
-        self.assertEqual(
-            integration,
-            guest
-            + self.manifest["timeouts"]["secretAdversarial"]
-            + self.manifest["timeouts"]["installedSmoke"]
-            + outer["nativeBoot"]
-            + outer["nativeShutdown"]
-            + outer["slack"],
-        )
+        self.assertEqual(integration, self.integration_budget())
         self.assertEqual(
             encrypted,
             self.manifest["timeouts"]["encryptedGuest"]
@@ -128,6 +120,56 @@ printf '%s\n' "$(nas_vm_ci_installer_timeout_seconds)"
         self.assertEqual(full_suite, outer["fullSuiteSetup"] + integration)
         self.assertEqual(ci_integration, integration + outer["ciSetup"])
         self.assertEqual(ci_installer, installer + outer["ciSetup"])
+
+    def test_persistent_test_outer_budget_covers_the_guest_rebuild(self) -> None:
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                'source "$1"; nas_vm_persistent_test_timeout_seconds',
+                "budget",
+                str(TIMEOUT_HELPER),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+            env={**os.environ, "NAS_VM_TIMEOUT_BUDGET_FILE": str(MANIFEST)},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        outer = self.manifest["outer"]
+        self.assertEqual(
+            int(result.stdout.strip()),
+            outer["fullSuiteSetup"]
+            + self.integration_budget()
+            + self.manifest["timeouts"]["reconfigureBuild"]
+            + outer["slack"],
+        )
+        qemu = QEMU.read_text(encoding="utf-8")
+        self.assertIn(
+            'persistent-test) timeout_seconds="${NAS_QEMU_FULL_SUITE_TIMEOUT:-$(nas_vm_persistent_test_timeout_seconds)}"',
+            qemu,
+        )
+
+    def integration_budget(self) -> int:
+        guest = (
+            sum(
+                phase["fixedSeconds"]
+                + phase["ordinaryWaits"] * self.manifest["ordinaryWaitSeconds"]
+                + sum(self.manifest["timeouts"][key] for key in phase["timeoutKeys"])
+                for phase in self.manifest["phases"]
+            )
+            + self.manifest["slackSeconds"]
+        )
+        outer = self.manifest["outer"]
+        return (
+            guest
+            + self.manifest["timeouts"]["secretAdversarial"]
+            + self.manifest["timeouts"]["installedSmoke"]
+            + outer["nativeBoot"]
+            + outer["nativeShutdown"]
+            + outer["slack"]
+        )
 
     def test_manifest_phase_labels_match_the_guest_runner(self) -> None:
         manifest_labels = [phase["label"] for phase in self.manifest["phases"]]

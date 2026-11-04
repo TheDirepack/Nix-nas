@@ -316,7 +316,9 @@ def hash_path(path: pathlib.Path) -> str:
     paths = [path] if stat.S_ISREG(mode) else [path, *sorted(path.rglob("*"))]
     for item in paths:
         metadata = item.lstat()
-        relative = item.relative_to(root).as_posix()
+        # A file authority keeps its configured name, which need not match the
+        # basename of its source; hash the content position, not that name.
+        relative = "." if stat.S_ISREG(mode) else item.relative_to(root).as_posix()
         kind = "d" if stat.S_ISDIR(metadata.st_mode) else "f"
         digest.update(f"{kind}\0{relative}\0{stat.S_IMODE(metadata.st_mode) & 0o777:o}\0".encode())
         if stat.S_ISREG(metadata.st_mode):
@@ -363,11 +365,26 @@ def _drain_bounded(stream: Any, *, limit: int, result: list[str]) -> None:
     result.append(text)
 
 
-def run_process(command: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
+def _write_bounded_stdin(stream: Any, payload: bytes) -> None:
+    """Write a command payload off the caller thread and always close the pipe."""
+
+    try:
+        stream.write(payload)
+    except (BrokenPipeError, OSError):
+        pass
+    finally:
+        try:
+            stream.close()
+        except (BrokenPipeError, OSError):
+            pass
+
+
+def run_process(command: list[str], *, timeout: int, input: bytes | None = None) -> subprocess.CompletedProcess[str]:
     process = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
         start_new_session=True,
     )
     assert process.stdout is not None and process.stderr is not None
@@ -387,6 +404,18 @@ def run_process(command: list[str], *, timeout: int) -> subprocess.CompletedProc
     )
     stdout_thread.start()
     stderr_thread.start()
+    stdin_thread: threading.Thread | None = None
+    if input is not None:
+        assert process.stdin is not None
+        # Writing a payload larger than the pipe buffer on the caller thread
+        # would block before the timeout is armed and would never be
+        # interrupted; the worker also closes the descriptor on a broken pipe.
+        stdin_thread = threading.Thread(
+            target=_write_bounded_stdin,
+            args=(process.stdin, input),
+            daemon=True,
+        )
+        stdin_thread.start()
     try:
         process.wait(timeout=timeout)
     except subprocess.TimeoutExpired as exc:
@@ -404,6 +433,8 @@ def run_process(command: list[str], *, timeout: int) -> subprocess.CompletedProc
             process.wait()
         raise StateError(f"Command timed out: {command[0]}") from exc
     finally:
+        if stdin_thread is not None:
+            stdin_thread.join()
         stdout_thread.join()
         stderr_thread.join()
         process.stdout.close()
@@ -521,12 +552,14 @@ def restore_database(source: pathlib.Path) -> None:
             "--if-exists",
             "--no-owner",
             "--dbname=authentik",
-            "{input}",
         ],
-        "{input}",
-        str(source),
+        "__nas_state_no_input__",
+        "",
     )
-    result = run_process(command, timeout=1800)
+    # pg_restore cannot read the staged payload from /run/nas-state by path, so
+    # the payload is streamed on stdin.
+    payload = source.read_bytes()
+    result = run_process(command, timeout=1800, input=payload)
     if result.returncode != 0:
         raise StateError("Authentik database restore failed; rollback is required")
 
@@ -1347,14 +1380,24 @@ def canonical_apply_entries(manifest: Mapping[str, Any]) -> list[Mapping[str, An
 
 def apply_extracted(staging: pathlib.Path, manifest: dict[str, Any], *, restore_absence: bool = False) -> None:
     registry = {item.name: item for item in authorities()}
+    # Preflight every absence restoration before mutating state, so a conflict on the
+    # first entry cannot leave partial state behind that a stale-snapshot rollback
+    # could not unwind. Rollback stays enabled for failures after writes have begun,
+    # including failures from apply_extracted itself.
+    if not restore_absence:
+        for entry in canonical_apply_entries(manifest):
+            if entry["status"] == "absent":
+                authority = registry[entry["name"]]
+                destination = pathlib.Path(authority.source)
+                if authority.kind == "path" and lstat_type(destination) != 0:
+                    raise StateError(f"Restoring absence for {authority.name} requires --restore-absence")
     for entry in canonical_apply_entries(manifest):
         authority = registry[entry["name"]]
         if entry["status"] == "absent":
             destination = pathlib.Path(authority.source)
             if authority.kind == "path" and lstat_type(destination) != 0:
-                if not restore_absence:
-                    raise StateError(f"Restoring absence for {authority.name} requires --restore-absence")
-                remove_path(destination)
+                if restore_absence:
+                    remove_path(destination)
             continue
         if entry["status"] != "captured":
             continue
@@ -1385,6 +1428,21 @@ def _dir_content_digest(path: pathlib.Path) -> str:
                 for block in iter(lambda: handle.read(1024 * 1024), b""):
                     digest.update(block)
     return digest.hexdigest()
+
+
+def restored_content_matches(live: pathlib.Path, payload: pathlib.Path) -> bool:
+    """Compare restored content while ignoring local ownership/mode policy.
+
+    `restore_path` preserves the destination's local modes, so a mode-only
+    difference must not count as drift or as a failed restore.
+    """
+    live_mode = live.lstat().st_mode
+    payload_mode = payload.lstat().st_mode
+    if stat.S_ISREG(live_mode) and stat.S_ISREG(payload_mode):
+        return _file_content_digest(live) == _file_content_digest(payload)
+    if stat.S_ISDIR(live_mode) and stat.S_ISDIR(payload_mode):
+        return _dir_content_digest(live) == _dir_content_digest(payload)
+    return False
 
 
 def verify_restored_state(staging: pathlib.Path, manifest: dict[str, Any]) -> None:
@@ -1443,6 +1501,7 @@ def restore_units() -> tuple[str, ...]:
         return tuple(dict.fromkeys(value))
     return (
         "nas-protected-services.target",
+        "nas-managed-services-seed.service",
         "nas-v2-timer-identity-sync-0.timer",
         "NetworkManager.service",
         "firewalld.service",
@@ -1622,28 +1681,67 @@ def restore_bundle(
         errors=[],
     )
     with state_temporary_directory("nas-state-restore.") as temporary:
-        staging = pathlib.Path(temporary)
-        extract_bundle(bundle, staging)
-        manifest = load_extracted_manifest(staging)
-        current_host = socket.gethostname()
-        if confirm_host != current_host or manifest["hostName"] != current_host:
-            raise StateError("Restore confirmation and bundle hostname must match this host")
-        if not manifest["complete"] and not allow_partial:
-            raise StateError("Partial bundles require --allow-partial")
-        if (
-            any(entry["sensitive"] and entry["status"] == "captured" for entry in manifest["entries"])
-            and not include_sensitive
-        ):
-            raise StateError("Sensitive bundle restore requires --include-sensitive")
-        prune_rollbacks()
-        rollback = DEFAULT_ROLLBACK_ROOT / f"rollback-{int(time.time())}-{secrets.token_hex(4)}.tar.gz"
-        unit_snapshot = capture_unit_state(restore_units())
-        # BUG 2 fix: capture rollback BEFORE quiescing. Services that finalize
-        # writes on shutdown would otherwise leave a post-stop quiesced baseline
-        # in the rollback instead of the true pre-restore state. We export
-        # with quiesce=False while units are still running (mildly incoherent
-        # snapshot) and then stop; post-restore digest validation (BUG 1) covers
-        # incoherence by failing the restore before it is marked committed.
+        try:
+            staging = pathlib.Path(temporary)
+            extract_bundle(bundle, staging)
+            manifest = load_extracted_manifest(staging)
+            current_host = socket.gethostname()
+            if confirm_host != current_host or manifest["hostName"] != current_host:
+                raise StateError("Restore confirmation and bundle hostname must match this host")
+            if not manifest["complete"] and not allow_partial:
+                raise StateError("Partial bundles require --allow-partial")
+            if (
+                any(entry["sensitive"] and entry["status"] == "captured" for entry in manifest["entries"])
+                and not include_sensitive
+            ):
+                raise StateError("Sensitive bundle restore requires --include-sensitive")
+            prune_rollbacks()
+            rollback = DEFAULT_ROLLBACK_ROOT / f"rollback-{int(time.time())}-{secrets.token_hex(4)}.tar.gz"
+            unit_snapshot = capture_unit_state(restore_units())
+        except Exception as early_error:
+            restore_journal_update("failed", primaryError=str(early_error), completedAt=int(time.time()))
+            raise
+        # A restore whose authorities already match the bundle would capture a
+        # rollback, quiesce services, and reload databases for no change.
+        try:
+            registry = {item.name: item for item in authorities()}
+            drift = False
+            for entry in canonical_apply_entries(manifest):
+                authority = registry[entry["name"]]
+                if entry["status"] == "captured":
+                    if authority.kind == "database":
+                        postgresql_active = (
+                            run_systemctl("is-active", "--quiet", "postgresql.service", check=False).returncode == 0
+                        )
+                        if not postgresql_active:
+                            drift = True
+                            break
+                        if database_comparison_digest() != entry["comparisonDigest"]:
+                            drift = True
+                            break
+                    else:
+                        source = pathlib.Path(authority.source)
+                        if lstat_type(source) == 0:
+                            drift = True
+                            break
+                        payload = staging.joinpath(*safe_member_name(entry["payload"]).parts)
+                        # Restore keeps the destination's local ownership/mode
+                        # policy, so compare content only; a mode mismatch must
+                        # not force a needless rollback capture and outage.
+                        if not restored_content_matches(source, payload):
+                            drift = True
+                            break
+                elif entry["status"] == "absent" and authority.kind == "path":
+                    # Bundle records the authority as absent but the path currently exists: drift.
+                    if lstat_type(pathlib.Path(authority.source)) != 0:
+                        drift = True
+                        break
+            if not drift:
+                restore_journal_update("skipped-unchanged", completedAt=int(time.time()))
+                return {"ok": True, "restoreId": restore_id, "skipped": True, "reason": "no drift"}
+        except Exception:  # noqa: BLE001 - the pre-check is advisory; any failure means drift cannot be ruled out
+            pass
+
         rollback_ready = False
         try:
             export_bundle(rollback, include_sensitive=True, quiesce=False)
@@ -1651,10 +1749,16 @@ def restore_bundle(
             restore_journal_update("rollback-captured", rollbackBundle=str(rollback))
             stop_active_units(unit_snapshot)
             restore_journal_update("quiesced", unitSnapshot=unit_snapshot)
+            # pg_restore fails against a stopped server, so database authorities
+            # need PostgreSQL running again before the payload is applied.
+            if any(entry["status"] == "captured" and entry["kind"] == "database" for entry in manifest["entries"]):
+                run_systemctl("start", "postgresql.service")
             apply_extracted(staging, manifest, restore_absence=restore_absence)
             restore_journal_update("state-applied")
-            reapply_runtime_consumers(unit_snapshot)
+            # Verification runs before runtime consumers restart: a writer that
+            # touches a restored file first would make the commit look drifted.
             verify_restored_state(staging, manifest)
+            reapply_runtime_consumers(unit_snapshot)
             restore_journal_update("committed", completedAt=int(time.time()))
         except Exception as original:
             if not rollback_ready:
@@ -1678,6 +1782,14 @@ def restore_bundle(
                     rollback_staging = pathlib.Path(rollback_temp)
                     extract_bundle(rollback, rollback_staging)
                     rollback_manifest = load_extracted_manifest(rollback_staging)
+                    # Rollback stops PostgreSQL before restore: pg_restore runs against a
+                    # stopped server, so start it before applying any rollback bundle that
+                    # restores a database authority. Mirrors the forward-path start above.
+                    if any(
+                        entry["status"] == "captured" and entry["kind"] == "database"
+                        for entry in rollback_manifest["entries"]
+                    ):
+                        run_systemctl("start", "postgresql.service")
                     apply_extracted(rollback_staging, rollback_manifest, restore_absence=True)
                 reapply_runtime_consumers(unit_snapshot)
                 restore_journal_update("failed-rolled-back", completedAt=int(time.time()))

@@ -115,7 +115,12 @@ const App = () => {
               onAllowDestructive={setAllowDestructive}
               encryptStorage={encryptStorage}
               onEncryptStorage={setEncryptStorage}
-              onRefresh={() => setPlanRequest((value) => value + 1)}
+              onRefresh={() => {
+                // A refreshed plan can list different devices, so any prior
+                // destructive confirmation no longer applies to it.
+                setAllowDestructive(false);
+                setPlanRequest((value) => value + 1);
+              }}
             />
           </WizardStep>
           <WizardStep id="wizard-confirm" step={3} name="Confirm and Reboot" footer={<></>}>

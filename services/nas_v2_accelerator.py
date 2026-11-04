@@ -83,6 +83,23 @@ def _runtime_selector_preference(rt: str) -> tuple[str, ...]:
     )
 
 
+def _physical_identity(selector: dict[str, Any]) -> str:
+    """Identify the physical GPU behind a selector representation.
+
+    One GPU appears once as device nodes and once as a CDI name, so selecting a
+    quantity from the raw list would hand out the same physical GPU twice.
+    """
+    if selector["type"] == "cdi":
+        value = selector["value"]
+        match = re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*/gpu=(\d+)", value)
+        return f"gpu:{match.group(1)}" if match else f"cdi:{value}"
+    for path in selector["values"]:
+        match = re.fullmatch(r"/dev/(nvidia\d+)", path)
+        if match:
+            return f"gpu:{match.group(1).removeprefix('nvidia')}"
+    return "devices:" + "\0".join(selector["values"])
+
+
 def _select_vendor(
     inventory: dict[str, Any], requested: str, rt: str
 ) -> tuple[str | None, list[dict[str, Any]], dict[str, Any] | None]:
@@ -93,13 +110,22 @@ def _select_vendor(
         raw_vendor = raw_all.get(vendor) if isinstance(raw_all, dict) else None
         if not isinstance(raw_vendor, dict):
             continue
-        sels: list[dict[str, Any]] = []
+        parsed: list[dict[str, Any]] = []
         for v in raw_vendor.get("selectors", []):
-            parsed = _selector(v)
-            if parsed is None or parsed["type"] not in pref or parsed in sels:
+            candidate = _selector(v)
+            if candidate is None or candidate["type"] not in pref or candidate in parsed:
                 continue
-            sels.append(parsed)
-        sels.sort(key=lambda s: (pref.index(s["type"]), s["value"] if s["type"] == "cdi" else "\0".join(s["values"])))
+            parsed.append(candidate)
+        parsed.sort(key=lambda s: (pref.index(s["type"]), s["value"] if s["type"] == "cdi" else "\0".join(s["values"])))
+        # Keep the first (most preferred) representation of each physical GPU.
+        sels: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for candidate in parsed:
+            identity = _physical_identity(candidate)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            sels.append(candidate)
         if sels:
             all_sel = _selector(raw_vendor.get("allSelector"))
             if all_sel is not None and all_sel["type"] not in pref:

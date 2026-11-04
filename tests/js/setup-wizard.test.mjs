@@ -134,6 +134,19 @@ test("setup job polling tolerates the expected protected-service reconnect windo
   assert.match(confirm, /isTerminal && \(/);
 });
 
+test("setup job polling continues for long jobs and backs off boundedly on failures", async () => {
+  const confirm = await wizard("src/steps/ConfirmStep.jsx");
+  const body = confirm.slice(confirm.indexOf("const poll = async () => {"));
+  assert.match(body, /api\/first-start\/job/);
+  assert.doesNotMatch(body, /MAX_POLLS|polls < /);
+  assert.match(body, /consecutiveFailures = 0/);
+  assert.match(body, /consecutiveFailures = Math\.min\(consecutiveFailures \+ 1, 4\)/);
+  assert.match(body, /Math\.min\(30000, 2000 \* 2 \*\* consecutiveFailures\)/);
+  assert.match(body, /if \(!cancelled\) \{/);
+  assert.match(body, /window\.setTimeout\(poll, delay\)/);
+  assert.match(confirm, /if \(!capability \|\| !jobId \|\| isTerminal\) return undefined/);
+});
+
 test("confirmation blocks invalid setup input and treats an absent resumable job as normal", async () => {
   const confirm = await wizard("src/steps/ConfirmStep.jsx");
   assert.match(confirm, /const problem = validate\(/);

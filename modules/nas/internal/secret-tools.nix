@@ -75,7 +75,7 @@ let
           }
         else
           read -r -s -p "KeePass database password: " keepass_password
-          echo
+          echo >&2
         fi
         [[ -n "$keepass_password" ]] || {
           echo "The KeePass database password cannot be empty." >&2
@@ -208,8 +208,7 @@ let
           echo "Created KeePassXC item: Authentik NAS API token (initially the bootstrap token)"
         fi
         if ! has_secret authentik-bootstrap-password; then
-          store_value authentik-bootstrap-password ${lib.escapeShellArg bootstrapPassword}
-          echo "Created KeePassXC item: Authentik bootstrap administrator password"
+          store_random_if_missing authentik-bootstrap-password "Authentik bootstrap administrator password" 24
         fi
         store_random_if_missing state-bundle-signing-key "NAS state bundle HMAC signing key" 32
         ${lib.optionalString (cfg.observability.enable && cfg.observability.grafana.enable) ''
@@ -239,22 +238,22 @@ let
         password_from_stdin=true
         prompt_unlock
         ensure_group
-        local secret_key token
+        local secret_key token bootstrap_password
         IFS= read -r secret_key || { echo "Unable to read the Authentik bootstrap secret key." >&2; exit 1; }
         IFS= read -r token || { echo "Unable to read the Authentik bootstrap token." >&2; exit 1; }
+        IFS= read -r bootstrap_password || { echo "Unable to read the Authentik bootstrap password." >&2; exit 1; }
         if IFS= read -r _; then
           echo "Unexpected extra input while adopting Authentik bootstrap authority." >&2
           exit 1
         fi
         require_secret_hex "$secret_key" 128 "Authentik bootstrap secret key"
         require_secret_hex "$token" 64 "Authentik bootstrap token"
+        require_secret_hex "$bootstrap_password" 48 "Authentik bootstrap password"
         store_value authentik-secret-key "$secret_key"
         store_value authentik-bootstrap-token "$token"
         store_value authentik-api-token "$token"
-        if ! has_secret authentik-bootstrap-password; then
-          store_value authentik-bootstrap-password ${lib.escapeShellArg bootstrapPassword}
-        fi
-        unset secret_key token
+        store_value authentik-bootstrap-password "$bootstrap_password"
+        unset secret_key token bootstrap_password
         echo "Adopted the running first-boot Authentik authority."
       }
 
@@ -361,7 +360,9 @@ TOKEN_WARNING
         fi
 
         ${lib.optionalString (cfg.observability.enable && cfg.observability.grafana.enable) ''
-        printf '%s' "$(get_secret grafana-secret-key)" > "$local_stage/observability/grafana-secret-key"
+        grafana_secret="$(get_secret grafana-secret-key)"
+        require_secret_atom "$grafana_secret" "Grafana secret key" 20 4096
+        printf '%s' "$grafana_secret" > "$local_stage/observability/grafana-secret-key"
         ''}
         ${lib.optionalString cfg.observability.ntfy.enable ''
         ntfy_password="$(get_secret ntfy-admin-password)"
@@ -628,7 +629,7 @@ NTFY_ENV
       command_show_zfs_key() {
         prompt_unlock
         get_secret zfs-dataset-key
-        echo
+        echo >&2
       }
 
       command_show_zfs_key_stdin() {

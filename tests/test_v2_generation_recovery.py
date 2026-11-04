@@ -40,6 +40,7 @@ def _entry_env(runtime: pathlib.Path, repo: pathlib.Path) -> dict[str, str]:
         "NAS_V2_FIREWALLD": str(runtime / "firewalld"),
         "NAS_V2_HISTORY_REPOSITORY": str(repo),
         "NAS_V2_GIT_BIN": "git",
+        "NAS_V2_GENERATION_READER_GROUP": str(os.getgid()),
     }
 
 
@@ -84,7 +85,7 @@ class PublicationCleanupSeparationTests(unittest.TestCase):
                 real_discard(path, current_link=current_link)
 
             def _flaky_prune(*args: object, **kwargs: object) -> list[pathlib.Path]:
-                raise generation.GenerationError("injected post-publication prune failure")
+                raise OSError("injected post-publication prune failure")
 
             with (
                 mock.patch.dict(os.environ, _entry_env(runtime, repo), clear=False),
@@ -94,14 +95,16 @@ class PublicationCleanupSeparationTests(unittest.TestCase):
                 mock.patch.object(entry, "_apply_once", side_effect=_fake_apply(EFFECTIVE_V2, REV2)),
                 mock.patch.object(entry, "prune_generations", side_effect=_flaky_prune),
                 mock.patch.object(entry, "discard_generation", side_effect=_spy_discard),
-                contextlib.redirect_stderr(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()) as stderr,
             ):
-                self.assertEqual(1, entry.main())
+                self.assertEqual(0, entry.main())
+            warning = stderr.getvalue()
             published = generations / REV2
             self.assertTrue(published.is_dir(), "post-publication prune failure must not discard current output")
             self.assertNotIn(REV2, discarded)
             self.assertEqual(published, (runtime / "current").resolve(strict=True))
             self.assertEqual(EFFECTIVE_V2, (runtime / "effective.json").read_text(encoding="utf-8"))
+            self.assertIn("post-publication prune deferred:", warning)
 
     def test_prune_retry_after_publication_failure_succeeds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -109,9 +112,26 @@ class PublicationCleanupSeparationTests(unittest.TestCase):
             repo = pathlib.Path(tmp) / "repo"
             repo.mkdir()
             _seed_current(runtime, REV1, EFFECTIVE_V1)
+            generations = runtime / "generations"
 
-            def _flaky_prune(*args: object, **kwargs: object) -> list[pathlib.Path]:
-                raise generation.GenerationError("injected post-publication prune failure")
+            # More than three generations exist before the retry so that the
+            # retry's real prune (retain=3) must remove an older generation.
+            generation.allocate_generation(generations, REV1)  # f"{REV1}-2"
+            generation.allocate_generation(generations, REV1)  # f"{REV1}-3"
+
+            real_prune = entry.prune_generations
+            state: dict[str, int] = {"calls": 0}
+
+            def _retry_prune(
+                generation_root: pathlib.Path,
+                *,
+                current_link: pathlib.Path,
+                retain: int = 3,
+            ) -> list[pathlib.Path]:
+                state["calls"] += 1
+                if state["calls"] == 1:
+                    raise generation.GenerationError("injected post-publication prune failure")
+                return real_prune(generation_root, current_link=current_link, retain=retain)
 
             patches = (
                 mock.patch.dict(os.environ, _entry_env(runtime, repo), clear=False),
@@ -119,17 +139,28 @@ class PublicationCleanupSeparationTests(unittest.TestCase):
                 mock.patch.object(entry, "ensure_bootstrap_applied", return_value={}),
                 mock.patch.object(entry, "record_desired", return_value={"head": REV2}),
                 mock.patch.object(entry, "_apply_once", side_effect=_fake_apply(EFFECTIVE_V2, REV2)),
+                mock.patch.object(entry, "prune_generations", side_effect=_retry_prune),
             )
             for patch in patches:
                 patch.start()
                 self.addCleanup(patch.stop)
-            with mock.patch.object(entry, "prune_generations", side_effect=_flaky_prune):
-                with contextlib.redirect_stderr(io.StringIO()):
-                    self.assertEqual(1, entry.main())
-            with contextlib.redirect_stderr(io.StringIO()):
+
+            # First publication: prune is injected to fail, is deferred, and
+            # reconciliation still reports success with the deferred warning.
+            with contextlib.redirect_stderr(io.StringIO()) as first_stderr:
                 self.assertEqual(0, entry.main())
+            self.assertIn("post-publication prune deferred:", first_stderr.getvalue())
+
+            # Retry: prune succeeds, removes an older generation, and emits no
+            # deferred-pruning warning.
+            with contextlib.redirect_stderr(io.StringIO()) as second_stderr:
+                self.assertEqual(0, entry.main())
+            self.assertNotIn("post-publication prune deferred:", second_stderr.getvalue())
+
             self.assertEqual(EFFECTIVE_V2, (runtime / "effective.json").read_text(encoding="utf-8"))
             self.assertTrue((runtime / "current").resolve(strict=True).is_dir())
+            self.assertFalse((generations / REV1).exists(), "retry prune must remove an older generation")
+            self.assertEqual(generations / f"{REV2}-2", (runtime / "current").resolve(strict=True))
 
     def test_pre_publication_failure_removes_only_its_unpublished_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

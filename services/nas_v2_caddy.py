@@ -15,6 +15,7 @@ from typing import Any
 
 from nas_common import ADMIN_GROUP
 from nas_v2_activation import ActivationProjectionError, socket_path
+from nas_v2_spec import RESERVED_ROUTE_PREFIXES
 
 PATH_SNIPPET = "nas_v2_managed_paths"
 HOSTNAME_RE = re.compile(
@@ -71,13 +72,27 @@ def _safe_posix(path: str, msg: str) -> pathlib.PurePosixPath:
 
 
 def _path_patterns(path: str) -> tuple[str, ...]:
-    if not path.startswith("/") or _ctl(path) or "{" in path or "}" in path:
+    if not path.startswith("/") or _ctl(path) or "{" in path or "}" in path or "*" in path:
         raise CaddyProjectionError(f"Unsafe route path {path!r}")
+    folded = path.casefold()
+    for prefix in RESERVED_ROUTE_PREFIXES:
+        reserved = prefix.casefold()
+        if folded == reserved or folded.startswith(reserved + "/"):
+            raise CaddyProjectionError(f"Route path {path!r} uses the reserved Authentik outpost prefix {prefix!r}")
     if path == "/":
         return ("/*",)
     if path.endswith("/"):
-        return (path, path + "*")
+        # Match the bare path as well: a public parent (`/app/`) would
+        # otherwise serve `/app/admin` through `/app/*` and shadow a protected
+        # child route registered at `/app/admin/`.
+        return (path, path.rstrip("/"), path + "*")
     return (path, path + "/*")
+
+
+def _authentik_upstream(value: str) -> str:
+    if _ctl(value) or "{" in value or "}" in value:
+        raise CaddyProjectionError("Unsafe Authentik upstream")
+    return value
 
 
 def _render_identity_auth(
@@ -90,8 +105,7 @@ def _render_identity_auth(
     authentik_path: str,
     indent: str,
 ) -> None:
-    if _ctl(authentik_upstream) or "{" in authentik_upstream or "}" in authentik_upstream:
-        raise CaddyProjectionError("Unsafe Authentik upstream")
+    _authentik_upstream(authentik_upstream)
     if not authentik_path.startswith("/") or _ctl(authentik_path):
         raise CaddyProjectionError("Authentik path must be an absolute HTTP path")
     authentik_uri = "/outpost.goauthentik.io/auth/caddy"
@@ -303,19 +317,47 @@ def generate_caddyfile(
         )
         lines.append("  }")
     lines.extend(["}", ""])
-    for index, (route, hostname, path) in enumerate(hostname_routes):
+    hostname_sites: dict[str, tuple[str, list[tuple[dict[str, Any], str]]]] = {}
+    for route, hostname, path in hostname_routes:
+        key = hostname.casefold()
+        site = hostname_sites.get(key)
+        if site is None:
+            site = (hostname, [])
+            hostname_sites[key] = site
+        site[1].append((route, path))
+    index = 0
+    for hostname, entries in hostname_sites.values():
         lines.extend([f"https://{hostname} {{", "  tls internal"])
-        matcher = _matcher(route["service"], route["route"], f"hostpath_{index}")
-        patterns = " ".join(_q(item) for item in _path_patterns(path))
-        lines.extend([f"  @{matcher} path {patterns}", f"  handle @{matcher} {{"])
-        _render_handler(
-            lines,
-            route=route,
-            authentik_upstream=authentik_upstream,
-            authentik_path=authentik_path,
-            indent="    ",
-        )
-        lines.extend(["  }", "}", ""])
+        if any(route["authMode"] == "identity" for route, _path in entries):
+            # Unauthenticated forward_auth replies redirect to the outpost on
+            # this same host; without this handler the login flow 404s.
+            upstream = _authentik_upstream(authentik_upstream)
+            lines.extend(
+                [
+                    '  @authentik_outpost path "/outpost.goauthentik.io/*"',
+                    "  handle @authentik_outpost {",
+                    f"    reverse_proxy {upstream} {{",
+                    "      header_up Host {http.request.host}",
+                    "      header_up X-Forwarded-Proto https",
+                    "      header_up X-Forwarded-For {remote_host}",
+                    "    }",
+                    "  }",
+                ]
+            )
+        for route, path in entries:
+            matcher = _matcher(route["service"], route["route"], f"hostpath_{index}")
+            patterns = " ".join(_q(item) for item in _path_patterns(path))
+            lines.extend([f"  @{matcher} path {patterns}", f"  handle @{matcher} {{"])
+            _render_handler(
+                lines,
+                route=route,
+                authentik_upstream=authentik_upstream,
+                authentik_path=authentik_path,
+                indent="    ",
+            )
+            lines.append("  }")
+            index += 1
+        lines.extend(["}", ""])
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -362,16 +404,22 @@ class PortalProjectionError(RuntimeError):
     """Raised when portal metadata cannot be projected safely."""
 
 
+def _safe_portal_link(value: str) -> str:
+    if "\\" in value or any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise PortalProjectionError("portal link contains a backslash or control character")
+    return value
+
+
 def _route_url(exposure: dict[str, Any], portal: dict[str, Any]) -> str:
     explicit = portal.get("url")
     if isinstance(explicit, str) and explicit.startswith("/") and not explicit.startswith("//"):
-        return explicit
+        return _safe_portal_link(explicit)
     exposure_type = exposure.get("type")
     if exposure_type == "path":
         paths = exposure.get("paths")
         candidate = paths[0] if isinstance(paths, list) and paths and isinstance(paths[0], str) else None
         if isinstance(candidate, str) and candidate.startswith("/") and not candidate.startswith("//"):
-            return candidate
+            return _safe_portal_link(candidate)
         raise PortalProjectionError("visible portal path route has no safe path")
     if exposure_type == "hostname":
         hostnames = exposure.get("hostnames")
@@ -383,7 +431,7 @@ def _route_url(exposure: dict[str, Any], portal: dict[str, Any]) -> str:
             and isinstance(path, str)
             and path.startswith("/")
         ):
-            return f"https://{hostnames[0]}{path}"
+            return _safe_portal_link(f"https://{hostnames[0]}{path}")
     raise PortalProjectionError("visible portal route has no safe URL")
 
 
@@ -404,7 +452,7 @@ def compile_portal_projection(effective: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(service_id, str) or not isinstance(route_id, str):
                 continue
             service = services.get(service_id)
-            if not isinstance(service, dict) or service.get("enabled", True) is False:
+            if not isinstance(service, dict) or service.get("enabled") is not True:
                 continue
             portal = route.get("portal", {})
             if not isinstance(portal, dict) or portal.get("visible") is not True:

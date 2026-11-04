@@ -401,6 +401,95 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         with self.assertRaisesRegex(caddy.CaddyProjectionError, "collides"):
             caddy.generate_caddyfile(self.compile(service), lan_host="nas.local")
 
+    def test_compiled_hostname_routes_share_one_site_block_per_hostname(self):
+        def route(route_id: str, path: str, port: int, hostname: str) -> dict:
+            return {
+                "service": "demo",
+                "route": route_id,
+                "authMode": "public",
+                "requiredCapability": None,
+                "onDemandWake": False,
+                "exposure": {"type": "hostname", "hostnames": [hostname], "path": path},
+                "target": {"type": "http", "host": "127.0.0.1", "port": port},
+                "proxy": {
+                    "requestHeaders": {},
+                    "removeRequestHeaders": [],
+                    "responseHeaders": {},
+                    "trustedIdentityHeaders": [],
+                    "requireHeaders": {},
+                    "stripPrefix": None,
+                },
+            }
+
+        # The compiler currently rejects duplicate hostnames (case-insensitively),
+        # but the renderer is also fed persisted/hand-built effective state; it
+        # must not emit an address twice, which Caddy rejects as a duplicate site
+        # definition. Caddy matches hostnames case-insensitively.
+        effective = {
+            "schemaVersion": 3,
+            "services": {"demo": {"enabled": True}},
+            "derived": {
+                "routes": [
+                    route("root", "/", 8080, "app.example.com"),
+                    route("admin", "/admin/", 8081, "App.example.com"),
+                ]
+            },
+        }
+        rendered = caddy.generate_caddyfile(effective)
+        self.assertEqual(rendered.count("https://App.example.com {"), 1)
+        self.assertEqual(rendered.count("https://app.example.com {"), 0)
+        self.assertEqual(rendered.count("tls internal"), 1)
+        site = rendered.split("https://App.example.com {", 1)[1]
+        self.assertIn("reverse_proxy 127.0.0.1:8080", site)
+        self.assertIn("reverse_proxy 127.0.0.1:8081", site)
+        self.assertLess(site.index("reverse_proxy 127.0.0.1:8081"), site.index("reverse_proxy 127.0.0.1:8080"))
+
+    def test_one_route_with_two_hostnames_emits_two_site_blocks(self):
+        service = self.base_service()
+        service["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": 8080},
+                "exposure": {
+                    "type": "hostname",
+                    "hostnames": ["one.example.com", "two.example.com"],
+                    "path": "/",
+                },
+                "auth": {"mode": "public"},
+            }
+        }
+        rendered = caddy.generate_caddyfile(self.compile(service))
+        self.assertEqual(rendered.count("https://one.example.com {"), 1)
+        self.assertEqual(rendered.count("https://two.example.com {"), 1)
+
+    def test_identity_hostname_site_serves_the_authentik_outpost_before_routes(self):
+        service = self.base_service()
+        service["authorization"] = {"capabilities": [{"id": "admin", "title": "Administration"}]}
+        service["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": 8080},
+                "exposure": {"type": "hostname", "hostnames": ["app.example.com"], "path": "/"},
+                "auth": {"mode": "identity", "capability": "admin"},
+            }
+        }
+        rendered = caddy.generate_caddyfile(self.compile(service), authentik_upstream="127.0.0.1:9010")
+        site = rendered.split("https://app.example.com {", 1)[1]
+        self.assertIn('@authentik_outpost path "/outpost.goauthentik.io/*"', site)
+        self.assertIn("reverse_proxy 127.0.0.1:9010 {", site)
+        self.assertLess(site.index("@authentik_outpost"), site.index("forward_auth"))
+        self.assertLess(site.index("reverse_proxy 127.0.0.1:9010"), site.index("reverse_proxy 127.0.0.1:8080"))
+
+    def test_public_hostname_site_does_not_expose_the_authentik_outpost(self):
+        service = self.base_service()
+        service["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": 8080},
+                "exposure": {"type": "hostname", "hostnames": ["app.example.com"], "path": "/"},
+                "auth": {"mode": "public"},
+            }
+        }
+        rendered = caddy.generate_caddyfile(self.compile(service))
+        self.assertNotIn("/outpost.goauthentik.io", rendered)
+
     def test_unix_target_and_proxy_headers(self):
         service = self.base_service()
         service["routes"] = {
@@ -455,6 +544,62 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(caddy.CaddyProjectionError, "requires identity"):
             caddy.generate_caddyfile(self.compile(service))
+
+    def test_reserved_authentik_outpost_path_cannot_be_shadowed_by_a_service_route(self):
+        effective = self.compile(self.base_service())
+        # Bypass desired-state validation to prove the renderer is a second,
+        # independent boundary against shadowing the Authentik outpost route.
+        effective["derived"]["routes"] = [
+            {
+                "service": "demo",
+                "route": "web",
+                "authMode": "public",
+                "requiredCapability": None,
+                "onDemandWake": False,
+                "target": {"type": "http", "host": "127.0.0.1", "port": 8080},
+                "exposure": {"type": "path", "paths": ["/outpost.goauthentik.io/"]},
+                "proxy": {
+                    "requestHeaders": {},
+                    "removeRequestHeaders": [],
+                    "responseHeaders": {},
+                    "trustedIdentityHeaders": [],
+                    "requireHeaders": {},
+                },
+                "portal": {"visible": False, "order": 0},
+            }
+        ]
+        with self.assertRaisesRegex(caddy.CaddyProjectionError, "reserved Authentik outpost prefix"):
+            caddy.generate_caddyfile(effective)
+        for path in ("/outpost.goauthentik.io", "/outpost.goauthentik.io/auth/caddy"):
+            with self.subTest(path=path):
+                with self.assertRaisesRegex(caddy.CaddyProjectionError, "reserved Authentik outpost prefix"):
+                    caddy._path_patterns(path)
+
+    def test_trailing_slash_route_also_matches_its_bare_path(self):
+        parent = self.base_service()
+        parent["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": 8080},
+                "exposure": {"type": "path", "paths": ["/app/"]},
+                "auth": {"mode": "public"},
+            }
+        }
+        child = self.base_service()
+        child["routes"] = {
+            "admin": {
+                "target": {"type": "http", "port": 8081},
+                "exposure": {"type": "path", "paths": ["/app/admin/"]},
+                "auth": {"mode": "identity", "capability": "admin"},
+            }
+        }
+        child["authorization"] = {"capabilities": [{"id": "admin", "title": "Admin"}]}
+        rendered = caddy.generate_caddyfile(
+            v2.compile_document({"schemaVersion": 3, "services": {"a": parent, "b": child}}, self.schema)
+        )
+        # Without the bare path, /app/admin would match the public parent's
+        # /app/* and bypass the protected child matcher.
+        self.assertIn('path "/app/admin/" "/app/admin" "/app/admin/*"', rendered)
+        self.assertLess(rendered.index('"/app/admin"'), rendered.index('"/app/*"'))
 
     def test_parent_child_routes_render_longest_first(self):
         def svc(sid: str, path: str) -> dict:

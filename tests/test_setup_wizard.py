@@ -154,6 +154,12 @@ class TestWizardSource(unittest.TestCase):
         self.assertIn("api/first-start/resume", combined)
         self.assertIn("wizard-job-document", combined)
 
+    def test_refreshing_the_plan_clears_the_previous_destructive_confirmation(self):
+        index = (WIZARD / "src/index.jsx").read_text(encoding="utf-8")
+        refresh = index.split("onRefresh={() => {", 1)[1].split("}}", 1)[0]
+        self.assertIn("setAllowDestructive(false)", refresh)
+        self.assertIn("setPlanRequest", refresh)
+
     def test_refresh_resumes_without_resubmitting(self):
         confirm = (WIZARD / "src/steps/ConfirmStep.jsx").read_text(encoding="utf-8")
         self.assertIn("api/first-start/resume", confirm)

@@ -1,0 +1,17 @@
+{
+  "authentikRevision": "e1c90f3fae9d86d6a7a4f36018dafa9a1554f670",
+  "lockfile": "https://raw.githubusercontent.com/goauthentik/authentik/e1c90f3fae9d86d6a7a4f36018dafa9a1554f670/web/package-lock.json",
+  "lockfileSha256": "f007c88fc4658038b53106ec4d1d8fde30e83528a62693f23b778e09dbf179dd",
+  "package": {
+    "name": "lit-html",
+    "version": "3.3.2",
+    "resolved": "https://registry.npmjs.org/lit-html/-/lit-html-3.3.2.tgz",
+    "integrity": "sha512-Qy9hU88zcmaxBXcc10ZpdK7cOLXvXpRoBxERdtqV9QOrfpMZZ6pSYP91LhpPtap3sFMUiL7Tw2RImbe0Al2/kw=="
+  },
+  "files": {
+    "lit-html.js": "5b38623fdb1513e0a559fc25d516f669027f937c86d4451f7e704d37c298e061",
+    "directive.js": "3344c4f41c69cd0701d3937e8f9ef90bd845614bf6456d0b8314b7c51d415b9d",
+    "directives/style-map.js": "3a7a07effa80f3fb042179863ed830c1cce23bbd4741a46d2ea3df61219c785e",
+    "LICENSE": "2b66f9390afde29edfe4314daff93f01fb182e1178053e228120178987e5db75"
+  }
+}

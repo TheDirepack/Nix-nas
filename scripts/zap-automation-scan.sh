@@ -273,7 +273,14 @@ fi
 if [[ "$MODE" == authenticated ]]; then
   runtime_args+=(-e NAS_ZAP_AUTH_USER -e NAS_ZAP_AUTH_PASSWORD)
 fi
-process_timeout="${NAS_ZAP_AUTOMATION_TIMEOUT_SECONDS:-$((DURATION * 60 + 600))}"
+# The process deadline must cover both scan budget phases (client spider and
+# active scan), each of which can run for the full DURATION budget, plus
+# overhead for report generation and add-on evidence verification. The derived
+# budget is clamped to the validated cap: DURATION may reach 240 minutes, where
+# DURATION * 120 + 1200 would exceed the 18000 s ceiling.
+process_timeout="$((DURATION * 120 + 1200))"
+(( process_timeout <= 18000 )) || process_timeout=18000
+process_timeout="${NAS_ZAP_AUTOMATION_TIMEOUT_SECONDS:-$process_timeout}"
 [[ "$process_timeout" =~ ^[1-9][0-9]*$ ]] || die "NAS_ZAP_AUTOMATION_TIMEOUT_SECONDS must be a positive integer"
 (( process_timeout <= 18000 )) || die "NAS_ZAP_AUTOMATION_TIMEOUT_SECONDS must not exceed 18000"
 

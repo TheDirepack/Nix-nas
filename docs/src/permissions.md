@@ -21,6 +21,8 @@ Ordinary accounts may always manage their password, MFA, and permitted profile f
 
 Ordinary accounts cannot open Cockpit, the global Syncthing UI, or the administrator CopyParty configuration volume.
 
+Cockpit access to `/console` is granted by `nas_admin` or by the `application.cockpit.admin` capability group, which is an alternative to `nas_admin` for the Cockpit route. Either group satisfies the cockpit route authorization check.
+
 ## Share policy
 
 CopyParty is the only authority for paths, ACLs, flags, quotas, indexing, and share links. Authentik groups are identity inputs referenced by CopyParty ACLs; they do not generate shares. There is no `nasShareFlags` or `share-*` translation path.

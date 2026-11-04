@@ -43,7 +43,7 @@ def load_json(path: pathlib.Path) -> dict[str, Any] | None:
         value = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise JournalError(f"Invalid operation journal: {path}") from exc
     if not isinstance(value, dict):
         raise JournalError(f"Operation journal is not a JSON object: {path}")

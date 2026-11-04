@@ -4,6 +4,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from typing import cast
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services"))
@@ -11,6 +12,7 @@ sys.path.insert(0, str(ROOT / "services"))
 import nas_v2_accelerator as accelerator  # noqa: E402
 import nas_v2_platform_probe as platform_probe  # noqa: E402
 import nas_v2_quadlet as quadlet  # noqa: E402
+from nas_v2_systemd_attachments import SystemdAttachmentError  # noqa: E402
 from nas_v2_systemd_native import attachment_lines  # noqa: E402
 
 
@@ -109,6 +111,25 @@ class PlatformProbeTests(unittest.TestCase):
                 result["accelerators"]["NVIDIA"]["allSelector"],
             )
 
+    def test_duplicate_nvidia_device_names_are_deduplicated_before_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            dev = pathlib.Path(temporary) / "dev"
+            dev.mkdir()
+            (dev / "nvidia0").touch()
+            (dev / "nvidia00").touch()
+            result = platform_probe.probe_inventory(
+                {"schemaVersion": 1, "capabilities": {"gpu-nvidia": True, "gpu-nvidia-cdi": True}},
+                sys_class_drm=pathlib.Path(temporary) / "empty-drm",
+                dev_root=dev,
+            )
+            self.assertEqual(
+                result["accelerators"]["NVIDIA"]["selectors"],
+                [
+                    {"type": "devices", "values": [str(dev / "nvidia0")]},
+                    {"type": "cdi", "value": "nvidia.com/gpu=0"},
+                ],
+            )
+
 
 class AcceleratorResolutionTests(unittest.TestCase):
     def test_optional_missing_gpu_falls_back_to_cpu(self) -> None:
@@ -157,6 +178,45 @@ class AcceleratorResolutionTests(unittest.TestCase):
             [{"type": "devices", "values": ["/dev/nvidia0", "/dev/nvidiactl", "/dev/nvidia-uvm"]}],
             resolved[0]["selectors"],
         )
+
+    def test_one_physical_gpu_is_never_selected_twice(self) -> None:
+        request: dict[str, object] = {
+            "kind": "gpu",
+            "vendor": "NVIDIA",
+            "quantity": 2,
+            "required": True,
+            "mode": "shared",
+        }
+        with self.assertRaises(accelerator.AcceleratorResolutionError):
+            accelerator.resolve_service_accelerators("test", service("oci", request), inventory())
+        optional = dict(request, required=False)
+        self.assertEqual([], accelerator.resolve_service_accelerators("test", service("oci", optional), inventory()))
+
+    def test_quantity_counts_distinct_physical_gpus_not_representations(self) -> None:
+        two_gpus = inventory()
+        nvidia = cast(dict[str, object], two_gpus["accelerators"])["NVIDIA"]
+        assert isinstance(nvidia, dict)
+        nvidia["selectors"] = [
+            {"type": "devices", "values": ["/dev/nvidia0", "/dev/nvidiactl", "/dev/nvidia-uvm"]},
+            {"type": "cdi", "value": "nvidia.com/gpu=0"},
+            {"type": "devices", "values": ["/dev/nvidia1", "/dev/nvidiactl", "/dev/nvidia-uvm"]},
+            {"type": "cdi", "value": "nvidia.com/gpu=1"},
+        ]
+        resolved = accelerator.resolve_service_accelerators(
+            "test",
+            service("oci", {"kind": "gpu", "vendor": "NVIDIA", "quantity": 2, "required": True, "mode": "shared"}),
+            two_gpus,
+        )
+        self.assertEqual(
+            [{"type": "cdi", "value": "nvidia.com/gpu=0"}, {"type": "cdi", "value": "nvidia.com/gpu=1"}],
+            resolved[0]["selectors"],
+        )
+        with self.assertRaises(accelerator.AcceleratorResolutionError):
+            accelerator.resolve_service_accelerators(
+                "test",
+                service("oci", {"kind": "gpu", "vendor": "NVIDIA", "quantity": 3, "required": True, "mode": "shared"}),
+                two_gpus,
+            )
 
     def test_compose_target_survives_resolution(self) -> None:
         resolved = accelerator.resolve_service_accelerators(
@@ -208,9 +268,40 @@ class AcceleratorResolutionTests(unittest.TestCase):
         resolved = accelerator.resolve_effective({"services": {"test": raw_service}, "derived": {}}, inventory())
         lines = attachment_lines(resolved, resolved["services"]["test"])
         self.assertEqual("DevicePolicy=closed", lines[0])
-        self.assertIn('DeviceAllow="/dev/nvidia0 rw"', lines)
-        self.assertIn('DeviceAllow="/dev/nvidiactl rw"', lines)
-        self.assertIn('DeviceAllow="/dev/nvidia-uvm rw"', lines)
+        self.assertIn('DeviceAllow="/dev/nvidia0" rw', lines)
+        self.assertIn('DeviceAllow="/dev/nvidiactl" rw', lines)
+        self.assertIn('DeviceAllow="/dev/nvidia-uvm" rw', lines)
+
+    def test_deviceallow_quotes_only_device_path_not_access_mode(self) -> None:
+        lines = attachment_lines(
+            {"storageResources": {}, "credentials": {}},
+            {
+                "runtime": {"type": "systemd"},
+                "storage": [],
+                "credentials": [],
+                "resources": {"accelerators": [{"device": "/dev/nvidia0", "mode": "shared"}]},
+            },
+        )
+        self.assertIn('DeviceAllow="/dev/nvidia0" rw', lines)
+        self.assertNotIn('DeviceAllow="/dev/nvidia0 rw"', lines)
+
+    def test_deviceallow_rejects_a_path_it_cannot_express(self) -> None:
+        """DeviceAllow takes two whitespace-separated arguments.
+
+        A device path containing whitespace cannot be expressed unambiguously,
+        and systemd does not honour the quoted form, so projection must refuse
+        it rather than emit a directive that grants nothing.
+        """
+        with self.assertRaisesRegex(SystemdAttachmentError, "whitespace or control characters"):
+            attachment_lines(
+                {"storageResources": {}, "credentials": {}},
+                {
+                    "runtime": {"type": "systemd"},
+                    "storage": [],
+                    "credentials": [],
+                    "resources": {"accelerators": [{"device": "/dev/custom gpu", "mode": "shared"}]},
+                },
+            )
 
     def test_quadlet_cdi_lowers_to_v2_owned_podman_device_arg(self) -> None:
         raw_service = service(
@@ -240,6 +331,24 @@ class AcceleratorResolutionTests(unittest.TestCase):
             service_lines=[],
         ).decode()
         self.assertIn('PodmanArgs=--device="nvidia.com/gpu=0"', rendered)
+
+
+class CdiNameStrategyContractTests(unittest.TestCase):
+    def test_nix_host_platform_generates_index_names_the_probe_emits(self) -> None:
+        # The probe emits index selectors (nvidia.com/gpu=<n>), so the CDI
+        # generator must keep index names. UUID names remain generated too for
+        # existing service declarations.
+        host_platform = (ROOT / "modules/nas/config/host-platform.nix").read_text(encoding="utf-8")
+        probe = (ROOT / "services/nas_v2_platform_probe.py").read_text(encoding="utf-8")
+        accelerator = (ROOT / "services/nas_v2_accelerator.py").read_text(encoding="utf-8")
+
+        self.assertIn(
+            'device-name-strategy = lib.mkIf (hasNvidiaGpu && cfg.hardware.nvidia.containerToolkit) "index";',
+            host_platform,
+        )
+        self.assertIn('"--device-name-strategy=uuid"', host_platform)
+        self.assertIn('_cdi(f"nvidia.com/gpu={index}")', probe)
+        self.assertIn("is_cdi_selector", accelerator)
 
 
 if __name__ == "__main__":

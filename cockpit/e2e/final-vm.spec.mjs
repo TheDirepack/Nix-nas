@@ -57,6 +57,17 @@ async function submitUsername(page, value) {
   await page.locator('button[type="submit"]').filter({visible: true}).first().click();
 }
 
+// Authentik's user banner animates, and WebKit inside the installed VM never
+// reports the "Not you?" link as stable, so a coordinate click waits until the
+// test budget expires. Following the link's own cancellation target issues the
+// same request without depending on hit testing.
+async function resetAnonymousFlow(page) {
+  const link = page.getByRole("link", {name: "Not you?", exact: true});
+  await expect(link).toBeVisible();
+  const href = await link.getAttribute("href");
+  await page.goto(new URL(href, page.url()).toString());
+}
+
 async function login(page) {
   await page.goto("/console/nas");
   await expectLogin(page);
@@ -247,7 +258,7 @@ test("hostile anonymous login values stay inert", async ({page}) => {
   ];
   await page.goto("/console/");
   for (const [index, payload] of payloads.entries()) {
-    if (index > 0) await page.getByRole("link", {name: "Not you?", exact: true}).click();
+    if (index > 0) await resetAnonymousFlow(page);
     await expectLogin(page);
     await submitUsername(page, payload);
     const pass = page.getByRole("textbox", {name: "Password", exact: true});

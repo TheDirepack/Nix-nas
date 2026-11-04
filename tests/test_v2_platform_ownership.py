@@ -33,6 +33,18 @@ class V2PlatformRuntimeOwnershipTests(unittest.TestCase):
         self.assertNotIn('virtualization = (daemon "libvirtd.service"', seed)
 
 
+class ManagedServicesV2PodmanStorageSafetyTests(unittest.TestCase):
+    def test_legacy_podman_storage_guard_precedes_all_v2_app_activation(self) -> None:
+        virtual = (ROOT / "modules/nas/config/virtualization.nix").read_text(encoding="utf-8")
+        managed = (ROOT / "modules/nas/config/managed-services.nix").read_text(encoding="utf-8")
+        self.assertIn("Refusing Podman storage operations before", virtual)
+        self.assertIn("unitConfig.AssertPathIsMountPoint = cfg.zfsRoot;", virtual)
+        self.assertIn('before = [ "podman.service" "nas-managed-services-reconcile.service" ];', virtual)
+        self.assertIn('requires = [ "nas-containers-storage-check.service" ];', virtual)
+        reconcile = managed.split("systemd.services.nas-managed-services-reconcile = {", 1)[1]
+        self.assertIn('lib.optional cfg.virtualization.enable "nas-containers-storage-check.service"', reconcile)
+
+
 class ManagedServicesV2PlatformRouteOwnershipTests(unittest.TestCase):
     def test_cockpit_console_route_is_seeded_only_through_v2(self) -> None:
         seed = (ROOT / "modules" / "nas" / "config" / "managed-services-seed-v2.nix").read_text(encoding="utf-8")
@@ -41,8 +53,12 @@ class ManagedServicesV2PlatformRouteOwnershipTests(unittest.TestCase):
         self.assertIn("platformServices", seed)
         self.assertIn("cockpit", seed)
         self.assertIn('paths = [ "/console" ];', seed)
-        self.assertIn('type = "http";', seed)
-        self.assertIn('host = "127.0.0.1";', seed)
+        console = seed.split("routes.console = {", 1)[1]
+        console = console.split("auth = {", 1)[0]
+        self.assertIn('type = "unix-http";', console)
+        self.assertIn('socket = "/run/nas-cockpit-sso/ws.sock";', console)
+        self.assertNotIn('host = "127.0.0.1";', console)
+        self.assertNotIn("port = cockpitPort;", console)
         self.assertIn('capability = "admin";', seed)
         self.assertIn('title = "System Console";', seed)
 

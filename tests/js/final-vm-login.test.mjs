@@ -58,7 +58,18 @@ function loginCase(name) {
         },
       };
     },
-    async goto() {
+    url() {
+      return state.url;
+    },
+    async goto(target) {
+      if (String(target).includes("/cancel/")) {
+        // The suite follows the "Not you?" cancellation target directly.
+        assert.equal(state.stage, "password");
+        assert.ok(state.submissions.every((item) => item.rendered));
+        state.cancellations += 1;
+        state.stage = "username";
+        return;
+      }
       state.navigations += 1;
       state.stage = "username";
       state.marker = 0;
@@ -67,6 +78,12 @@ function loginCase(name) {
       return {
         role,
         name: options.name,
+        async getAttribute(name) {
+          assert.equal(role, "link");
+          assert.equal(options.name, "Not you?");
+          assert.equal(name, "href");
+          return "/identity/flows/-/cancel/?next=%2Fconsole%2F";
+        },
         async fill(value) {
           state[options.name === "Password" ? "password" : "username"] = value;
         },
