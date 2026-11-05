@@ -30,7 +30,7 @@ _VENDOR_IDS = {
 }
 _NVIDIA_DEVICE_RE = re.compile(r"^nvidia([0-9]+)$")
 _NVIDIA_SHARED_NODES = ("nvidiactl", "nvidia-uvm", "nvidia-uvm-tools", "nvidia-modeset")
-_NVIDIA_UUID_RE = re.compile(r"GPU-[0-9a-fA-F-]{8,}")
+_NVIDIA_UUID_RE = re.compile(r"GPU-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 
 
 def _nvidia_gpu_uuids_by_minor(proc_nvidia_gpus: pathlib.Path) -> dict[int, str]:
@@ -59,8 +59,10 @@ def _nvidia_gpu_uuids_by_minor(proc_nvidia_gpus: pathlib.Path) -> dict[int, str]
         minor = int(minor_text)
         if minor > 254:
             continue
-        if minor in identities or uuid in seen_uuids:
-            raise PlatformProbeError("duplicate NVIDIA GPU minor or UUID in driver metadata")
+        if minor in identities:
+            raise PlatformProbeError("duplicate NVIDIA GPU minor in driver metadata")
+        if uuid in seen_uuids:
+            raise PlatformProbeError("duplicate NVIDIA GPU UUID in driver metadata")
         identities[minor] = uuid
         seen_uuids.add(uuid)
     return identities
@@ -81,6 +83,28 @@ def _listed_nvidia_cdi_devices(nvidia_ctk_bin: str) -> set[str]:
     if result.returncode != 0:
         return set()
     return {name for line in result.stdout.splitlines() if (name := line.strip()).startswith("nvidia.com/gpu=")}
+
+
+def _nvidia_cdi_name(minor: int, uuid: str | None, listed: set[str]) -> str | None:
+    """Choose one CDI device name for a physical GPU.
+
+    The toolkit enumerates devices in NVML order for its index names, so
+    nvidia.com/gpu=<n> is not interchangeable with /dev/nvidia<n>. UUID names
+    are stable and therefore preferred; the index name stays the fallback so
+    explicit nvidia.com/gpu=<index> declarations keep working.
+
+    An empty ``listed`` set means the provider could not be consulted (missing
+    toolkit, timeout, non-zero exit). Publishing the preferred name then
+    preserves the pre-existing behaviour instead of silently dropping the GPU.
+    """
+    candidates = [f"nvidia.com/gpu={uuid}"] if uuid is not None else []
+    candidates.append(f"nvidia.com/gpu={minor}")
+    if not listed:
+        return candidates[0]
+    for name in candidates:
+        if name in listed:
+            return name
+    return None
 
 
 def _load_base(path: pathlib.Path) -> dict[str, Any]:
@@ -159,9 +183,10 @@ def probe_inventory(
     for minor in sorted(set(nvidia_indexes)):
         gpu_node = dev_root / f"nvidia{minor}"
         selectors["NVIDIA"].append(_devices([gpu_node, *shared_nvidia]))
-        uuid = identities.get(minor)
-        if uuid is not None and f"nvidia.com/gpu={uuid}" in listed_cdi:
-            selectors["NVIDIA"].append(_cdi(f"nvidia.com/gpu={uuid}"))
+        if cdi_enabled:
+            name = _nvidia_cdi_name(minor, identities.get(minor), listed_cdi)
+            if name is not None:
+                selectors["NVIDIA"].append(_cdi(name))
     if not nvidia_indexes:
         selectors["NVIDIA"].extend(drm_selectors["NVIDIA"])
 
@@ -173,7 +198,14 @@ def probe_inventory(
             "configured": configured,
             "selectors": available,
         }
-        if vendor == "NVIDIA" and "nvidia.com/gpu=all" in listed_cdi:
+        if vendor != "NVIDIA":
+            continue
+        # Consumers correlate a UUID CDI name with /dev/nvidia<minor> through
+        # this map; without it one physical GPU counts twice.
+        minor_by_uuid = {uuid: minor for minor, uuid in sorted(identities.items())}
+        if minor_by_uuid:
+            accelerators[vendor]["minorByUuid"] = minor_by_uuid
+        if cdi_enabled and (not listed_cdi or "nvidia.com/gpu=all" in listed_cdi):
             accelerators[vendor]["allSelector"] = _cdi("nvidia.com/gpu=all")
 
     return {
@@ -208,7 +240,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True, type=pathlib.Path)
     parser.add_argument("--sys-class-drm", type=pathlib.Path, default=pathlib.Path("/sys/class/drm"))
     parser.add_argument("--dev-root", type=pathlib.Path, default=pathlib.Path("/dev"))
-    parser.add_argument("--nvidia-ctk-bin", default="nvidia-ctk")
+    parser.add_argument("--nvidia-ctk-bin", default=os.environ.get("NAS_V2_NVIDIA_CTK_BIN", "nvidia-ctk"))
     return parser
 
 

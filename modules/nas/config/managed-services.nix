@@ -150,9 +150,9 @@ in
         # reconcile after activating secrets, before publishing state.json.
         ConditionPathExists = [ "${nasInternal.secretRoot}/ready" ];
       };
-      # The NVIDIA toolkit is invoked by name by the probe; systemd composes
-      # PATH from this list, so the bare `nvidia-ctk` resolves without
-      # overriding the service's default PATH.
+      # Nix passes the toolkit store path to the probe explicitly; this PATH
+      # entry and NAS_V2_NVIDIA_CTK_BIN keep a bare `nvidia-ctk` resolvable for
+      # manual runs without overriding the service's default PATH.
       path = [ pkgs.nvidia-container-toolkit ];
       environment = {
         PYTHONPATH = "${v2Source}";
