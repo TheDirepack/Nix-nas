@@ -15,6 +15,7 @@ class AcceleratorResolutionError(RuntimeError):
 
 
 _CDI_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*=[A-Za-z0-9][A-Za-z0-9_.:-]*$")
+_NVIDIA_UUID_CDI_RE = re.compile(r"^nvidia\.com/gpu=GPU-[0-9a-fA-F-]+$")
 _VENDOR_ORDER = ("NVIDIA", "AMD", "Intel")
 
 
@@ -83,16 +84,51 @@ def _runtime_selector_preference(rt: str) -> tuple[str, ...]:
     )
 
 
-def _physical_identity(selector: dict[str, Any]) -> str:
+def _minor_by_uuid(raw_vendor: dict[str, Any]) -> dict[str, str]:
+    """Read the probe's UUID-to-driver-minor map, ignoring malformed entries."""
+    raw = raw_vendor.get("minorByUuid")
+    if not isinstance(raw, dict):
+        return {}
+    mapping: dict[str, str] = {}
+    for uuid, minor in raw.items():
+        if isinstance(uuid, str) and isinstance(minor, int) and not isinstance(minor, bool) and 0 <= minor <= 254:
+            mapping[uuid] = str(minor)
+    return mapping
+
+
+def _require_uuid_mappings(selectors: list[dict[str, Any]], minor_by_uuid: dict[str, str]) -> None:
+    """Refuse a UUID CDI name the inventory cannot tie to a driver minor.
+
+    Without the mapping the resolver cannot tell a UUID CDI name from the device
+    selector of the same GPU, and quantity counting would hand the same card out
+    twice. An inventory that advertises UUID names without the map is invalid.
+    """
+    for selector in selectors:
+        if selector["type"] == "cdi" and _NVIDIA_UUID_CDI_RE.fullmatch(selector["value"]):
+            name = selector["value"].partition("=")[2]
+            if name not in minor_by_uuid:
+                raise AcceleratorResolutionError(
+                    f"platform inventory UUID CDI selector {selector['value']!r} has no minorByUuid entry"
+                )
+
+
+def _physical_identity(selector: dict[str, Any], minor_by_uuid: dict[str, str]) -> str:
     """Identify the physical GPU behind a selector representation.
 
     One GPU appears once as device nodes and once as a CDI name, so selecting a
     quantity from the raw list would hand out the same physical GPU twice.
+    UUID CDI names carry no minor, so the probe's minorByUuid map is the only
+    way to correlate them with /dev/nvidiaN.
     """
     if selector["type"] == "cdi":
         value = selector["value"]
         match = re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*/gpu=(\d+)", value)
-        return f"gpu:{match.group(1)}" if match else f"cdi:{value}"
+        if match:
+            return f"gpu:{match.group(1)}"
+        provider, _, name = value.partition("=")
+        if provider == "nvidia.com/gpu" and name in minor_by_uuid:
+            return f"gpu:{minor_by_uuid[name]}"
+        return f"cdi:{value}"
     for path in selector["values"]:
         match = re.fullmatch(r"/dev/(nvidia\d+)", path)
         if match:
@@ -120,8 +156,10 @@ def _select_vendor(
         # Keep the first (most preferred) representation of each physical GPU.
         sels: list[dict[str, Any]] = []
         seen: set[str] = set()
+        minor_by_uuid = _minor_by_uuid(raw_vendor)
+        _require_uuid_mappings(parsed, minor_by_uuid)
         for candidate in parsed:
-            identity = _physical_identity(candidate)
+            identity = _physical_identity(candidate, minor_by_uuid)
             if identity in seen:
                 continue
             seen.add(identity)

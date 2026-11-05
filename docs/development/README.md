@@ -12,6 +12,7 @@ This directory documents how the appliance is built and validated. It is intenti
 - [Known risks](known-risks.md) — unresolved multi-step failure boundaries and recovery expectations.
 - [State bundle scope](state-bundle-scope.md) — boundary between small control-configuration bundles and Restic/ZFS/native application recovery.
 - [ADR-0001: Authentik-only browser access](adr-0001-authentik-only-browser-access.md) — browser authentication and recovery boundary.
+- [ADR-0002: Keep index and UUID NVIDIA CDI device names](adr-0002-nvidia-cdi-device-names.md) — GPU CDI naming, probe preference, and quantity identity.
 - [Dependency policy](dependencies.md) — immutable-input and upstream-update constraints.
 - [Manually triggered source releases](automated-releases.md) — explicit operator dispatch, exact-main-CI qualification, release-only version stamping, Diceware bootstrap credentials, and safe reruns.
 - [Release qualification checklist](release-checklist.md) — evidence required before an install-ready designation.

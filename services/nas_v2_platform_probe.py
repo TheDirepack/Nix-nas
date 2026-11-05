@@ -13,6 +13,7 @@ import json
 import os
 import pathlib
 import re
+import subprocess
 import sys
 import tempfile
 from typing import Any
@@ -29,7 +30,81 @@ _VENDOR_IDS = {
 }
 _NVIDIA_DEVICE_RE = re.compile(r"^nvidia([0-9]+)$")
 _NVIDIA_SHARED_NODES = ("nvidiactl", "nvidia-uvm", "nvidia-uvm-tools", "nvidia-modeset")
-_NVIDIA_CDI_RE = re.compile(r"^nvidia\.com/gpu=([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})$")
+_NVIDIA_UUID_RE = re.compile(r"GPU-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
+
+
+def _nvidia_gpu_uuids_by_minor(proc_nvidia_gpus: pathlib.Path) -> dict[int, str]:
+    """Read stable GPU identities from the NVIDIA driver, not GPU list indices.
+
+    Each /proc/driver/nvidia/gpus/*/information entry contains both
+    "Device Minor" (/dev/nvidiaN) and "GPU UUID" (the CDI UUID selector).
+    Missing/unreadable entries do not justify guessing the mapping.
+    """
+    identities: dict[int, str] = {}
+    seen_uuids: set[str] = set()
+    try:
+        information_files = sorted(proc_nvidia_gpus.glob("*/information"))
+    except OSError as exc:
+        raise PlatformProbeError(f"unable to enumerate NVIDIA GPU identities: {exc}") from exc
+    for path in information_files:
+        try:
+            lines = path.read_text(encoding="ascii").splitlines()
+        except (OSError, UnicodeError):
+            continue
+        fields = dict(line.split(":", 1) for line in lines if ":" in line)
+        minor_text = fields.get("Device Minor", "").strip()
+        uuid = fields.get("GPU UUID", "").strip()
+        if not minor_text.isdecimal() or _NVIDIA_UUID_RE.fullmatch(uuid) is None:
+            continue
+        minor = int(minor_text)
+        if minor > 254:
+            continue
+        if minor in identities:
+            raise PlatformProbeError("duplicate NVIDIA GPU minor in driver metadata")
+        if uuid in seen_uuids:
+            raise PlatformProbeError("duplicate NVIDIA GPU UUID in driver metadata")
+        identities[minor] = uuid
+        seen_uuids.add(uuid)
+    return identities
+
+
+def _listed_nvidia_cdi_devices(nvidia_ctk_bin: str) -> set[str]:
+    """Trust only device names reported by the installed CDI provider."""
+    try:
+        result = subprocess.run(
+            [nvidia_ctk_bin, "cdi", "list"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    if result.returncode != 0:
+        return set()
+    return {name for line in result.stdout.splitlines() if (name := line.strip()).startswith("nvidia.com/gpu=")}
+
+
+def _nvidia_cdi_name(minor: int, uuid: str | None, listed: set[str]) -> str | None:
+    """Choose one CDI device name for a physical GPU.
+
+    The toolkit enumerates devices in NVML order for its index names, so
+    nvidia.com/gpu=<n> is not interchangeable with /dev/nvidia<n>. UUID names
+    are stable and therefore preferred; the index name stays the fallback so
+    explicit nvidia.com/gpu=<index> declarations keep working.
+
+    An empty ``listed`` set means the provider could not be consulted (missing
+    toolkit, timeout, non-zero exit). Publishing the preferred name then
+    preserves the pre-existing behaviour instead of silently dropping the GPU.
+    """
+    candidates = [f"nvidia.com/gpu={uuid}"] if uuid is not None else []
+    candidates.append(f"nvidia.com/gpu={minor}")
+    if not listed:
+        return candidates[0]
+    for name in candidates:
+        if name in listed:
+            return name
+    return None
 
 
 def _load_base(path: pathlib.Path) -> dict[str, Any]:
@@ -60,6 +135,9 @@ def probe_inventory(
     *,
     sys_class_drm: pathlib.Path = pathlib.Path("/sys/class/drm"),
     dev_root: pathlib.Path = pathlib.Path("/dev"),
+    proc_nvidia_gpus: pathlib.Path = pathlib.Path("/proc/driver/nvidia/gpus"),
+    cdi_device_names: set[str] | None = None,
+    nvidia_ctk_bin: str = "nvidia-ctk",
 ) -> dict[str, Any]:
     capabilities = dict(base["capabilities"])
     drm_selectors: dict[str, list[dict[str, Any]]] = {"NVIDIA": [], "AMD": [], "Intel": []}
@@ -95,11 +173,20 @@ def probe_inventory(
         "Intel": drm_selectors["Intel"],
     }
     shared_nvidia = [dev_root / name for name in _NVIDIA_SHARED_NODES if (dev_root / name).exists()]
-    for index in sorted(set(nvidia_indexes)):
-        gpu_node = dev_root / f"nvidia{index}"
+    cdi_enabled = capabilities.get("gpu-nvidia-cdi") is True and bool(nvidia_indexes)
+    if cdi_enabled:
+        identities = _nvidia_gpu_uuids_by_minor(proc_nvidia_gpus)
+        listed_cdi = _listed_nvidia_cdi_devices(nvidia_ctk_bin) if cdi_device_names is None else set(cdi_device_names)
+    else:
+        identities = {}
+        listed_cdi = set()
+    for minor in sorted(set(nvidia_indexes)):
+        gpu_node = dev_root / f"nvidia{minor}"
         selectors["NVIDIA"].append(_devices([gpu_node, *shared_nvidia]))
-        if capabilities.get("gpu-nvidia-cdi") is True:
-            selectors["NVIDIA"].append(_cdi(f"nvidia.com/gpu={index}"))
+        if cdi_enabled:
+            name = _nvidia_cdi_name(minor, identities.get(minor), listed_cdi)
+            if name is not None:
+                selectors["NVIDIA"].append(_cdi(name))
     if not nvidia_indexes:
         selectors["NVIDIA"].extend(drm_selectors["NVIDIA"])
 
@@ -111,7 +198,14 @@ def probe_inventory(
             "configured": configured,
             "selectors": available,
         }
-        if vendor == "NVIDIA" and capabilities.get("gpu-nvidia-cdi") is True and nvidia_indexes:
+        if vendor != "NVIDIA":
+            continue
+        # Consumers correlate a UUID CDI name with /dev/nvidia<minor> through
+        # this map; without it one physical GPU counts twice.
+        minor_by_uuid = {uuid: minor for minor, uuid in sorted(identities.items())}
+        if minor_by_uuid:
+            accelerators[vendor]["minorByUuid"] = minor_by_uuid
+        if cdi_enabled and (not listed_cdi or "nvidia.com/gpu=all" in listed_cdi):
             accelerators[vendor]["allSelector"] = _cdi("nvidia.com/gpu=all")
 
     return {
@@ -146,6 +240,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True, type=pathlib.Path)
     parser.add_argument("--sys-class-drm", type=pathlib.Path, default=pathlib.Path("/sys/class/drm"))
     parser.add_argument("--dev-root", type=pathlib.Path, default=pathlib.Path("/dev"))
+    parser.add_argument("--nvidia-ctk-bin", default=os.environ.get("NAS_V2_NVIDIA_CTK_BIN", "nvidia-ctk"))
     return parser
 
 
@@ -158,6 +253,7 @@ def main(argv: list[str] | None = None) -> int:
                 _load_base(args.base),
                 sys_class_drm=args.sys_class_drm,
                 dev_root=args.dev_root,
+                nvidia_ctk_bin=args.nvidia_ctk_bin,
             ),
         )
     except PlatformProbeError as exc:
