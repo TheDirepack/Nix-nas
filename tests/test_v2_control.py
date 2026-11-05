@@ -169,6 +169,25 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 parser.parse_args([command, "-", "stale"])
 
+    def test_unlaunchable_systemctl_is_a_control_error_not_a_traceback(self) -> None:
+        desired = {
+            "services": [
+                {
+                    "id": "demo",
+                    "effective": True,
+                    "effectiveMode": "always",
+                    "units": [{"unit": "demo.service"}],
+                }
+            ]
+        }
+        with (
+            mock.patch.object(control, "desired_status", return_value=desired),
+            mock.patch.object(control, "run_command", side_effect=OSError("systemctl missing")) as native,
+        ):
+            with self.assertRaisesRegex(control.ControlError, "unable to launch systemctl show"):
+                control.status()
+        native.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
