@@ -52,14 +52,16 @@ Disabling an account:
 
 ## Application capabilities
 
-`nas_users` is a baseline identity group, not an application-access grant. Managed Services V2 compiles one Authentik capability group per declared service capability, and the default V2 seed declares:
+`nas_users` is a baseline identity group, not an application-access grant. Managed Services V2 compiles one Authentik capability group per declared service capability, and the default V2 seed declares these ordinary-user access groups:
 
 - `application.copyparty.files`
 - `application.copyparty.webdav`
 - `application.syncthing.access`
 - `application.vaultwarden.access`
 
-Assign those groups in Authentik, not through `nas-setup account apply`. The retired `nas_allow_*` and `nas_deny_*` groups are not V2 authorization rules. See [Account and permission model](../permissions.md) for the enforcement model.
+That list is not the complete seed: each application the seed includes also declares an administrator capability group (`application.copyparty.admin`, `application.syncthing.admin`, `application.vaultwarden.admin`, `application.cockpit.admin`), and any service added to `services.yaml` adds its own names. [Account and permission model](../permissions.md) lists both sets and the routes they satisfy.
+
+Assign those groups in Authentik, not through `nas-setup account apply`. The retired `nas_allow_*` and `nas_deny_*` groups are not V2 authorization rules.
 
 ## Password handling
 

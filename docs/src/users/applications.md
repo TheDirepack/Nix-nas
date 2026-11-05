@@ -5,7 +5,7 @@ A new ordinary user starts with no NAS application access. An administrator assi
 | Application | Required V2 capability group | What the user can do |
 |---|---|---|
 | CopyParty | `application.copyparty.files` | Browse personal/shared volumes, upload and download files, and use native share links where CopyParty ACLs allow it. |
-| WebDAV | `application.copyparty.webdav` | Connect a WebDAV client to the CopyParty WebDAV endpoint. |
+| WebDAV | `application.copyparty.webdav` + `application.copyparty.files` | Connect a WebDAV client to the CopyParty WebDAV endpoint. The endpoint alone exposes no volume: `/shares` and the personal volume are seeded for `application.copyparty.files`, so grant both groups for file access. |
 | Syncthing | `application.syncthing.access` | Declare personal devices in Authentik; the NAS reconciles the user's managed sync objects. Users created directly in Authentik must have a personal directory provisioned via `nas-setup account apply` before Syncthing reconciliation. |
 | Vaultwarden | `application.vaultwarden.access` | Use the personal Vaultwarden service through Authentik OIDC. |
 

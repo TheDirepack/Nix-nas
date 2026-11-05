@@ -8,16 +8,16 @@ Authentik is the authority for human identities, passwords, MFA, groups, profile
 
 ## Application access
 
-`nas_users` is a baseline identity group, not an access grant. In Authentik, explicitly assign only the V2 application capability groups a user needs. The default V2 seed declares:
+`nas_users` is a baseline identity group, not an access grant. In Authentik, explicitly assign only the V2 application capability groups a user needs. The default V2 seed declares these ordinary-user access groups:
 
 - `application.copyparty.files`: CopyParty file access
 - `application.copyparty.webdav`: WebDAV access
 - `application.syncthing.access`: personal Syncthing declarations
 - `application.vaultwarden.access`: Vaultwarden access
 
-These groups exist only for enabled or deployed services; other applications declare their own `application.<service>.<capability>` names. The retired `nas_allow_*` and `nas_deny_*` groups are not V2 authorization rules. Application bindings in Authentik should mirror the same capability groups so the dashboard matches the policy enforced by Caddy and the application backend.
+Capability groups are declared for every service in the V2 desired state, including a service that is currently disabled. Disabling a service removes its route from the generated proxy configuration and its Authentik application entry, but the capability group and its memberships remain, so re-enabling the service restores access without re-granting memberships. A service removed by a disabled Nix option is absent from the desired state and declares no group at all. To revoke access, remove the group memberships explicitly; disabling a service is not sufficient.
 
-Disabling an application binding removes its route, but the service's authorization group and existing memberships remain intact. Re-enabling the binding restores access without re-granting memberships. To revoke access, remove the group memberships explicitly; disabling alone is not sufficient.
+The seed also declares an administrator capability group for each application, such as `application.cockpit.admin` and `application.copyparty.admin`; [Account and permission model](../permissions.md) lists them. New services and new capabilities declare their own `application.<service>.<capability>` names. The retired `nas_allow_*` and `nas_deny_*` groups are not V2 authorization rules. Application bindings in Authentik should mirror the same capability groups so the dashboard matches the policy enforced by Caddy and the application backend.
 
 Use [Accounts and access](accounts.md) for the guarded NAS account CLI and [Account and permission model](../permissions.md) for the full authorization model.
 
