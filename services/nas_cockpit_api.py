@@ -1058,6 +1058,55 @@ def read_active_setup_job() -> str | None:
     return job_id
 
 
+def _first_start_worker_live(job_id: str) -> bool:
+    """Only release a stale setup claim after checking its exact systemd unit."""
+    if re.fullmatch(r"[0-9a-f]{24}", job_id) is None:
+        raise SetupApiError("Invalid first-start job identifier", status=503)
+    unit = f"nas-first-start-{job_id}.service"
+    command = ["systemctl", "show", "--property=Id,LoadState,ActiveState", unit]
+    try:
+        result = run(command, check=False, timeout_seconds=10)
+    except OSError as exc:
+        raise SetupApiError("Unable to verify whether the first-start worker is still running", status=503) from exc
+    if result.returncode != 0:
+        # systemd reports an absent or collected unit through a successful
+        # query with LoadState=not-found. A nonzero exit is a bus, permission,
+        # name, or timeout failure; none of them establish that the unit is
+        # gone, and an empty list-units answer must not manufacture that proof.
+        raise SetupApiError("Unable to verify whether the first-start worker is still running", status=503)
+    state = parse_systemd_show(result.stdout).get(unit)
+    if state is None:
+        raise SetupApiError("First-start worker state is unavailable", status=503)
+    active = state.get("ActiveState")
+    load = state.get("LoadState")
+    if active in {"active", "activating", "reloading", "deactivating"} and load == "loaded":
+        return True
+    if active in {"inactive", "failed"} and load in {"loaded", "not-found"}:
+        return False
+    raise SetupApiError("First-start worker state is indeterminate", status=503)
+
+
+def _storage_host_units_active() -> bool:
+    """Block replacement while detached storage units or their queued jobs remain."""
+    # Unfiltered list-units includes units with pending jobs. Separate state-
+    # filtered and job queries can both miss a job that starts between them.
+    command = [
+        "systemctl",
+        "list-units",
+        "--plain",
+        "--no-legend",
+        "--no-pager",
+        "nas-storage-host-*.service",
+    ]
+    try:
+        result = run(command, check=False, timeout_seconds=10)
+        if result.returncode != 0:
+            raise SetupApiError("Unable to verify whether storage-host work is still active", status=503)
+        return bool(result.stdout.strip())
+    except OSError as exc:
+        raise SetupApiError("Unable to verify whether storage-host work is still active", status=503) from exc
+
+
 def clear_active_setup_job() -> None:
     with contextlib.suppress(OSError):
         SETUP_ACTIVE_JOB_PATH.unlink()
@@ -1311,15 +1360,16 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
             self._api_error(exc)
 
     def _handle_post(self, request: dict[str, Any]) -> None:
+        """Route a setup API POST to the first-run, resume, or reboot handler."""
         if self.path == "/setup/api/first-run":
             active_job = read_active_setup_job()
-            if active_job is not None and first_start_job_status(active_job).get("status") not in {
-                "failed",
-                "cancelled",
-                "complete",
-                "complete-unverified",
-            }:
-                raise SetupApiError("A first-start job is already active; resume it instead", status=409)
+            if active_job is not None:
+                saved_status = first_start_job_status(active_job).get("status")
+                if saved_status not in {"failed", "cancelled", "complete", "complete-unverified"}:
+                    if _first_start_worker_live(active_job):
+                        raise SetupApiError("A first-start job is already active; resume it instead", status=409)
+            if _storage_host_units_active():
+                raise SetupApiError("A storage-host operation is still active; retry after it exits", status=409)
             result = start_first_start(request)
             if result.get("status") == "submitted" and isinstance(result.get("jobId"), str):
                 revoke_all_setup_capabilities()
