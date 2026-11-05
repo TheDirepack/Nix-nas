@@ -8,6 +8,17 @@ const source = readFileSync(new URL("../../cockpit/e2e/final-vm.spec.mjs", impor
   .replace('import {test, expect} from "@playwright/test";\n', "")
   .replace('import AxeBuilder from "@axe-core/playwright";\n', "");
 
+const expectedHostilePayloads = [
+  "<script>globalThis.__nas_login_xss=1</script>",
+  '<img src=x onerror="globalThis.__nas_login_xss=2">',
+  "<svg/onload=globalThis.__nas_login_xss=3>",
+  '\"><iframe srcdoc="<script>parent.__nas_login_xss=4<\\/script>"></iframe>',
+  "javascript:globalThis.__nas_login_xss=5",
+  "' OR 1=1 --",
+  "../../../../etc/passwd",
+  "\r\nX-Injected: yes",
+];
+
 function deferred() {
   let resolve;
   const promise = new Promise((done) => {
@@ -23,6 +34,7 @@ function loginCase(name) {
     url: "https://nas.test/identity/if/flow/default-authentication-flow/",
     marker: 0,
     markerReads: 0,
+    errorReads: 0,
     earlyCookieClears: 0,
     cookieClears: 0,
     navigations: 0,
@@ -40,7 +52,12 @@ function loginCase(name) {
       if (state.stage === "username") {
         state.stage = "password";
       } else {
-        state.submissions.push({password: state.password, visible: deferred(), rendered: false});
+        state.submissions.push({
+          username: state.username,
+          password: state.password,
+          visible: deferred(),
+          rendered: false,
+        });
       }
     },
   };
@@ -102,6 +119,7 @@ function loginCase(name) {
       assert.equal(value, expected);
     },
     toEqual(expected) {
+      state.errorReads += 1;
       assert.deepEqual(Array.from(value), Array.from(expected));
     },
   });
@@ -115,7 +133,7 @@ function loginCase(name) {
     URL,
     process: {env: {NAS_VM_TEST_USER: "test-user", NAS_VM_TEST_PASSWORD: "test-password"}},
   });
-  assert.ok(cases.has(name));
+  assert.ok(cases.has(name), `missing registered callback: ${name}`);
   const result = {settled: false, error: undefined};
   result.done = cases
     .get(name)({page})
@@ -149,35 +167,49 @@ test("invalid-credential callback cannot finish before rendered rejection", asyn
   assert.equal(fixture.result.error, undefined);
 });
 
-test("hostile-login callback waits for its rejection before assertions or cookie clearing", async () => {
-  const fixture = loginCase("hostile anonymous login value 1 stays inert");
-  await setImmediate();
-  assert.equal(fixture.result.settled, false);
-  assert.equal(fixture.state.submissions.length, 1);
-  assert.equal(fixture.state.markerReads, 0, "inertness must be checked after rejection");
-  assert.equal(fixture.state.earlyCookieClears, 0);
-  fixture.render();
-  await fixture.result.done;
-  assert.equal(fixture.result.error, undefined);
-  assert.equal(fixture.state.markerReads, 1);
-  assert.equal(fixture.state.submissions.length, 1);
-  assert.equal(fixture.state.navigations, 1, "initialize the anonymous login flow once");
-  assert.equal(fixture.state.cookieClears, 0, "retain native anonymous CSRF/session state");
+test("all hostile-login callbacks wait for rejection and submit distinct expected credentials", async () => {
+  const submissions = [];
+  for (let index = 0; index < expectedHostilePayloads.length; index += 1) {
+    const fixture = loginCase(`hostile anonymous login value ${index + 1} stays inert`);
+    await setImmediate();
+    assert.equal(fixture.result.settled, false);
+    assert.equal(fixture.state.submissions.length, 1);
+    assert.equal(fixture.state.markerReads, 0, "inertness must be checked after rejection");
+    assert.equal(fixture.state.errorReads, 0, "page errors must be checked after rejection");
+    assert.equal(fixture.state.earlyCookieClears, 0);
+    fixture.render();
+    await fixture.result.done;
+    assert.equal(fixture.result.error, undefined);
+    assert.equal(fixture.state.markerReads, 1);
+    assert.equal(fixture.state.errorReads, 1);
+    assert.equal(fixture.state.submissions.length, 1);
+    assert.equal(fixture.state.navigations, 1, "initialize the anonymous login flow once");
+    assert.equal(fixture.state.cookieClears, 0, "retain native anonymous CSRF/session state");
+    submissions.push(fixture.state.submissions[0]);
+  }
+  for (const field of ["username", "password"]) {
+    const values = submissions.map((item) => item[field]);
+    assert.deepEqual(values, expectedHostilePayloads, `exact hostile ${field} payloads`);
+    assert.equal(new Set(values).size, 8, `eight distinct hostile ${field} payloads`);
+  }
 });
 
-test("hostile-login callback rejects a marker changed while rejection was pending", async () => {
-  const fixture = loginCase("hostile anonymous login value 1 stays inert");
-  await setImmediate();
-  fixture.render({marker: 1});
-  await fixture.result.done;
-  assert.equal(fixture.result.error?.name, "AssertionError");
-});
+for (let index = 0; index < expectedHostilePayloads.length; index += 1) {
+  const name = `hostile anonymous login value ${index + 1} stays inert`;
+  test(`${name} rejects a marker changed while rejection was pending`, async () => {
+    const fixture = loginCase(name);
+    await setImmediate();
+    fixture.render({marker: 1});
+    await fixture.result.done;
+    assert.equal(fixture.result.error?.name, "AssertionError");
+  });
 
-test("hostile-login callback retains page errors delivered with rejection", async () => {
-  const fixture = loginCase("hostile anonymous login value 1 stays inert");
-  await setImmediate();
-  fixture.render({pageError: new Error("delayed rejection page error")});
-  await fixture.result.done;
-  assert.equal(fixture.result.error?.name, "AssertionError");
-  assert.match(fixture.result.error.message, /delayed rejection page error/);
-});
+  test(`${name} retains page errors delivered with rejection`, async () => {
+    const fixture = loginCase(name);
+    await setImmediate();
+    fixture.render({pageError: new Error("delayed rejection page error")});
+    await fixture.result.done;
+    assert.equal(fixture.result.error?.name, "AssertionError");
+    assert.match(fixture.result.error.message, /delayed rejection page error/);
+  });
+}
