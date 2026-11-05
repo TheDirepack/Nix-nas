@@ -444,7 +444,7 @@ Dependencies are first-class service data and must be runtime-neutral.
 ```yaml
 dependencies:
   - service: postgresql
-    condition: completed
+    condition: started
   - service: victoriametrics
     condition: ready
 ```

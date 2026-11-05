@@ -23,6 +23,7 @@ class VmBundleActionInventoryTests(unittest.TestCase):
             check=True,
             timeout=10,
         ).stdout.splitlines()
+        self.assertNotIn("ai", listed)
         action = ACTION.read_text(encoding="utf-8")
         paths = re.findall(r"/vm-bundles/([a-z][a-z-]*)\.nar\.gz", action)
         keys = re.findall(r"steps\.keys\.outputs\.key_([a-z][a-z_]*)", action)

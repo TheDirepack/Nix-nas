@@ -229,7 +229,7 @@ records the store paths owned by the core and application archives plus the
 configuration-sensitive `vm-drivers` delta, rejecting overlap between bundle
 deltas when a path is claimed by `vm-drivers`. Application closures may share
 ordinary transitive dependencies. The core archive contains boot/unlock and common test tooling; the
-identity, observability, storage, and AI application archives remain separate.
+identity, observability, and storage application archives remain separate.
 The cache persistence job is intentionally non-authoritative: a cache upload
 warning is printed in the CI summary, while the exact bundle handoff remains
 the source of truth for the QEMU jobs.
