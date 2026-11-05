@@ -1401,6 +1401,22 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
                 revoke_job_capabilities(job_id)
                 self._send_json(404, {"error": "No active setup job"})
                 return
+            if status.get("status") not in {"failed", "cancelled", "complete", "complete-unverified"}:
+                if not _first_start_worker_live(job_id):
+                    if _storage_host_units_active():
+                        raise SetupApiError(
+                            "A storage-host operation is still active; retry after it exits", status=409
+                        )
+                    # Do not rewrite the worker's durable report or acknowledge
+                    # manual recovery. Only the response marks its stopped owner;
+                    # normal retry still rechecks worker/storage and journal safety.
+                    status = {
+                        **status,
+                        "status": "failed",
+                        "previousStatus": status.get("status"),
+                        "message": "The setup worker stopped before reporting completion. "
+                        "Review the setup journal and any manual-recovery requirements before retrying.",
+                    }
             revoke_job_capabilities(job_id)
             self._send_json(200, {**status, "capability": issue_setup_capability(job_id)})
             return

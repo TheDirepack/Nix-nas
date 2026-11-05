@@ -129,11 +129,20 @@ administrator account, submits the guarded first-start job, and reports
 progress until the appliance is complete.
 
 Only one first-start submission can own the wizard's active-job tracking at a
-time. A second submission while a job is pending, running, or in an unknown
-tracked state returns HTTP 409 without replacing that job or its capability.
-Resume the existing job through the reauthorized wizard rather than submit it
-again. Submission, resume and reboot requests also return HTTP 409 while
-another tracking transition is in progress.
+time. A second submission returns HTTP 409 while the matching systemd worker
+or detached storage-host work is still active, without replacing the tracked
+job or its capability. Submission, resume and reboot requests also return
+HTTP 409 while another tracking transition is in progress.
+
+Refresh and resume through the reauthorized wizard after an interruption.
+If systemd confirms the worker stopped and no detached storage-host work
+remains, resume reports the interrupted job as failed instead of polling a
+stale `pending` or `running` record forever. The original durable progress
+and diagnostics are retained. Review the setup journal before choosing
+**Retry setup** and confirming possible password reapplication; this does not
+acknowledge or bypass a `manual-recovery-required` journal. An unavailable or
+ambiguous systemd query returns HTTP 503 and preserves the existing job and
+capability; repair the query failure rather than deleting tracking files.
 
 The setup API gives clients 30 seconds to send the complete request headers and
 body. After a valid request arrives, status preparation and job submission use
