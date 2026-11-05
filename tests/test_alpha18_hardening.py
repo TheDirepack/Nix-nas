@@ -181,7 +181,12 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertNotIn("require_huggingface_token", text("scripts/lib/nas-secret-runtime.sh"))
 
     def test_cockpit_search_keywords_exclude_removed_ai_application(self) -> None:
-        for relative in ("cockpit/src/manifest.json", "cockpit/dist/manifest.json"):
+        manifests = ["cockpit/src/manifest.json"]
+        # Preflight treats an absent distribution as a deferred bundle build, so the
+        # source manifest is the contract and the built copy is checked only when it exists.
+        if (ROOT / "cockpit/dist/manifest.json").exists():
+            manifests.append("cockpit/dist/manifest.json")
+        for relative in manifests:
             with self.subTest(path=relative):
                 manifest = json.loads(text(relative))
                 for entry in manifest["menu"].values():
