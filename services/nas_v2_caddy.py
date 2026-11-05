@@ -299,7 +299,8 @@ def generate_caddyfile(
         route, hostname, path = item
         norm = path.rstrip("/") or "/"
         seg_count = 0 if norm == "/" else len(norm.strip("/").split("/"))
-        return (hostname, -seg_count, -len(norm), path, route["service"], route["route"])
+        # Case variants merge into one site block, so order them case-insensitively.
+        return (hostname.casefold(), -seg_count, -len(norm), path, route["service"], route["route"])
 
     path_routes.sort(key=_path_sort_key)
     hostname_routes.sort(key=_hostname_sort_key)

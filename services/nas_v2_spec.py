@@ -784,7 +784,7 @@ def semantic_validate(
             )
 
     route_paths: dict[str, str] = {}
-    route_hostnames: dict[str, str] = {}
+    route_hostpaths: dict[tuple[str, str], str] = {}
     listener_owners: dict[tuple[str, int], str] = {}
 
     for service_id, service in services.items():
@@ -1013,20 +1013,31 @@ def semantic_validate(
                             )
                     route_paths[normalized] = f"{service_id}:{route_id}"
             else:
-                _canonical_route_path(
-                    exposure["path"],
-                    path=f"$.services.{service_id}.routes.{route_id}.exposure.path",
-                )
+                path_location = f"$.services.{service_id}.routes.{route_id}.exposure.path"
+                # One site block per hostname carries every path route for that
+                # host, so distinct paths may share a hostname; only an identical
+                # path, or root shadowing another path, is a conflict.
+                normalized = _canonical_route_path(exposure["path"], path=path_location)
                 for hostname in exposure["hostnames"]:
-                    hostname_key = hostname.casefold()
-                    owner = route_hostnames.get(hostname_key)
-                    if owner is not None:
-                        raise ManagedServicesV2Error(
-                            f"Duplicate route hostname {hostname!r}; already used by {owner}",
-                            path=f"$.services.{service_id}.routes.{route_id}.exposure.hostnames",
-                            code="route-conflict",
-                        )
-                    route_hostnames[hostname_key] = f"{service_id}:{route_id}"
+                    host = hostname.casefold()
+                    for (registered_host, registered_path), registered_owner in route_hostpaths.items():
+                        if registered_host != host or not _routes_conflict(normalized, registered_path):
+                            continue
+                        if normalized == registered_path:
+                            raise ManagedServicesV2Error(
+                                f"Duplicate route hostname+path {hostname!r} {normalized!r}; "
+                                f"already used by {registered_owner}",
+                                path=f"$.services.{service_id}.routes.{route_id}.exposure.hostnames",
+                                code="route-conflict",
+                            )
+                        if normalized == "/" or registered_path == "/":
+                            raise ManagedServicesV2Error(
+                                f"Route hostname {hostname!r} path {normalized!r} overlaps "
+                                f"{registered_path!r} already used by {registered_owner}",
+                                path=path_location,
+                                code="route-overlap",
+                            )
+                    route_hostpaths[(host, normalized)] = f"{service_id}:{route_id}"
 
         for listener_id, listener in service["listeners"].items():
             exposure = listener["exposure"]
