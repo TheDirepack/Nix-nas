@@ -29,6 +29,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from functools import partial
 from typing import Any, Mapping
 
 from nas_common import ADMIN_GROUP, DISABLED_GROUP
@@ -912,10 +913,11 @@ def syncthing_api_key() -> str:
     return match.group(1)
 
 
-def syncthing_request(path: str, *, method: str = "GET", body: Any | None = None) -> Any:
-    if not SYNCTHING_URL:
+def syncthing_request(path: str, *, method: str = "GET", body: Any | None = None, base_url: str | None = None) -> Any:
+    url = SYNCTHING_URL if base_url is None else base_url
+    if not url:
         raise SyncError(f"Syncthing endpoint is unavailable: {SYNCTHING_URL_ERROR or 'not resolved'}")
-    return http_json(f"{SYNCTHING_URL}{path}", method=method, body=body, headers={"X-API-Key": syncthing_api_key()})
+    return http_json(f"{url}{path}", method=method, body=body, headers={"X-API-Key": syncthing_api_key()})
 
 
 def load_state() -> dict[str, Any]:
@@ -1028,15 +1030,17 @@ def verify_syncthing_configuration(
     *,
     removed_folders: set[str],
     removed_devices: set[str],
+    base_url: str | None = None,
 ) -> None:
+    request = syncthing_request if base_url is None else partial(syncthing_request, base_url=base_url)
     for attempt in range(SYNCTHING_VERIFY_ATTEMPTS):
         observed_folders = object_by_identifier(
-            syncthing_request("/rest/config/folders"),
+            request("/rest/config/folders"),
             "id",
             label="folder",
         )
         observed_devices = object_by_identifier(
-            syncthing_request("/rest/config/devices"),
+            request("/rest/config/devices"),
             "deviceID",
             label="device",
         )
@@ -1174,6 +1178,10 @@ def interrupted_syncthing_ownership(state: Mapping[str, Any]) -> tuple[set[str],
 def reconcile_syncthing(model: IdentityModel) -> dict[str, int]:
     if not SYNCTHING_ENABLED:
         return {"folders": 0, "devices": 0, "removedFolders": 0, "removedDevices": 0}
+    if not SYNCTHING_URL:
+        raise SyncError(f"Syncthing endpoint is unavailable: {SYNCTHING_URL_ERROR or 'not resolved'}")
+    # Ownership reads, mutations and verification must address one instance.
+    request = partial(syncthing_request, base_url=SYNCTHING_URL)
     folders, devices = desired_syncthing(model)
     state = load_state()
     old_folders = {str(value) for value in state.get("folders", [])}
@@ -1186,12 +1194,12 @@ def reconcile_syncthing(model: IdentityModel) -> dict[str, int]:
     old_folders.update(interrupted_folders)
     old_devices.update(interrupted_devices)
     observed_folders = object_by_identifier(
-        syncthing_request("/rest/config/folders"),
+        request("/rest/config/folders"),
         "id",
         label="folder",
     )
     observed_devices = object_by_identifier(
-        syncthing_request("/rest/config/devices"),
+        request("/rest/config/devices"),
         "deviceID",
         label="device",
     )
@@ -1218,15 +1226,15 @@ def reconcile_syncthing(model: IdentityModel) -> dict[str, int]:
     }
     atomic_write_json(SYNCTHING_JOURNAL_PATH, journal)
     for device_id, device in devices.items():
-        syncthing_request(f"/rest/config/devices/{urllib.parse.quote(device_id, safe='')}", method="PUT", body=device)
+        request(f"/rest/config/devices/{urllib.parse.quote(device_id, safe='')}", method="PUT", body=device)
     for folder_id, folder in folders.items():
         ensure_syncthing_folder(pathlib.Path(folder["path"]))
-        syncthing_request(f"/rest/config/folders/{urllib.parse.quote(folder_id, safe='')}", method="PUT", body=folder)
+        request(f"/rest/config/folders/{urllib.parse.quote(folder_id, safe='')}", method="PUT", body=folder)
     removed_folders = old_folders - folders.keys()
     folders_to_delete = sorted(removed_folders & observed_folders.keys())
     for folder_id in folders_to_delete:
         try:
-            syncthing_request(f"/rest/config/folders/{urllib.parse.quote(folder_id, safe='')}", method="DELETE")
+            request(f"/rest/config/folders/{urllib.parse.quote(folder_id, safe='')}", method="DELETE")
         except SyncError as exc:
             message = str(exc)
             if "HTTP 404" not in message and "does not exist" not in message.lower():
@@ -1237,7 +1245,7 @@ def reconcile_syncthing(model: IdentityModel) -> dict[str, int]:
     devices_to_delete = sorted((old_devices - devices.keys()) & observed_devices.keys())
     for device_id in devices_to_delete:
         try:
-            syncthing_request(f"/rest/config/devices/{urllib.parse.quote(device_id, safe='')}", method="DELETE")
+            request(f"/rest/config/devices/{urllib.parse.quote(device_id, safe='')}", method="DELETE")
             removed_devices.add(device_id)
         except SyncError as exc:
             message = str(exc)
@@ -1258,10 +1266,11 @@ def reconcile_syncthing(model: IdentityModel) -> dict[str, int]:
         devices,
         removed_folders=removed_folders,
         removed_devices=removed_devices,
+        base_url=SYNCTHING_URL,
     )
-    restart = syncthing_request("/rest/config/restart-required")
+    restart = request("/rest/config/restart-required")
     if isinstance(restart, dict) and restart.get("requiresRestart"):
-        syncthing_request("/rest/system/restart", method="POST")
+        request("/rest/system/restart", method="POST")
     journal["phase"] = "committed"
     atomic_write_json(SYNCTHING_JOURNAL_PATH, journal)
     committed_state = {

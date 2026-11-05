@@ -491,6 +491,33 @@ class IdentitySyncTests(unittest.TestCase):
                     sync.reconcile_syncthing(model)
         request.assert_not_called()
 
+    def test_syncthing_reconciliation_pins_one_endpoint_for_every_call(self) -> None:
+        # A port learned between calls must not split reads, writes and the
+        # post-write verification across two Syncthing instances.
+        model = identity_model.IdentityModel((), (), ("admin",))
+        calls: list[tuple[str, str | None]] = []
+
+        def record(path: str, *, method: str = "GET", body=None, base_url=None):
+            calls.append((path, base_url))
+            if path.endswith(("/folders", "/devices")):
+                return []
+            return {"requiresRestart": False}
+
+        with (
+            tempfile.TemporaryDirectory() as raw,
+            mock.patch.object(sync, "SYNCTHING_ENABLED", True),
+            mock.patch.object(sync, "SYNCTHING_URL", "http://pinned.invalid:8384"),
+            mock.patch.object(sync, "SYNCTHING_JOURNAL_PATH", pathlib.Path(raw) / "journal.json"),
+            mock.patch.object(sync, "STATE_PATH", pathlib.Path(raw) / "state.json"),
+            mock.patch.object(sync, "load_state", return_value={}),
+            mock.patch.object(sync, "object_by_identifier", return_value={}),
+            mock.patch.object(sync, "syncthing_request", side_effect=record),
+            mock.patch.object(sync, "SYNCTHING_VERIFY_ATTEMPTS", 1),
+        ):
+            sync.reconcile_syncthing(model)
+        self.assertTrue(calls)
+        self.assertEqual({base_url for _, base_url in calls}, {"http://pinned.invalid:8384"})
+
     def test_ensure_groups_reconciles_only_base_identity_roles(self) -> None:
         existing = [
             {"pk": name, "name": name, "is_superuser": name == identity_model.ADMIN_GROUP}
