@@ -152,8 +152,7 @@ class SecretTransactionShellTests(unittest.TestCase):
             set +e; nas_secret_tx_cleanup 78 2>recovery.log; rc=$?; set -e
             [[ $rc -eq 125 && "$NAS_SECRET_TX_PHASE" == rollback-incomplete ]]
             [[ -f root/old && -f root/ready && -f tx/new/new ]]
-            grep -Fq "$PWD/tx" recovery.log
-            grep -Fq "$PWD/tx/new" recovery.log
+            grep -Fxq "nas-secret-transaction: pre-swap cleanup was incomplete; retained recovery tree $PWD/tx; staged tree $PWD/tx/new" recovery.log
             [[ ! -s systemctl.log ]]
             """
         )
@@ -424,7 +423,8 @@ nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.
             nas_secret_tx_swap
             set +e; nas_secret_tx_cleanup 86 2>recovery.log; rc=$?; set -e
             [[ $rc -eq 125 && -f tx/previous/old && ! -e root ]]
-            grep -Fq "$PWD/tx" recovery.log
+            grep -Fxq "nas-secret-transaction: retained recovery tree $PWD/tx" recovery.log
+            grep -Fxq "nas-secret-transaction: retained recovery tree $PWD/tx/previous" recovery.log
             ! grep -q '^start ' systemctl.log
             """
         )
