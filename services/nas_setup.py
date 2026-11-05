@@ -1447,11 +1447,17 @@ def finish_interrupted_setup_journal(report: Mapping[str, Any]) -> None:
     if existing.get("schemaVersion") != 1 or existing.get("workflow") != "first-run-v2":
         raise SetupError(f"Setup state is complete but {JOURNAL_PATH} belongs to another operation; reconcile it")
     journal = OperationJournal(JOURNAL_PATH, existing)
-    if existing.get("status") not in {"pending", "running", "resuming"} or not journal.step_complete("final-state"):
+    if existing.get("status") not in {"pending", "running", "resuming"}:
         raise SetupError(
             f"Setup state is complete but {JOURNAL_PATH} stopped at {existing.get('status')!r}; "
             "acknowledge manual recovery before retrying"
         )
+    if not journal.step_complete("final-state"):
+        # A crash can land after the state write and before the final-state
+        # record. The published completion report is the authority for that
+        # window: refusing would wedge an appliance whose initialisation
+        # actually finished, and retrying would rewrite initialised state.
+        journal.complete_step("final-state", dict(report))
     recorded = journal.result("final-state")
     journal.complete(recorded if isinstance(recorded, Mapping) else dict(report))
 
