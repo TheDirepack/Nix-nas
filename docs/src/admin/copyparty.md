@@ -22,8 +22,8 @@ Some global settings require a service restart.
 
 ## Seeded volumes
 
-- `/shares`: read access to the share tree for `nas_allow_files`; administrators retain full access.
-- `/shares/users/${u%+nas_allow_files}`: dynamic per-user volume.
+- `/shares`: read access to the share tree for `application.copyparty.files`; administrators retain full access.
+- `/shares/users/${u%+application.copyparty.files}`: dynamic per-user volume.
 - `/shares/admin/copyparty-config`: administrator-only configuration volume.
 - `/tftp`: optional anonymous read-only TFTP volume; an administrator may explicitly enable unauthenticated writes on a tightly trusted provisioning LAN.
 
@@ -31,7 +31,14 @@ Add shared/group volumes directly in CopyParty configuration. Reference Authenti
 
 ## Migrating existing volume ACLs
 
-The seed file `00-local-overrides.conf` is created only when absent. Existing CopyParty configurations retain their current ACLs, so assigning a new Authentik group alone will not restore access to volumes that still reference the old group. When migrating a volume to a new group, update the CopyParty ACL on each affected volume explicitly and reload CopyParty; do not rely on group assignment alone.
+The seed file `00-local-overrides.conf` is created only when absent and is never rewritten afterwards, so an installation that followed the earlier allow-list guidance keeps its old ACLs and its old dynamic-volume expression. Managed Services V2 declares no retired `nas_allow_*` or `nas_deny_*` group, so a volume entry that still names one matches no Authentik group.
+
+To migrate, edit the mutable file through `/shares/admin/copyparty-config` and replace the retired name with the canonical group in both places:
+
+- update each `accs` entry, for example to `r: @application.copyparty.files` (keep `A: @nas_admin` for administrators);
+- update each dynamic volume name, for example to `[/shares/users/${u%+application.copyparty.files}]`.
+
+Reload CopyParty afterwards (`systemctl reload copyparty`) and check access as an affected user. Assigning the new Authentik group alone does not restore access while the file still names the retired group.
 
 ## Native shares
 

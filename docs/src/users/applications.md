@@ -1,13 +1,13 @@
 # Applications
 
-A new user starts with no NAS application access. An administrator grants only the required Authentik `nas_allow_*` groups; matching `nas_deny_*` groups override those grants.
+A new ordinary user starts with no NAS application access. An administrator assigns only the required `application.<service>.<capability>` groups in Authentik. Membership in `nas_users` is not a grant; `nas_admin` is the trusted administrator bypass.
 
-| Application | Required capability | What the user can do |
+| Application | Required V2 capability group | What the user can do |
 |---|---|---|
-| CopyParty | `nas_allow_files` | Browse personal/shared volumes, upload and download files, and use native share links where CopyParty ACLs allow it. |
-| WebDAV | `nas_allow_webdav` + `nas_allow_files` | Connect a WebDAV client to the CopyParty WebDAV endpoint. The `nas_allow_files` capability is also required for access to the user's personal volume. |
-| Syncthing | `nas_allow_syncthing` | Declare personal devices in Authentik; the NAS reconciles the user's managed sync objects. Users created directly in Authentik must have a personal directory provisioned via `nas-setup account apply` before Syncthing reconciliation. |
-| Vaultwarden | `nas_allow_vault` | Use the personal Vaultwarden service through Authentik OIDC. |
+| CopyParty | `application.copyparty.files` | Browse personal/shared volumes, upload and download files, and use native share links where CopyParty ACLs allow it. |
+| WebDAV | `application.copyparty.webdav` + `application.copyparty.files` | Connect a WebDAV client to the CopyParty WebDAV endpoint. The endpoint alone exposes no volume: `/shares` and the personal volume are seeded for `application.copyparty.files`, so grant both groups for file access. |
+| Syncthing | `application.syncthing.access` | Declare personal devices in Authentik; the NAS reconciles the user's managed sync objects. Users created directly in Authentik must have a personal directory provisioned via `nas-setup account apply` before Syncthing reconciliation. |
+| Vaultwarden | `application.vaultwarden.access` | Use the personal Vaultwarden service through Authentik OIDC. |
 
 Use [User settings](settings.md) for password, MFA, profile, and personal Syncthing-device changes.
 

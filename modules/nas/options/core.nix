@@ -84,7 +84,7 @@
       userGroup = lib.mkOption {
         type = lib.types.str;
         default = "nas_users";
-        description = "Baseline Authentik human-user group. It grants no NAS application permissions; use explicit nas_allow_* groups.";
+        description = "Baseline Authentik human-user group. It grants no NAS application permissions; assign the canonical application.<service>.<capability> groups in Authentik instead.";
       };
       guestGroup = lib.mkOption {
         type = lib.types.str;
