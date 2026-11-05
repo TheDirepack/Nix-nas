@@ -161,6 +161,8 @@ def _source(service_id: str, service: dict[str, Any]) -> tuple[pathlib.Path, dic
     try:
         source_bytes = resolved.read_bytes()
         document = parser.load(source_bytes.decode("utf-8"))
+    except RecursionError as exc:
+        raise ComposeProjectionError(f"Compose service {service_id!r} source nests too deeply to parse safely") from exc
     except (OSError, UnicodeError, YAMLError) as exc:
         raise ComposeProjectionError(f"unable to parse Compose source for {service_id!r}: {exc}") from exc
     raw_services = document.get("services") if isinstance(document, dict) else None

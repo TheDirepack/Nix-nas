@@ -511,6 +511,51 @@ VolumeName=data.volume
         snapshot = compose_import._validate_compose_source("demo", ("\n".join(lines) + "\n").encode("utf-8"))
         self.assertLess(len(snapshot), 10000, "shared YAML aliases must not expand into an exponential snapshot")
 
+    def alias_chain(self, length: int) -> str:
+        """Alias chain whose YAML document is flat but whose expansion nests."""
+        lines = ["services:", "  web:", "    image: example.invalid/web:1", "    x-a0: &a0 {leaf: value}"]
+        for number in range(1, length + 1):
+            lines.append(f"    x-a{number}: &a{number} {{nested: *a{number - 1}}}")
+        return "\n".join(lines) + "\n"
+
+    def test_compose_alias_chain_depth_shares_the_canonical_model_budget(self) -> None:
+        # "services" and "web" put the first chain mapping three container
+        # levels below the document root, so an N-link chain expands to N + 3.
+        budget = compose_import._MAX_CANONICAL_DEPTH
+        snapshot = compose_import._validate_compose_source("demo", self.alias_chain(budget - 3).encode("utf-8"))
+        self.assertIn(b"&id", snapshot)
+        self.assertLess(len(snapshot), 20_000, "shared YAML aliases must not expand in the validated snapshot")
+        with self.assertRaisesRegex(compose_import.ComposeImportError, "deeper than"):
+            compose_import._validate_compose_source("demo", self.alias_chain(budget - 2).encode("utf-8"))
+
+    def test_deep_alias_chain_fails_reconciliation_without_reaching_the_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, source = self.fixture(root)
+            source.write_text(self.alias_chain(compose_import._MAX_CANONICAL_DEPTH * 8), encoding="utf-8")
+            with mock.patch.object(
+                compose_import, "_run", side_effect=AssertionError("unvalidated alias chain reached provider")
+            ) as provider:
+                with self.assertRaisesRegex(systemd.SystemdProjectionError, "deeper than"):
+                    self.generate(effective, root)
+            provider.assert_not_called()
+
+    def test_deeply_nested_source_is_a_structured_import_error(self) -> None:
+        nested = "[" * 2000 + "]" * 2000
+        source = f"services:\n  web:\n    image: example.invalid/web:1\n    x-deep: {nested}\n"
+        with self.assertRaisesRegex(compose_import.ComposeImportError, "nests too deeply"):
+            compose_import._validate_compose_source("demo", source.encode("utf-8"))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, path = self.fixture(root)
+            path.write_text(source, encoding="utf-8")
+            with mock.patch.object(
+                compose_import, "_run", side_effect=AssertionError("unvalidated nested source reached provider")
+            ) as provider:
+                with self.assertRaisesRegex(systemd.SystemdProjectionError, "nests too deeply"):
+                    self.generate(effective, root)
+            provider.assert_not_called()
+
     def test_escaped_dollars_and_non_variable_dollars_reach_the_provider(self) -> None:
         for value in ("$${TAG}", "$$TAG", "$$$$TAG", "$5", "dollar$"):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:

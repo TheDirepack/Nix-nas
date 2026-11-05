@@ -21,6 +21,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
 from typing import Any, Sequence
 
 from ruamel.yaml import YAML
@@ -54,7 +55,8 @@ _REFERENCE_FIELDS = frozenset({"Build", "Container", "Image", "Kube", "Network",
 
 # Canonical Compose models are consumed by Podlet inside one reconciliation.
 # Refuse pathological alias chains/deep structures instead of letting them
-# exhaust the interpreter stack.
+# exhaust the interpreter stack.  Compose sources use the same budget because
+# their aliases are expanded before the provider resolves them.
 _MAX_CANONICAL_DEPTH = 128
 _MAX_CANONICAL_NODES = 200_000
 
@@ -100,6 +102,64 @@ def _json_bytes(value: Any) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
+def _container_children(value: Any) -> list[Any]:
+    if isinstance(value, dict):
+        children: list[Any] = []
+        for key, item in value.items():
+            children.append(key)
+            children.append(item)
+        return children
+    return list(value)
+
+
+def _expansion_too_deep(service_id: str) -> ComposeImportError:
+    return ComposeImportError(
+        f"Compose source for {service_id!r} nests aliases or containers deeper than "
+        f"{_MAX_CANONICAL_DEPTH} levels; flatten the YAML structure before importing"
+    )
+
+
+def _validate_source_structure(service_id: str, root: Any, reject_scalar: Callable[[str], None]) -> None:
+    """Reject recursive aliases and alias-expanded nesting beyond the canonical budget.
+
+    A chain of aliases is flat as a YAML document but deep once expanded, and
+    both ruamel's representer and the Compose provider walk that expansion.
+    Memoizing each container's expanded height keeps shared aliases linear in
+    the number of distinct nodes while still measuring the deepest real path.
+    """
+    containers = (dict, list, tuple, set)
+    heights: dict[int, int] = {}
+    active: set[int] = set()
+    # The trailing flag marks the leave frame that records a container's height.
+    stack: list[tuple[Any, int, bool]] = [(root, 0, False)]
+    while stack:
+        value, depth, leaving = stack.pop()
+        if leaving:
+            identity = id(value)
+            active.discard(identity)
+            nested = [heights[id(child)] for child in _container_children(value) if isinstance(child, containers)]
+            heights[identity] = 1 + max(nested) if nested else 0
+            continue
+        if isinstance(value, str):
+            reject_scalar(value)
+            continue
+        if not isinstance(value, containers):
+            continue
+        identity = id(value)
+        if identity in active:
+            raise ComposeImportError(f"Compose service {service_id!r} contains a recursive YAML alias")
+        known = heights.get(identity)
+        if known is not None:
+            if depth + known > _MAX_CANONICAL_DEPTH:
+                raise _expansion_too_deep(service_id)
+            continue
+        if depth > _MAX_CANONICAL_DEPTH:
+            raise _expansion_too_deep(service_id)
+        active.add(identity)
+        stack.append((value, depth, True))
+        stack.extend((child, depth + 1, False) for child in _container_children(value))
+
+
 def _validate_canonical_structure(service_id: str, value: Any) -> None:
     """Bound canonical-model depth/nodes and tolerate alias cycles iteratively."""
     seen: set[int] = set()
@@ -133,6 +193,8 @@ def _validate_compose_source(service_id: str, source_bytes: bytes) -> bytes:
     parser.allow_duplicate_keys = False
     try:
         model = parser.load(source_bytes.decode("utf-8"))
+    except RecursionError as exc:
+        raise ComposeImportError(f"Compose source for {service_id!r} nests too deeply to parse safely") from exc
     except (UnicodeError, YAMLError) as exc:
         raise ComposeImportError(f"invalid Compose source for {service_id!r}: {exc}") from exc
     if not isinstance(model, dict):
@@ -159,38 +221,14 @@ def _validate_compose_source(service_id: str, source_bytes: bytes) -> bytes:
                     "cannot be validated before provider invocation"
                 )
 
-    visited: set[int] = set()
-    active: set[int] = set()
+    def reject_scalar(value: str) -> None:
+        if _INTERPOLATION.search(value.replace(chr(36) * 2, "")):
+            raise ComposeImportError(
+                f"Compose service {service_id!r} uses interpolation, which Podlet import does not support; "
+                "use literal configuration or V2 credential/environment-file attachments"
+            )
 
-    def check(value: Any) -> None:
-        if isinstance(value, str):
-            if _INTERPOLATION.search(value.replace(chr(36) * 2, "")):
-                raise ComposeImportError(
-                    f"Compose service {service_id!r} uses interpolation, which Podlet import does not support; "
-                    "use literal configuration or V2 credential/environment-file attachments"
-                )
-            return
-        if not isinstance(value, (dict, list, tuple, set)):
-            return
-        identity = id(value)
-        if identity in active:
-            raise ComposeImportError(f"Compose service {service_id!r} contains a recursive YAML alias")
-        if identity in visited:
-            return
-        active.add(identity)
-        try:
-            if isinstance(value, dict):
-                for key, item in value.items():
-                    check(key)
-                    check(item)
-            else:
-                for item in value:
-                    check(item)
-        finally:
-            active.remove(identity)
-        visited.add(identity)
-
-    check(model)
+    _validate_source_structure(service_id, model, reject_scalar)
     if isinstance(services, dict):
         for service in services.values():
             if not isinstance(service, dict):
@@ -200,7 +238,7 @@ def _validate_compose_source(service_id: str, source_bytes: bytes) -> bytes:
                 if isinstance(value, str):
                     try:
                         for argument in shlex.split(value):
-                            check(argument)
+                            reject_scalar(argument)
                     except ValueError as exc:
                         raise ComposeImportError(
                             f"Compose service {service_id!r} has malformed {field} quoting"
@@ -209,7 +247,10 @@ def _validate_compose_source(service_id: str, source_bytes: bytes) -> bytes:
     # unless every scalar is quoted.
     parser.representer.default_style = '"'
     output = io.StringIO()
-    parser.dump(model, output)
+    try:
+        parser.dump(model, output)
+    except RecursionError as exc:
+        raise ComposeImportError(f"Compose source for {service_id!r} nests too deeply to quote safely") from exc
     return output.getvalue().encode("utf-8")
 
 
