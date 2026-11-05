@@ -380,15 +380,29 @@ class ContractTests(unittest.TestCase):
         self.assertIn("prune_state_snapshots", update)
         self.assertIn("state_snapshot_retain_count <= 20", update)
 
+    def test_authentik_stop_is_bounded_below_the_systemd_default(self) -> None:
+        services = text("modules/nas/config/application-services.nix")
+        body = services.split("systemd.services.authentik = {", 1)[1]
+        # The unit must be delimited by its own closing brace: authentik-worker is
+        # declared before the server unit, so splitting on a later declaration name
+        # would leave the rest of the file inside the assertion scope.
+        depth = 1
+        for index, character in enumerate(body):
+            if character == "{":
+                depth += 1
+            elif character == "}":
+                depth -= 1
+                if depth == 0:
+                    unit = body[:index]
+                    break
+        else:
+            self.fail("authentik unit block is not brace-balanced")
+        self.assertIn('TimeoutStopSec = "30s";', unit)
+        self.assertIn('TimeoutStartSec = "4min";', unit)
+
 
 if __name__ == "__main__":
     unittest.main()
-
-    def test_authentik_stop_is_bounded_below_the_systemd_default(self) -> None:
-        services = text("modules/nas/config/application-services.nix")
-        unit = services.split("systemd.services.authentik = {", 1)[1].split("systemd.services.authentik-worker", 1)[0]
-        self.assertIn('TimeoutStopSec = "30s";', unit)
-        self.assertIn('TimeoutStartSec = "4min";', unit)
 
 
 class RuntimeSelectRelinkTests(unittest.TestCase):
