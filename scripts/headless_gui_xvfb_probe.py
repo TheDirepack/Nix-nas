@@ -21,8 +21,13 @@ import sys
 import tempfile
 import time
 
-_DISPLAY_SOCKET_DIR = Path("/tmp/.X11-unix")
-_DISPLAY_LOCK_DIR = Path("/tmp")
+# X11 publishes display sockets and lock files under the system temporary
+# directory, so derive that directory instead of pinning a literal path. If the
+# ambient TMPDIR names a different place, the probe fails closed rather than
+# inspecting a directory Xvfb never used.
+_DISPLAY_ROOT = Path(tempfile.gettempdir()).resolve()
+_DISPLAY_SOCKET_DIR = _DISPLAY_ROOT / ".X11-unix"
+_DISPLAY_LOCK_DIR = _DISPLAY_ROOT
 # Readiness uses the upstream client unchanged; a single client attempt is
 # capped by whatever remains of the outer startup budget.
 _CLIENT_TIMEOUT = 1.0
