@@ -643,9 +643,13 @@ class SetupApiCapabilityTests(unittest.TestCase):
         socket_path = str(pathlib.Path(directory) / "setup.sock")
         current_user = pwd.getpwuid(os.getuid()).pw_name
         current_group = grp.getgrgid(os.getgid()).gr_name
+        self.storage_host_query = mock.Mock(return_value=False)
         patches = (
             mock.patch.object(api, "SETUP_CADDY_USER", current_user),
             mock.patch.object(api, "SETUP_CADDY_GROUP", current_group),
+            # Submission asks the host whether detached storage work is running;
+            # these socket tests must not need a systemd host for that answer.
+            mock.patch.object(api, "_storage_host_units_active", self.storage_host_query),
         )
         for patch in patches:
             patch.start()
@@ -734,6 +738,22 @@ class SetupApiCapabilityTests(unittest.TestCase):
                 self.assertIn(b"200", new_status)
                 self.assertEqual(body["status"], "running")
             self.assertEqual(api.read_active_setup_job(), "a" * 24)
+
+    def test_submission_is_hermetic_without_a_systemd_host(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, socket_path = self.live_server(directory)
+            with (
+                mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}),
+                mock.patch.object(
+                    api, "start_first_start", return_value={"status": "submitted", "jobId": "a" * 24}
+                ) as submit,
+                mock.patch.object(api, "run", side_effect=AssertionError("submission queried host systemd")),
+            ):
+                status, body = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
+            self.assertIn(b"200", status)
+            self.assertEqual(body["jobId"], "a" * 24)
+            submit.assert_called_once_with({})
+            self.storage_host_query.assert_called_once_with()
 
     def test_slow_submission_returns_job_and_capability_after_read_deadline(self) -> None:
         finished = threading.Event()
@@ -834,40 +854,50 @@ class SetupApiCapabilityTests(unittest.TestCase):
 
     def test_setup_worker_query_failures_keep_the_claim(self) -> None:
         unit = "nas-first-start-" + "a" * 24 + ".service"
-        for value in (
-            mock.Mock(returncode=1, stdout=f"Id={unit}\nLoadState=not-found\nActiveState=inactive\n"),
+        show_command = ["systemctl", "show", "--property=Id,LoadState,ActiveState", unit]
+        empty_listing = mock.Mock(returncode=0, stdout="", stderr="")
+        for failure in (
+            mock.Mock(
+                returncode=1,
+                stdout="",
+                stderr="Failed to connect to system scope bus via local transport: Permission denied",
+            ),
+            mock.Mock(returncode=1, stdout="", stderr="Failed to get properties: Access denied"),
+            mock.Mock(returncode=1, stdout=f"Id={unit}\nLoadState=not-found\nActiveState=inactive\n", stderr=""),
+            mock.Mock(returncode=4, stdout="", stderr=f"Unit {unit} could not be found."),
+            mock.Mock(returncode=124, stdout="", stderr="Command timed out"),
             mock.Mock(returncode=0, stdout=""),
             mock.Mock(returncode=0, stdout=f"Id={unit}\nLoadState=error\nActiveState=unknown\n"),
-            OSError("systemd unavailable"),
         ):
-            with self.subTest(value=value), mock.patch.object(api, "run") as query:
-                if isinstance(value, OSError):
-                    query.side_effect = value
-                else:
-                    query.return_value = value
+            # A successful empty list-units answer must not turn a failed show
+            # query into proof that the worker is gone.
+            with (
+                self.subTest(value=failure),
+                mock.patch.object(api, "run", side_effect=[failure, empty_listing]) as query,
+            ):
                 with self.assertRaises(api.SetupApiError) as caught:
                     api._first_start_worker_live("a" * 24)
                 self.assertEqual(caught.exception.status, 503)
+                query.assert_called_once_with(show_command, check=False, timeout_seconds=10)
 
-    def test_collected_worker_not_found_can_be_recovered_only_after_confirmed_absence(self) -> None:
+        with mock.patch.object(api, "run", side_effect=OSError("systemd unavailable")) as query:
+            with self.assertRaises(api.SetupApiError) as caught:
+                api._first_start_worker_live("a" * 24)
+            self.assertEqual(caught.exception.status, 503)
+            query.assert_called_once_with(show_command, check=False, timeout_seconds=10)
+
+    def test_collected_worker_absence_requires_a_successful_show(self) -> None:
         unit = "nas-first-start-" + "a" * 24 + ".service"
-        missing = mock.Mock(returncode=4, stdout="", stderr=f"Unit {unit} could not be found.")
-        list_args = ["systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager", unit]
-        with mock.patch.object(
-            api, "run", side_effect=[missing, mock.Mock(returncode=0, stdout="", stderr="")]
-        ) as query:
+        # systemd reports a collected transient unit as a successful query with
+        # LoadState=not-found; no failure exit can establish that absence.
+        output = f"Id={unit}\nLoadState=not-found\nActiveState=inactive\n"
+        with mock.patch.object(api, "run", return_value=mock.Mock(returncode=0, stdout=output, stderr="")) as query:
             self.assertFalse(api._first_start_worker_live("a" * 24))
-        self.assertEqual(query.call_args_list[1], mock.call(list_args, check=False, timeout_seconds=10))
-
-        for listed in (
-            mock.Mock(returncode=1, stdout="", stderr="bus unavailable"),
-            mock.Mock(returncode=0, stdout=unit + " loaded failed failed", stderr=""),
-        ):
-            with self.subTest(listed=listed):
-                with mock.patch.object(api, "run", side_effect=[missing, listed]):
-                    with self.assertRaises(api.SetupApiError) as caught:
-                        api._first_start_worker_live("a" * 24)
-                self.assertEqual(caught.exception.status, 503)
+        query.assert_called_once_with(
+            ["systemctl", "show", "--property=Id,LoadState,ActiveState", unit],
+            check=False,
+            timeout_seconds=10,
+        )
 
     def test_active_worker_requires_consistent_load_state(self) -> None:
         unit = "nas-first-start-" + "a" * 24 + ".service"

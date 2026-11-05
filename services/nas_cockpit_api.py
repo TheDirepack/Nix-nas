@@ -1069,19 +1069,11 @@ def _first_start_worker_live(job_id: str) -> bool:
     except OSError as exc:
         raise SetupApiError("Unable to verify whether the first-start worker is still running", status=503) from exc
     if result.returncode != 0:
-        # Collected transient units can disappear before status is queried.
-        # An independent successful list-units query must confirm absence;
-        # an unavailable bus or still-listed unit cannot authorize retry.
-        list_command = ["systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager", unit]
-        try:
-            listed = run(list_command, check=False, timeout_seconds=10)
-        except OSError as exc:
-            raise SetupApiError("Unable to verify whether the first-start worker is still running", status=503) from exc
-        if listed.returncode != 0:
-            raise SetupApiError("Unable to verify whether the first-start worker is still running", status=503)
-        if not listed.stdout.strip():
-            return False
-        raise SetupApiError("First-start worker state is indeterminate", status=503)
+        # systemd reports an absent or collected unit through a successful
+        # query with LoadState=not-found. A nonzero exit is a bus, permission,
+        # name, or timeout failure; none of them establish that the unit is
+        # gone, and an empty list-units answer must not manufacture that proof.
+        raise SetupApiError("Unable to verify whether the first-start worker is still running", status=503)
     state = parse_systemd_show(result.stdout).get(unit)
     if state is None:
         raise SetupApiError("First-start worker state is unavailable", status=503)
