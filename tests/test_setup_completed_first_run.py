@@ -78,6 +78,43 @@ class FirstRunCompletionGuardTests(unittest.TestCase):
                 journal.OperationJournal.open(path, workflow="identity-sync", fingerprint="fingerprint")
             self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["schemaVersion"], 7)
 
+    def test_crash_between_state_write_and_final_state_record_still_recovers(self):
+        report = {"schemaVersion": 2, "status": "complete", "planDigest": "digest"}
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            state_path = root / "state.json"
+            journal_path = root / "journal.json"
+            state_path.write_text(json.dumps(report), encoding="utf-8")
+            # The process died after publishing state but before the final-state
+            # step record, which is the window the step-first check refused.
+            journal.OperationJournal.open(journal_path, workflow="first-run-v2", fingerprint="digest")
+            with (
+                mock.patch.object(setup, "STATE_PATH", state_path),
+                mock.patch.object(setup, "JOURNAL_PATH", journal_path),
+            ):
+                setup.finish_interrupted_setup_journal(report)
+            finished = json.loads(journal_path.read_text(encoding="utf-8"))
+            self.assertEqual(finished["status"], "complete")
+            self.assertEqual(finished["steps"]["final-state"]["status"], "complete")
+            self.assertEqual(finished["result"], report)
+
+    def test_manual_recovery_journal_is_not_completed_from_state(self):
+        report = {"schemaVersion": 2, "status": "complete", "planDigest": "digest"}
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            state_path = root / "state.json"
+            journal_path = root / "journal.json"
+            state_path.write_text(json.dumps(report), encoding="utf-8")
+            opened = journal.OperationJournal.open(journal_path, workflow="first-run-v2", fingerprint="digest")
+            opened.fail("storage probe failed", manual_recovery=True)
+            with (
+                mock.patch.object(setup, "STATE_PATH", state_path),
+                mock.patch.object(setup, "JOURNAL_PATH", journal_path),
+            ):
+                with self.assertRaisesRegex(setup.SetupError, "manual recovery"):
+                    setup.finish_interrupted_setup_journal(report)
+            self.assertEqual(json.loads(journal_path.read_text(encoding="utf-8"))["status"], "manual-recovery-required")
+
     def test_cancelled_journal_remains_reusable(self):
         self.check(journal={"schemaVersion": 1, "workflow": "first-run-v2", "status": "cancelled"}, should_block=False)
 
