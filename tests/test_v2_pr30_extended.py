@@ -461,7 +461,7 @@ class V2BackupCleanupExtendedTests(unittest.TestCase):
             orig = backup._run
             orig_root = backup.BACKUP_STAGING_ROOT
             backup.BACKUP_STAGING_ROOT = staging
-            backup._run = lambda _argv: ""  # type: ignore[assignment]
+            backup._run = lambda _argv, timeout=60: ""  # type: ignore[assignment]
             try:
                 with self.assertRaisesRegex(backup.BackupRuntimeError, "without producing data"):
                     backup.prepare(
@@ -580,7 +580,7 @@ class V2BackupCleanupExtendedTests(unittest.TestCase):
             )
             calls: list[list[str]] = []
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 calls.append(argv)
                 if argv[:3] == ["/bin/zfs", "get", "-H"]:
                     return "/tank/other"
@@ -843,7 +843,7 @@ class V2CrossComponentAndDeadmanTests(unittest.TestCase):
             )
             created: list[str] = []
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 if argv[0] == "/bin/zfs" and argv[1] == "get":
                     dataset = argv[-1]
                     return f"/tank/{dataset.split('/')[-1]}"
@@ -858,7 +858,7 @@ class V2CrossComponentAndDeadmanTests(unittest.TestCase):
             call = 0
             orig = backup._run
 
-            def failing_run(argv: list[str]) -> str:
+            def failing_run(argv: list[str], timeout: int = 60) -> str:
                 nonlocal call
                 if argv[0] == "/bin/zfs" and argv[1] == "get":
                     call += 1
