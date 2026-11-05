@@ -314,6 +314,9 @@ def _discover_quadlet_links(runtime_root: pathlib.Path) -> set[str]:
     return discovered
 
 
+_SESSION_TARGET = re.compile(r"^nas-v2-session-[a-z][a-z0-9-]*\.target$")
+
+
 def reconcile(
     *,
     manifest_path: pathlib.Path,
@@ -413,6 +416,15 @@ def reconcile(
         if previous_fingerprints.get(unit) != digest:
             changed_units.add(unit)
 
+    # Session instances are transient systemd-run units. Restarting their
+    # owning target relaunches them with the OLD Podman argv baked into
+    # ExecStart, so a changed session must be stopped and explicitly
+    # relaunched from the new descriptor.
+    changed_sessions = {
+        unit for unit in changed_units if _SESSION_TARGET.fullmatch(unit) and unit in previous_links_raw
+    }
+    units_to_stop.update(changed_sessions)
+
     def is_active(unit: str) -> bool | None:
         try:
             result = _run_systemctl(systemctl, "is-active", unit, check=False)
@@ -422,6 +434,18 @@ def reconcile(
 
     all_units = previous_owned | owned | previous_start | start | stop | units_to_stop | changed_units
     active_snapshot = {unit: is_active(unit) for unit in sorted(all_units)}
+    # An interrupted or partially recorded apply can leave a target active with
+    # no installed link. Stop it before installing the changed descriptor.
+    active_unlinked_sessions = {
+        unit
+        for unit in changed_units
+        if _SESSION_TARGET.fullmatch(unit)
+        and unit not in previous_links_raw
+        and unit in current_links
+        and active_snapshot.get(unit) is True
+    }
+    changed_sessions.update(active_unlinked_sessions)
+    units_to_stop.update(active_unlinked_sessions)
 
     roots = _projection_roots(projection_root)
     systemd_targets = set(links) | stale_links
@@ -454,9 +478,12 @@ def reconcile(
         if topology_changed:
             _run_systemctl(systemctl, "daemon-reload")
 
+    disrupted_sessions: set[str] = set()
+
     def rollback_active_state() -> None:
         for unit, was_active in active_snapshot.items():
-            if was_active is None:
+            if was_active is None or unit in disrupted_sessions:
+                # Starting this target cannot recreate its lost transient instances.
                 continue
             now_active = is_active(unit)
             if now_active is None or now_active == was_active:
@@ -468,6 +495,13 @@ def reconcile(
 
     try:
         for unit in sorted(units_to_stop):
+            if _SESSION_TARGET.fullmatch(unit) and unit not in previous_links_raw and unit not in current_links:
+                # A disabled or retired session has no installed target to stop.
+                continue
+            if _SESSION_TARGET.fullmatch(unit) and (unit in previous_owned or unit in active_unlinked_sessions):
+                # Stopping a target terminates its transient instances. Record
+                # this before the call so a partial failure is still reported.
+                disrupted_sessions.add(unit)
             result = _run_systemctl(systemctl, "stop", unit, check=False)
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout).strip()
@@ -502,6 +536,9 @@ def reconcile(
 
         restarted: set[str] = set()
         for unit in sorted(changed_units & owned):
+            if unit in changed_sessions:
+                # A stopped transient must not be restarted with stale args.
+                continue
             if unit in start:
                 _run_systemctl(systemctl, "restart", unit)
                 restarted.add(unit)
@@ -537,6 +574,13 @@ def reconcile(
             rollback_active_state()
         except Exception as rollback_exc:  # noqa: BLE001
             rollback_error = rollback_exc
+        if disrupted_sessions:
+            details = ", ".join(sorted(disrupted_sessions))
+            rollback_detail = f"; native rollback failed: {rollback_error}" if rollback_error else ""
+            raise SystemdReconcileError(
+                f"systemd reconcile failed: {exc}{rollback_detail}; transient instances may have been "
+                f"terminated under {details} and cannot be recreated by target restart; manual recovery required"
+            ) from exc
         if rollback_error is not None:
             raise SystemdReconcileError(
                 f"systemd reconcile failed: {exc}; rollback failed: {rollback_error}; manual recovery required"
