@@ -112,9 +112,14 @@ bundle_hash() {
   else
     sources=(core)
   fi
+  local expected roots
   for src in "${sources[@]}"; do
-    mapfile -t paths < <(bundle_out_paths "$src")
-    local expected
+    # Capture the roots instead of reading them through a process substitution:
+    # mapfile would hide a failed evaluation behind its own exit status and the
+    # key would be published from the remaining sources only.
+    roots="$(bundle_out_paths "$src")" || return $?
+    [[ -n "$roots" ]] || return 1
+    mapfile -t paths <<< "${roots%$'\n'}"
     expected="$(bundle_refs "$src" | wc -l)"
     if (( ${#paths[@]} != expected )); then
       die "nix eval failed to enumerate outPaths for bundle: $src"
@@ -151,14 +156,27 @@ build_bundles() {
 }
 
 keys() {
-  local dir=${1:-} name
+  local dir=${1:-} name hash index
+  local -a names=()
+  local -a hashes=()
+  # Compute every key before printing or writing any of them. A failed nix eval
+  # once produced an empty key that still published, because printf succeeded
+  # and the substitution's status was discarded.
   while IFS= read -r name; do
-    printf 'key_%s=%s\n' "${name//-/_}" "$(bundle_hash "$name")"
+    hash="$(bundle_hash "$name")" || die "failed to compute bundle key for $name (nix eval failed or produced no output)"
+    [[ -n "$hash" ]] || die "failed to compute bundle key for $name (nix eval failed or produced no output)"
+    names+=("$name")
+    hashes+=("$hash")
+  done < <(list_bundles)
+  for index in "${!names[@]}"; do
+    name="${names[index]}"
+    hash="${hashes[index]}"
+    printf 'key_%s=%s\n' "${name//-/_}" "$hash"
     if [[ -n "$dir" ]]; then
       mkdir -p "$dir"
-      printf '%s\n' "$(bundle_hash "$name")" > "$dir/$name.key"
+      printf '%s\n' "$hash" > "$dir/$name.key"
     fi
-  done < <(list_bundles)
+  done
 }
 
 save() {
