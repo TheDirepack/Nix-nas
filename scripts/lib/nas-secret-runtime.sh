@@ -24,14 +24,6 @@ require_ntfy_topic() {
   fi
 }
 
-require_huggingface_token() {
-  local value="$1"
-  [[ -z "$value" || "$value" =~ ^hf_[A-Za-z0-9]{20,}$ ]] || {
-    echo "Hugging Face token has an unsafe or unexpected format in KeePassXC." >&2
-    return 1
-  }
-}
-
 install_secret() {
   local source="$1" target="$2" owner="$3" group="$4"
   [[ -f "$source" && ! -L "$source" ]] || {

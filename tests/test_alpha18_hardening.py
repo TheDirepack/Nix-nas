@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "services"))
+
+import nas_v2_spec as v2  # noqa: E402
 
 
 def text(relative: str) -> str:
@@ -170,6 +174,59 @@ class Alpha18HardeningContracts(unittest.TestCase):
             self.assertIn(profile, flake)
             self.assertTrue((ROOT / "modules/profiles" / f"{profile}.nix").is_file())
         self.assertFalse((ROOT / "modules/profiles/local-ai.nix").exists())
+
+    def test_ai_only_runtime_helpers_remain_removed(self) -> None:
+        self.assertEqual(list((ROOT / "services").glob("nas_ai_*.py")), [])
+        self.assertFalse((ROOT / "services/nas_coding_agent.py").exists())
+        self.assertNotIn("require_huggingface_token", text("scripts/lib/nas-secret-runtime.sh"))
+
+    def test_cockpit_search_keywords_exclude_removed_ai_application(self) -> None:
+        manifests = ["cockpit/src/manifest.json"]
+        # Preflight treats an absent distribution as a deferred bundle build, so the
+        # source manifest is the contract and the built copy is checked only when it exists.
+        if (ROOT / "cockpit/dist/manifest.json").exists():
+            manifests.append("cockpit/dist/manifest.json")
+        for relative in manifests:
+            with self.subTest(path=relative):
+                manifest = json.loads(text(relative))
+                for entry in manifest["menu"].values():
+                    for keywords in entry.get("keywords", []):
+                        self.assertNotIn("ai", [word.lower() for word in keywords["matches"]])
+
+    def test_active_runtime_and_bundle_references_exclude_removed_ai_paths(self) -> None:
+        for relative, retired in (
+            ("docs/src/reference/runtime-paths.md", "<zfsRoot>/ai"),
+            ("docs/development/state-bundle-scope.md", "AI data"),
+            ("docs/development/vm-testing.md", "AI application archives"),
+        ):
+            with self.subTest(path=relative):
+                self.assertNotIn(retired, text(relative))
+
+    def test_documented_dependency_example_validates_for_daemon_services(self) -> None:
+        section = text("docs/development/managed-services-v2-spec.md").split("## 8. Dependencies", 1)[1]
+        example = section.split("```yaml\n", 1)[1].split("```", 1)[0]
+        dependencies = v2.parse_yaml_text(example)["dependencies"]
+        self.assertEqual({dependency["service"] for dependency in dependencies}, {"postgresql", "victoriametrics"})
+        services: dict[str, dict] = {
+            name: {
+                "name": name,
+                "workload": {"kind": "daemon"},
+                "runtime": {"type": "systemd", "unit": f"{name}.service"},
+            }
+            for name in ("postgresql", "victoriametrics", "example")
+        }
+        services["victoriametrics"]["readiness"] = {"probes": [{"type": "tcp", "host": "127.0.0.1", "port": 8428}]}
+        services["example"]["dependencies"] = dependencies
+        try:
+            effective = v2.compile_document(
+                {"schemaVersion": 3, "services": services},
+                v2.load_schema(ROOT / "schemas/managed-services-v3.schema.json"),
+            )
+        except v2.ManagedServicesV2Error as exc:
+            self.fail(f"Documented daemon dependencies must validate: {exc}")
+        self.assertIn(
+            {"service": "postgresql", "condition": "started"}, effective["services"]["example"]["dependencies"]
+        )
 
     def test_mkforce_and_version_contracts_remain_machine_checked(self) -> None:
         for script in ("check-mkforce.py", "check-version.py"):

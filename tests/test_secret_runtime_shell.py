@@ -31,7 +31,6 @@ class SecretRuntimeShellTests(unittest.TestCase):
             "require_secret_atom",
             "require_secret_hex",
             "require_ntfy_topic",
-            "require_huggingface_token",
             "install_secret",
         ):
             self.assertNotIn(function + "() {", source)
@@ -75,9 +74,6 @@ class SecretRuntimeShellTests(unittest.TestCase):
     def test_service_specific_validation(self) -> None:
         self.assertEqual(self.run_shell("require_ntfy_topic private_topic-123").returncode, 0)
         self.assertNotEqual(self.run_shell("require_ntfy_topic 'bad/topic'").returncode, 0)
-        self.assertEqual(self.run_shell("require_huggingface_token ''").returncode, 0)
-        self.assertEqual(self.run_shell("require_huggingface_token hf_abcdefghijklmnopqrst").returncode, 0)
-        self.assertNotEqual(self.run_shell("require_huggingface_token hf_short").returncode, 0)
 
 
 if __name__ == "__main__":
