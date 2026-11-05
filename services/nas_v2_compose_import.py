@@ -12,19 +12,22 @@ Compose model or tool identities change.  Runtime lifecycle never calls
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
 from typing import Any, Sequence
 
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from nas_v2_compose import ComposeProjectionError, render_compose_override
+from nas_v2_compose import ComposeProjectionError, render_compose_override_snapshot
 
 
 class ComposeImportError(RuntimeError):
@@ -52,12 +55,10 @@ _REFERENCE_FIELDS = frozenset({"Build", "Container", "Image", "Kube", "Network",
 
 # Canonical Compose models are consumed by Podlet inside one reconciliation.
 # Refuse pathological alias chains/deep structures instead of letting them
-# exhaust the interpreter stack.
+# exhaust the interpreter stack.  Compose sources use the same budget because
+# their aliases are expanded before the provider resolves them.
 _MAX_CANONICAL_DEPTH = 128
 _MAX_CANONICAL_NODES = 200_000
-_QUOTE_STARTERS = frozenset(":-[{,?")
-_BARE_BLOCK_INDICATOR = re.compile(r"^[|>](?:[1-9][+-]?|[+-][1-9]?)?$")
-_BLOCK_SCALAR_END = re.compile(r"[|>](?:[1-9][+-]?|[+-][1-9]?)?\s*$")
 
 
 def _absolute_binary(value: str, *, label: str) -> str:
@@ -72,11 +73,13 @@ def _run(
     *,
     env: dict[str, str] | None = None,
     timeout: int = 120,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
             list(command),
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL if input_text is None else None,
+            input=input_text,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -99,108 +102,62 @@ def _json_bytes(value: Any) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
-def _line_has_interpolation(text: str) -> bool:
-    """Detect Compose interpolation without mistaking ``$$`` for a variable."""
-    index = 0
-    while index < len(text):
-        if text[index] != "$":
-            index += 1
-            continue
-        if index + 1 >= len(text):
-            return False
-        following = text[index + 1]
-        if following == "$":
-            # Compose consumes "$$" as one literal dollar; the next character
-            # is never the start of an interpolation.
-            index += 2
-            continue
-        if following == "{" or following == "_" or (following.isascii() and following.isalpha()):
-            return True
-        index += 1
-    return False
+def _container_children(value: Any) -> list[Any]:
+    if isinstance(value, dict):
+        children: list[Any] = []
+        for key, item in value.items():
+            children.append(key)
+            children.append(item)
+        return children
+    return list(value)
 
 
-def _scan_yaml_line(line: str, quote: str | None) -> tuple[str, str | None]:
-    """Return a line's code portion and any quote that spans the line break."""
-    output: list[str] = []
-    previous: str | None = None
-    index = 0
-    while index < len(line):
-        character = line[index]
-        if quote == "'":
-            output.append(character)
-            if character == "'":
-                if line[index + 1 : index + 2] == "'":
-                    output.append("'")
-                    index += 2
-                    continue
-                quote = None
-            index += 1
-            continue
-        if quote == '"':
-            output.append(character)
-            if character == "\\" and index + 1 < len(line):
-                output.append(line[index + 1])
-                index += 2
-                continue
-            if character == '"':
-                quote = None
-            index += 1
-            continue
-        if character in "'\"" and (previous is None or previous in _QUOTE_STARTERS):
-            quote = character
-            output.append(character)
-            previous = character
-            index += 1
-            continue
-        if character == "#" and (index == 0 or line[index - 1] in " \t"):
-            break
-        output.append(character)
-        if not character.isspace():
-            previous = character
-        index += 1
-    return "".join(output), quote
+def _expansion_too_deep(service_id: str) -> ComposeImportError:
+    return ComposeImportError(
+        f"Compose source for {service_id!r} nests aliases or containers deeper than "
+        f"{_MAX_CANONICAL_DEPTH} levels; flatten the YAML structure before importing"
+    )
 
 
-def _block_scalar_indent(code: str, line: str) -> int | None:
-    """Return the parent indentation when a line introduces a block scalar."""
-    if _BLOCK_SCALAR_END.search(code) is None:
-        return None
-    if _BARE_BLOCK_INDICATOR.fullmatch(code.strip()) is not None:
-        # A document-root block scalar may keep its content at column zero.
-        return -1
-    return len(line) - len(line.lstrip(" "))
+def _validate_source_structure(service_id: str, root: Any, reject_scalar: Callable[[str], None]) -> None:
+    """Reject recursive aliases and alias-expanded nesting beyond the canonical budget.
 
-
-def _source_uses_interpolation(source: str) -> bool:
-    """Scan Compose YAML text while excluding comments and honouring ``$$``.
-
-    Compose interpolates scalar values but not YAML comments. Block-scalar
-    content is string data (not a comment), and quoted scalars may span lines,
-    so both are tracked instead of stripping every ``#`` heuristically.
+    A chain of aliases is flat as a YAML document but deep once expanded, and
+    both ruamel's representer and the Compose provider walk that expansion.
+    Memoizing each container's expanded height keeps shared aliases linear in
+    the number of distinct nodes while still measuring the deepest real path.
     """
-    quote: str | None = None
-    block_indent: int | None = None
-    for raw in source.splitlines():
-        if block_indent is not None:
-            if not raw.strip():
-                continue
-            indent = len(raw) - len(raw.lstrip(" "))
-            if block_indent < 0 or indent > block_indent:
-                if _line_has_interpolation(raw):
-                    return True
-                continue
-            block_indent = None
-        code, quote = _scan_yaml_line(raw, quote)
-        if _line_has_interpolation(code):
-            return True
-        if quote is None:
-            block_indent = _block_scalar_indent(code, raw)
-    return False
-
-
-def _compose_source_uses_interpolation(source: bytes) -> bool:
-    return _source_uses_interpolation(source.decode("utf-8", "replace"))
+    containers = (dict, list, tuple, set)
+    heights: dict[int, int] = {}
+    active: set[int] = set()
+    # The trailing flag marks the leave frame that records a container's height.
+    stack: list[tuple[Any, int, bool]] = [(root, 0, False)]
+    while stack:
+        value, depth, leaving = stack.pop()
+        if leaving:
+            identity = id(value)
+            active.discard(identity)
+            nested = [heights[id(child)] for child in _container_children(value) if isinstance(child, containers)]
+            heights[identity] = 1 + max(nested) if nested else 0
+            continue
+        if isinstance(value, str):
+            reject_scalar(value)
+            continue
+        if not isinstance(value, containers):
+            continue
+        identity = id(value)
+        if identity in active:
+            raise ComposeImportError(f"Compose service {service_id!r} contains a recursive YAML alias")
+        known = heights.get(identity)
+        if known is not None:
+            if depth + known > _MAX_CANONICAL_DEPTH:
+                raise _expansion_too_deep(service_id)
+            continue
+        if depth > _MAX_CANONICAL_DEPTH:
+            raise _expansion_too_deep(service_id)
+        active.add(identity)
+        stack.append((value, depth, True))
+        stack.extend((child, depth + 1, False) for child in _container_children(value))
 
 
 def _validate_canonical_structure(service_id: str, value: Any) -> None:
@@ -226,6 +183,77 @@ def _validate_canonical_structure(service_id: str, value: Any) -> None:
             stack.extend((child, depth + 1) for child in item)
 
 
+_INTERPOLATION = re.compile(r"\$(?:\{|[A-Za-z_])")
+
+
+def _validate_compose_source(service_id: str, source_bytes: bytes) -> bytes:
+    """Validate source and quote scalars so provider YAML versions agree."""
+    parser = YAML(typ="safe", pure=True)
+    parser.version = (1, 2)
+    parser.allow_duplicate_keys = False
+    try:
+        model = parser.load(source_bytes.decode("utf-8"))
+    except RecursionError as exc:
+        raise ComposeImportError(f"Compose source for {service_id!r} nests too deeply to parse safely") from exc
+    except (UnicodeError, YAMLError) as exc:
+        raise ComposeImportError(f"invalid Compose source for {service_id!r}: {exc}") from exc
+    if not isinstance(model, dict):
+        raise ComposeImportError(f"Compose source for {service_id!r} must be a YAML object")
+    # Includes load unvalidated files with their own interpolation environment.
+    if "include" in model:
+        raise ComposeImportError(
+            f"Compose service {service_id!r} uses include files which cannot be validated before provider invocation"
+        )
+    services = model.get("services", {})
+    if isinstance(services, dict):
+        for service in services.values():
+            if not isinstance(service, dict):
+                continue
+            if "env_file" in service:
+                raise ComposeImportError(
+                    f"Compose service {service_id!r} uses an external env_file which cannot be "
+                    "validated before provider invocation; use V2 environment-file attachments"
+                )
+            extends = service.get("extends")
+            if isinstance(extends, dict) and "file" in extends:
+                raise ComposeImportError(
+                    f"Compose service {service_id!r} uses an external extends file which "
+                    "cannot be validated before provider invocation"
+                )
+
+    def reject_scalar(value: str) -> None:
+        if _INTERPOLATION.search(value.replace(chr(36) * 2, "")):
+            raise ComposeImportError(
+                f"Compose service {service_id!r} uses interpolation, which Podlet import does not support; "
+                "use literal configuration or V2 credential/environment-file attachments"
+            )
+
+    _validate_source_structure(service_id, model, reject_scalar)
+    if isinstance(services, dict):
+        for service in services.values():
+            if not isinstance(service, dict):
+                continue
+            for field in ("command", "entrypoint"):
+                value = service.get(field)
+                if isinstance(value, str):
+                    try:
+                        for argument in shlex.split(value):
+                            reject_scalar(argument)
+                    except ValueError as exc:
+                        raise ComposeImportError(
+                            f"Compose service {service_id!r} has malformed {field} quoting"
+                        ) from exc
+    # Compose providers built on PyYAML treat names such as 'on' as booleans
+    # unless every scalar is quoted.
+    parser.representer.default_style = '"'
+    output = io.StringIO()
+    try:
+        parser.dump(model, output)
+    except RecursionError as exc:
+        raise ComposeImportError(f"Compose source for {service_id!r} nests too deeply to quote safely") from exc
+    return output.getvalue().encode("utf-8")
+
+
 def _canonical_compose(
     effective: dict[str, Any],
     service_id: str,
@@ -236,24 +264,22 @@ def _canonical_compose(
 ) -> tuple[pathlib.Path, bytes, bytes]:
     _absolute_binary(podman_bin, label=f"Compose service {service_id!r} Podman binary")
     _absolute_binary(compose_provider_bin, label=f"Compose service {service_id!r} provider binary")
+    provider_source: bytes | None = None
+
+    def validate_source(data: bytes) -> None:
+        nonlocal provider_source
+        provider_source = _validate_compose_source(service_id, data)
+
     try:
-        source, override = render_compose_override(effective, service_id, service)
+        source, override, _source_bytes = render_compose_override_snapshot(
+            effective,
+            service_id,
+            service,
+            validate_source=validate_source,
+        )
     except ComposeProjectionError as exc:
         raise ComposeImportError(str(exc)) from exc
-    try:
-        source_bytes = source.read_bytes()
-    except OSError as exc:
-        raise ComposeImportError(f"unable to read Compose source {source}: {exc}") from exc
-    # Podlet deliberately does not implement Compose interpolation.  Refuse a
-    # model whose meaning would depend on ambient reconciliation environment;
-    # V2 credentials/environment-file attachments are the deterministic secret
-    # path instead.  Reject ${VAR} and bare $VAR forms; "$$" is an escaped
-    # literal dollar and YAML comments are not interpolation sites.
-    if _compose_source_uses_interpolation(source_bytes):
-        raise ComposeImportError(
-            f"Compose service {service_id!r} uses interpolation, which Podlet import does not support; "
-            "use literal configuration or V2 credential/environment-file attachments"
-        )
+    assert provider_source is not None
 
     with tempfile.TemporaryDirectory(prefix=f"nas-v2-compose-config-{service_id}-") as raw:
         root = pathlib.Path(raw)
@@ -261,18 +287,21 @@ def _canonical_compose(
         override_path.write_bytes(override)
         env = os.environ.copy()
         env["PODMAN_COMPOSE_PROVIDER"] = compose_provider_bin
+        # The provider reads "-f -" from stdin and resolves relative source
+        # paths against COMPOSE_PROJECT_DIR.
+        env["COMPOSE_PROJECT_DIR"] = str(source.parent)
         command = [
             podman_bin,
             "compose",
             "--project-name",
             f"nas-v2-{service_id}",
             "--file",
-            str(source),
+            "-",
             "--file",
             str(override_path),
             "config",
         ]
-        canonical = _run(command, env=env).stdout.encode("utf-8")
+        canonical = _run(command, env=env, input_text=provider_source.decode("utf-8")).stdout.encode("utf-8")
     if not canonical.strip():
         raise ComposeImportError(f"Compose service {service_id!r} resolved to an empty model")
     _validate_canonical_networking(service_id, canonical)
