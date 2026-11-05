@@ -15,6 +15,7 @@ SERVICES = ROOT / "services"
 if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
+import nas_operation_journal as journal  # noqa: E402
 import nas_setup as setup  # noqa: E402
 
 
@@ -55,6 +56,30 @@ class FirstRunCompletionGuardTests(unittest.TestCase):
             journal={"schemaVersion": 1, "workflow": "first-run-v2", "status": "complete"},
             should_block=True,
         )
+
+    def test_completed_journal_with_altered_or_missing_identity_still_blocks(self):
+        for record in (
+            {"schemaVersion": 1, "workflow": "other-workflow", "status": "complete"},
+            {"schemaVersion": 1, "status": "complete"},
+            {"schemaVersion": 7, "workflow": "first-run-v2", "status": "complete"},
+            {"schemaVersion": 1, "workflow": "", "status": "complete"},
+        ):
+            with self.subTest(journal=record):
+                self.check(journal=record, should_block=True)
+
+    def test_completed_journal_with_unsupported_schema_cannot_replace_itself(self):
+        with tempfile.TemporaryDirectory() as raw:
+            path = pathlib.Path(raw) / "journal.json"
+            path.write_text(
+                json.dumps({"schemaVersion": 7, "workflow": "first-run-v2", "status": "complete"}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(journal.JournalError, "schemaVersion"):
+                journal.OperationJournal.open(path, workflow="identity-sync", fingerprint="fingerprint")
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["schemaVersion"], 7)
+
+    def test_cancelled_journal_remains_reusable(self):
+        self.check(journal={"schemaVersion": 1, "workflow": "first-run-v2", "status": "cancelled"}, should_block=False)
 
     def test_crash_between_final_state_write_and_journal_complete_fails_closed(self):
         self.check(

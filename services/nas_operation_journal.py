@@ -72,6 +72,14 @@ class OperationJournal:
     ) -> "OperationJournal":
         existing = load_json(path)
         now = int(time.time())
+        if existing is not None and existing.get("status") in {"complete", "cancelled"}:
+            # A finished journal is replaced, but only when it is a journal this
+            # code understands. Silently replacing an unknown schema would discard
+            # the only record that the operation already ran.
+            if existing.get("schemaVersion") != 1:
+                raise JournalError(
+                    f"Refusing to replace {path}: unsupported journal schemaVersion {existing.get('schemaVersion')!r}"
+                )
         if existing is not None and existing.get("status") not in {"complete", "cancelled"}:
             if existing.get("schemaVersion") != 1 or existing.get("workflow") != workflow:
                 raise JournalError(f"Another operation requires reconciliation: {path}")
