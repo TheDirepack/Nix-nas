@@ -124,8 +124,21 @@ class ObservabilityIngestionContractTests(unittest.TestCase):
                 self.assertIn("refused SMART command", result.stderr)
 
     def test_smart_wrapper_preserves_smartctl_health_exit_status(self) -> None:
-        result = self.run_smart_wrapper(["--scan"], exit_status=8)
-        self.assertEqual(result.returncode, 8)
+        query = [
+            "--info",
+            "--health",
+            "--attributes",
+            "--tolerance=verypermissive",
+            "-n",
+            "standby",
+            "--format=brief",
+            "/dev/sda",
+        ]
+        for arguments in (["--scan"], query, query + ["-d", "sntjmicron/sat"]):
+            with self.subTest(arguments=arguments):
+                result = self.run_smart_wrapper(arguments, exit_status=8)
+                self.assertEqual(result.returncode, 8, result.stderr)
+                self.assertEqual(json.loads(result.stdout), arguments)
 
     def test_alert_and_dashboard_metric_names_exist_in_golden_ingestion_shape(self) -> None:
         series = numeric_series_from_line_protocol(FIXTURE.read_text(encoding="utf-8"))
