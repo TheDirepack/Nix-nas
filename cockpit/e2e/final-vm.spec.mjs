@@ -262,6 +262,7 @@ for (const [index, payload] of hostileLoginPayloads.entries()) {
     await expect(page).toHaveURL(/\/identity\//);
     expect(await page.evaluate(() => globalThis.__nas_login_xss)).toBe(0);
     expect(page.frames().some(isNasComponentFrame)).toBe(false);
+    await page.close();
     expect(errors).toEqual([]);
   });
 }
