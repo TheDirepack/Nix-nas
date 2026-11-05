@@ -3,14 +3,35 @@
 let
   cfg = config.nas;
   allowGroups = config.services.openssh.settings.AllowGroups or [ ];
+  denyGroups = config.services.openssh.settings.DenyGroups or [ ];
   adminGroup = "nas-administrators";
+  # OpenSSH's AllowGroups/DenyGroups match case-sensitively with '*' and '?'
+  # wildcards. Negation ('!group') is a Match Group feature and does not apply
+  # to these lists, so a denied group is denied only by an explicit pattern.
+  matchesGroup =
+    pattern: group:
+    builtins.match
+      (lib.replaceStrings [ "\\*" "\\?" ] [ ".*" "." ] (lib.escapeRegex pattern))
+      group
+    != null;
+  matchesGroups =
+    patterns: groups:
+    lib.any (pattern: lib.any (matchesGroup pattern) groups) (
+      if patterns == null then [ ] else patterns
+    );
+  # An absent or empty AllowGroups admits every group; an absent or empty
+  # DenyGroups denies none. Both mean "no restriction" in sshd.
+  admitsGroups = patterns: groups: patterns == null || patterns == [ ] || matchesGroups patterns groups;
+  deniesGroups = patterns: groups: !(patterns == null || patterns == [ ]) && matchesGroups patterns groups;
   # The setup stage promotes the selected local administrator with `usermod`
   # after the first-start account exists, which Nix evaluation cannot observe.
-  # An operator declaring the planned administrator in
-  # users.groups.nas-administrators.members therefore counts as group
-  # membership here, so readiness is decided from the declarative plan instead
-  # of requiring a prior runtime group update.
-  declaredAdministrators = lib.attrByPath [ "users" "groups" adminGroup "members" ] [ ] config;
+  # Membership declared in users.groups.<name>.members is what that step will
+  # apply, so every declared group counts, not only the administrator group.
+  declaredGroups =
+    name:
+    lib.attrNames (
+      lib.filterAttrs (_: group: lib.elem name (group.members or [ ])) config.users.groups
+    );
   # Root is never an SSH recovery account (sshd PermitRootLogin = "no"), so it
   # must not enter the recovery-user candidate pool at all.
   recoveryCandidates =
@@ -18,10 +39,10 @@ let
       (name: user: { inherit name user; })
       (lib.removeAttrs config.users.users [ "root" ]);
   # sshd only admits users whose primary or supplementary group matches an
-  # AllowGroups entry (OpenSSH semantics). A recovery SSH key only counts for
-  # users who are actually allowed to log in via SSH, so require both
-  # nas-administrators membership (primary, supplementary, or declared) and
-  # effective AllowGroups membership.
+  # AllowGroups entry and no DenyGroups entry (OpenSSH semantics). A recovery
+  # SSH key only counts for users who are actually allowed to log in via SSH,
+  # so require nas-administrators membership (primary, supplementary, or
+  # declared), an admitting pattern, and no denying pattern.
   sshRecoveryConfigured =
     config.services.openssh.enable
     && lib.any
@@ -29,14 +50,13 @@ let
         let
           inherit (candidate) name user;
           groups =
-            [ (user.group or "users") ]
-            ++ (user.extraGroups or [ ])
-            ++ lib.optional (lib.elem name declaredAdministrators) adminGroup;
+            [ (user.group or "users") ] ++ (user.extraGroups or [ ]) ++ declaredGroups name;
           authorizedKeys = lib.attrByPath [ "openssh" "authorizedKeys" "keys" ] [ ] user;
           authorizedKeyFiles = lib.attrByPath [ "openssh" "authorizedKeys" "keyFiles" ] [ ] user;
         in
         lib.elem adminGroup groups
-        && lib.any (group: lib.elem group allowGroups) groups
+        && admitsGroups allowGroups groups
+        && !deniesGroups denyGroups groups
         && (authorizedKeys != [ ] || authorizedKeyFiles != [ ])
       )
       recoveryCandidates;
