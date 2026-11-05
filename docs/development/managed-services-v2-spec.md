@@ -875,6 +875,14 @@ routes:
 
 The route's identity capability is service-scoped. `capability: access` means the service's standard access capability. Another declared service capability may be named when needed.
 
+For isolated OCI/Quadlet runtimes, `target.port` remains the host-side Caddy
+endpoint. An existing TCP listener with the same `exposure.port` may map it to
+a different container `targetPort`; that mapping is published only once and
+the container-zone route policy uses the translated port. Isolated publications
+must not claim another service's listener or local backend port. Host ports
+are explicitly selected in the existing authority, not allocated by a second
+registry. See the [operator mapping example](../src/admin/networking.md#isolated-applications-sharing-a-container-port).
+
 ### 17.1 Route requirements
 
 The generic route model must cover the current stack without application-specific Caddy snippets:
