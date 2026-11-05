@@ -344,6 +344,40 @@ class CommonPolicyTests(unittest.TestCase):
                         "NAS_V2_SYNCTHING_SERVICE", "NAS_V2_SYNCTHING_CAPABILITY", "syncthing", "access"
                     )
 
+    def test_resolve_v2_service_capability_rejects_malformed_capability_value(self) -> None:
+        env_base = {"NAS_V2_SYNCTHING_SERVICE": "demo", "NAS_V2_SYNCTHING_CAPABILITY": "access"}
+        payloads = {
+            "null-value.json": {"access": None},
+            "empty-value.json": {"access": ""},
+            "numeric-value.json": {"access": 7},
+            "object-value.json": {"access": {"group": "application.demo.access"}},
+            "wrong-group.json": {"access": "application.other.access"},
+        }
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            for name, capabilities in payloads.items():
+                with self.subTest(name=name):
+                    authority = root / name
+                    authority.write_text(
+                        json.dumps(
+                            {
+                                "schemaVersion": 3,
+                                "services": {
+                                    "demo": {"enabled": True, "authorization": {"capabilities": [{"id": "access"}]}}
+                                },
+                                "derived": {"authorization": {"demo": {"capabilities": capabilities}}},
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    with mock.patch.dict(os.environ, {**env_base, "NAS_V2_EFFECTIVE": str(authority)}, clear=False):
+                        self.assertIsNone(
+                            common.resolve_v2_service_capability(
+                                "NAS_V2_SYNCTHING_SERVICE", "NAS_V2_SYNCTHING_CAPABILITY", "demo", "access"
+                            ),
+                            name,
+                        )
+
     def test_resolve_v2_service_capability_resolves_declared_capability(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)

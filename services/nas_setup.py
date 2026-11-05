@@ -1477,7 +1477,20 @@ def reject_completed_first_run() -> None:
                 raise SetupError(f"Cannot verify first-run state safety at {path}: unsupported status")
             completed = True
         else:
-            completed = record.get("workflow") == "first-run-v2" and record.get("status") == "complete"
+            # A completed journal blocks re-entry whatever workflow it names: the
+            # durable record proves an appliance initialisation finished, and a
+            # rewritten or truncated workflow must not turn that into permission to
+            # recreate the KeePassXC database.
+            if record.get("status") == "complete":
+                if (
+                    record.get("schemaVersion") != 1
+                    or not isinstance(record.get("workflow"), str)
+                    or not record.get("workflow")
+                ):
+                    raise SetupError(f"Cannot verify first-run {kind} safety at {path}: unsupported journal identity")
+                completed = True
+            else:
+                completed = False
         if completed:
             raise SetupError(
                 "Appliance first-run already completed; refusing to recreate the KeePassXC database "

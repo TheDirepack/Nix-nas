@@ -241,6 +241,22 @@ def application_capability_allowed(
     return application_capability_group(service_id, capability) in groups
 
 
+def _capability_value_error(service_id: str, capability_id: str, value: object) -> str | None:
+    """Return the reason a compiled authorization capability value is unusable.
+
+    One rule set for both readers: the strict loader raises the message, and the
+    runtime resolver treats it as "no grant". A value that is not the canonical
+    group is never a permission, whatever its parent object claims.
+    """
+    if not isinstance(value, str) or not value:
+        return f"authorization capability {service_id!r}.{capability_id!r} must be a non-empty string"
+    if value != application_capability_group(service_id, capability_id):
+        return (
+            f"authorization capability {service_id!r}.{capability_id!r} must map to its canonical group, not {value!r}"
+        )
+    return None
+
+
 def load_effective_authority(path: pathlib.Path | None = None) -> dict[str, Any]:
     """Strictly load and validate V2 effective state. Fail closed on any malformed input."""
     effective_path = (
@@ -277,13 +293,9 @@ def load_effective_authority(path: pathlib.Path | None = None) -> dict[str, Any]
             raise ValueError(f"authorization capabilities for {svc_id!r} must be object")
         if isinstance(caps, dict):
             for cap_id, cap_value in caps.items():
-                if not isinstance(cap_value, str) or not cap_value:
-                    raise ValueError(f"authorization capability {svc_id!r}.{cap_id!r} must be a non-empty string")
-                if cap_value != application_capability_group(svc_id, cap_id):
-                    raise ValueError(
-                        f"authorization capability {svc_id!r}.{cap_id!r} must map to its canonical group, "
-                        f"not {cap_value!r}"
-                    )
+                problem = _capability_value_error(svc_id, cap_id, cap_value)
+                if problem is not None:
+                    raise ValueError(problem)
     return data
 
 
@@ -338,7 +350,11 @@ def resolve_v2_service_capability(
     entry = authorization.get(service)
     caps = entry.get("capabilities") if isinstance(entry, dict) else None
     if isinstance(caps, dict) and capability in caps:
-        return service, capability
+        # Key presence is not a grant: the compiled value must be the canonical
+        # group for this service and capability, exactly as the strict loader
+        # requires. A malformed authority grants nothing.
+        if _capability_value_error(service, capability, caps[capability]) is None:
+            return service, capability
     return None
 
 
