@@ -15,7 +15,7 @@ let
   testOciImage = tag: body: pkgs.dockerTools.buildLayeredImage {
     name = "localhost/nas-v2-vm-probe";
     inherit tag;
-    contents = [ pkgs.busybox ];
+    contents = [ pkgs.busybox pkgs.sqlite ];
     extraCommands = ''
       mkdir -p www
       printf '%s\n' ${lib.escapeShellArg body} > www/index.html
@@ -36,6 +36,7 @@ let
       chromedriver
       coreutils
       curl
+      diffutils
       findutils
       git
       gnugrep

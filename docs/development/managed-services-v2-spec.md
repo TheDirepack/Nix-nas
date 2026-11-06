@@ -588,6 +588,8 @@ The native Quadlet remains application authority. V2 projects only generic addit
 - resources;
 - sandbox policy where supported.
 
+Generated `Volume=`, `Tmpfs=`, and `AddDevice=` values are written verbatim: Quadlet forwards those keys to Podman without removing surrounding quotes, which Podman rejects. The projector therefore emits them unquoted and doubles `%` so systemd specifier expansion cannot rewrite a path. Keys that Quadlet does unquote (`EnvironmentFile=`, `PodmanArgs=`) and keys whose parser tolerates quoting (`Image=`, `Exec=`, `PublishPort=`) keep their existing form. Do not add quotes to verbatim keys to "escape" a path; fail closed instead if a future value cannot be represented.
+
 ### 10.5 Compose
 
 ```yaml

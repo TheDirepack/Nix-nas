@@ -70,6 +70,17 @@ def _quote(value: str, *, field: str = "Quadlet value") -> str:
     return '"' + safe.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _verbatim(value: str, *, field: str) -> str:
+    """Return a value Quadlet forwards to Podman unchanged.
+
+    Quadlet reads Volume=, Tmpfs=, and AddDevice= without unquoting, so
+    surrounding quotes reach Podman as literal characters and are rejected.
+    Quadlet escapes embedded whitespace when it writes ExecStart, so only
+    systemd specifier expansion needs neutralizing here.
+    """
+    return _single_line(value, field=field)
+
+
 def _safe_path(value: str, *, field: str, allow_colon: bool = False) -> pathlib.PurePosixPath:
     _reject_control(value, field)
     path = pathlib.PurePosixPath(value)
@@ -175,9 +186,8 @@ def _storage_lines(effective: dict[str, Any], service: dict[str, Any]) -> list[s
         destination = _safe_path(mount, field="storage attachment mountPath")
         if (access := attachment.get("access", "read")) not in {"read", "write"}:
             raise QuadletProjectionError(f"unsupported storage access mode {access!r}")
-        lines.append(
-            f"Volume={_quote(f'{source}:{destination}:{"ro" if access == "read" else "rw"}', field='storage volume')}"
-        )
+        access_mode = "ro" if access == "read" else "rw"
+        lines.append(f"Volume={_verbatim(f'{source}:{destination}:{access_mode}', field='storage volume')}")
     return lines
 
 
@@ -205,7 +215,7 @@ def _credential_lines(effective: dict[str, Any], service: dict[str, Any]) -> lis
             if not isinstance(mount := attachment.get("mountPath"), str):
                 raise QuadletProjectionError(f"file credential {cid!r} is missing mountPath")
             dest = _safe_path(mount, field=f"credential {cid!r} mountPath")
-            lines.append(f"Volume={_quote(f'{source}:{dest}:ro', field='credential volume')}")
+            lines.append(f"Volume={_verbatim(f'{source}:{dest}:ro', field='credential volume')}")
             continue
         if use == "native-reference":
             raise QuadletProjectionError(
@@ -251,7 +261,7 @@ def _sandbox_lines(service: dict[str, Any]) -> list[str]:
     for entry in sandbox.get("tmpfs", []):
         path = _safe_path(entry["path"], field="tmpfs path")
         value = str(path) + (f":size={entry['sizeBytes']}" if "sizeBytes" in entry else "")
-        lines.append(f"Tmpfs={_quote(value, field='tmpfs')}")
+        lines.append(f"Tmpfs={_verbatim(value, field='tmpfs')}")
     return lines
 
 
@@ -286,7 +296,7 @@ def _accelerator_lines(service: dict[str, Any]) -> list[str]:
                 raise QuadletProjectionError("OCI accelerator target must be beneath /dev") from exc
             value += f":{target_path}"
         value += ":rw"
-        lines.append(f"AddDevice={_quote(value, field='accelerator device mapping')}")
+        lines.append(f"AddDevice={_verbatim(value, field='accelerator device mapping')}")
     return lines
 
 

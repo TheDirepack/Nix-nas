@@ -85,10 +85,42 @@ class V2QuadletTests(unittest.TestCase):
             },
         )
         rendered = self.render(effective, service)
-        self.assertIn('Volume="/tank/media:/media:ro"', rendered)
-        self.assertIn('Volume="/tank/state:/state:rw"', rendered)
+        self.assertIn("Volume=/tank/media:/media:ro", rendered)
+        self.assertIn("Volume=/tank/state:/state:rw", rendered)
         self.assertIn('EnvironmentFile="/run/nas-secrets/demo/app.env"', rendered)
-        self.assertIn('Volume="/run/nas-secrets/demo/token:/run/secrets/token:ro"', rendered)
+        self.assertIn("Volume=/run/nas-secrets/demo/token:/run/secrets/token:ro", rendered)
+
+    def test_verbatim_podman_keys_are_unquoted_and_percent_escaped(self):
+        # Quadlet forwards Volume/Tmpfs/AddDevice without unquoting, so quotes
+        # would reach Podman literally. Whitespace is escaped by Quadlet, and a
+        # doubled percent survives systemd specifier expansion as one percent.
+        effective, service = self.compile_service(
+            {
+                "name": "Demo",
+                "workload": {"kind": "daemon", "activation": "persistent"},
+                "runtime": {"type": "oci", "image": "example.invalid/demo:1"},
+                "storage": [{"resource": "state", "mountPath": "/srv/my state", "access": "write"}],
+                "sandbox": {"tmpfs": [{"path": "/tmp", "sizeBytes": 1024}]},
+                "resources": {
+                    "accelerators": [
+                        {
+                            "kind": "gpu",
+                            "vendor": "AMD",
+                            "device": "/dev/dri/renderD128",
+                            "target": "/dev/dri/renderD128",
+                            "required": True,
+                        }
+                    ]
+                },
+            },
+            storageResources={"state": {"path": "/tank/100%state", "stateClass": "authoritative"}},
+        )
+        rendered = self.render(effective, service)
+        self.assertIn("Volume=/tank/100%%state:/srv/my state:rw", rendered)
+        self.assertIn("Tmpfs=/tmp:size=1024", rendered)
+        self.assertNotIn('Volume="', rendered)
+        self.assertNotIn('Tmpfs="', rendered)
+        self.assertNotIn('AddDevice="', rendered)
 
     def test_optional_or_native_reference_container_credentials_fail_closed(self):
         for credential, attachment, expected in (
@@ -138,7 +170,7 @@ class V2QuadletTests(unittest.TestCase):
         inventory = {"schemaVersion": 1, "capabilities": {}, "accelerators": {}}
         effective = accelerator.resolve_effective(effective, inventory)
         rendered = self.render(effective, effective["services"]["demo"])
-        self.assertIn('AddDevice="/dev/dri/renderD128:/dev/dri/renderD128:rw"', rendered)
+        self.assertIn("AddDevice=/dev/dri/renderD128:/dev/dri/renderD128:rw", rendered)
 
         unresolved, _unresolved_service = self.compile_service(
             {

@@ -250,6 +250,33 @@ unit, protected-target lifecycle and notification delivery.
 
 The installed guest also exercises a service identifier absent from the Nix seed. It loads two VM-only BusyBox images from the Nix store, creates an identity-protected routed OCI service with revision-CAS document replacement, updates the running image, verifies that an offline missing-image activation restores both desired and live applied state, and removes the service and its Quadlet, systemd, Caddy, Authentik, and container projections.
 
+Those VM-only images include SQLite for the OCI durability drill. The fixture
+creates an authoritative child dataset and a test-only credential, writes an
+application identity and task records through finite container-side SQLite/WAL
+connections, verifies a new container ID after restart, and checks data and
+credential binding after image replacement and failed-update rollback. It stops
+the app before taking a consistent snapshot, restores that snapshot into a clone
+while retaining the current dataset and a safety snapshot, then activates the
+same V2 service/resource identity against the clone. Database integrity, logical
+records, numeric owner/mode and credential bytes must match. Definition removal
+must retain both datasets and the credential source; explicit fixture cleanup
+runs only after these assertions succeed. A failed guest run leaves its fixture
+data available for diagnosis; the guest refuses reuse of occupied fixture paths.
+Inspect or preserve that data before rerunning `persistent-test`: the wrapper
+restores both disks to the clean baseline before invoking the guest again, so
+the occupied-path check cannot preserve data across that reset. Disposable CI
+VMs also do not retain guest disks indefinitely; preserve the required evidence
+before their teardown.
+
+`tests/test_vm_oci_durability.py` exercises the guest's verifier against real local
+SQLite files, including corrupt/lost records, replaced identity/credential, and
+changed mode. That verifies the assertions, **not** installed Podman/ZFS behavior.
+Only a successful exact-head unencrypted QEMU/installer run qualifies the drill.
+It is a rootful system-Quadlet fixture, not #141 rootless/security evidence.
+Concurrent-writer crash recovery, missing/locked credentials, database migration
+compatibility, reboot recovery and #139 creator-isolated archive/restore remain
+separate qualification obligations. No timeout or retry budget is raised.
+
 The final installed-command workload also records curl-based HTTP adversarial evidence from the same disposable VM. That keeps protocol checks on the real appliance without confusing them with browser-rendering tests.
 
 The official-installer path additionally runs `tests/vm/setup-reboot-e2e.py` after the first-run guest suite. It writes a ZFS-backed sentinel, checks the completed V2 service set (including CopyParty and Syncthing), performs authenticated browser checks, reboots twice, and repeats those storage, service, and browser assertions after each boot. The Python runner writes one machine-readable result for the QEMU wrapper; no interactive continuation is required.
