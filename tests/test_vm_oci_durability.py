@@ -24,7 +24,10 @@ import nas_v2_spec as spec  # noqa: E402
 class OciDurabilityProbeTests(unittest.TestCase):
     def test_operator_pattern_compiles_without_backing_up_cache_or_scratch(self):
         text = (ROOT / "docs/src/admin/backups.md").read_text()
-        example = re.search(r"```yaml\n(.*?)\n```", text, re.DOTALL)
+        section = text.split("## Durable OCI application state", 1)
+        if len(section) != 2:
+            self.fail("durable OCI operator section is missing")
+        example = re.search(r"```yaml\n(.*?)\n```", section[1].split("\n## ", 1)[0], re.DOTALL)
         if example is None:
             self.fail("durable OCI operator pattern is missing")
         effective = spec.compile_document(
