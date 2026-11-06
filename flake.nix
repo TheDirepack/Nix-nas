@@ -200,6 +200,7 @@
           ];
           buildInputs = [ pkgs.glib pkgs.json-glib ];
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.systemd ];
+          NAS_V2_QUADLET_GENERATOR_BIN = "${pkgs.podman}/lib/systemd/system-generators/podman-system-generator";
           shellHook = ''
             echo "NixOS NAS security, property, and fuzz test tools are available." >&2
           '';

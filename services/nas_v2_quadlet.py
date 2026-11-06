@@ -73,12 +73,21 @@ def _quote(value: str, *, field: str = "Quadlet value") -> str:
 def _verbatim(value: str, *, field: str) -> str:
     """Return a value Quadlet forwards to Podman unchanged.
 
-    Quadlet reads Volume=, Tmpfs=, and AddDevice= without unquoting, so
+    Quadlet reads Volume= and Tmpfs= without unquoting, so
     surrounding quotes reach Podman as literal characters and are rejected.
     Quadlet escapes embedded whitespace when it writes ExecStart, so only
     systemd specifier expansion needs neutralizing here.
     """
     return _single_line(value, field=field)
+
+
+def _quote_strv(value: str, *, field: str) -> str:
+    """Quote one word for Quadlet's LookupAllStrv parser.
+
+    SplitRetainEscape treats backslashes literally, so embedded double quotes
+    need adjacent single-quoted segments rather than backslash escaping.
+    """
+    return '"' + _single_line(value, field=field).replace('"', '"\'"\'"') + '"'
 
 
 def _safe_path(value: str, *, field: str, allow_colon: bool = False) -> pathlib.PurePosixPath:
@@ -296,7 +305,7 @@ def _accelerator_lines(service: dict[str, Any]) -> list[str]:
                 raise QuadletProjectionError("OCI accelerator target must be beneath /dev") from exc
             value += f":{target_path}"
         value += ":rw"
-        lines.append(f"AddDevice={_verbatim(value, field='accelerator device mapping')}")
+        lines.append(f"AddDevice={_quote_strv(value, field='accelerator device mapping')}")
     return lines
 
 

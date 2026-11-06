@@ -277,6 +277,16 @@ Concurrent-writer crash recovery, missing/locked credentials, database migration
 compatibility, reboot recovery and #139 creator-isolated archive/restore remain
 separate qualification obligations. No timeout or retry budget is raised.
 
+`test_v2_quadlet.py` also feeds rendered attachments to the real Quadlet
+generator in `--dryrun` mode and inspects the serialized `ExecStart` volume,
+tmpfs and device arguments. It covers whitespace, quotes, backslashes and
+escaped `%` without starting Podman or requiring a GPU. The Nix test shell sets
+the existing `NAS_V2_QUADLET_GENERATOR_BIN` to its pinned Podman generator;
+outside that shell the test discovers a local generator or explicitly skips
+when none is installed. An explicitly configured but broken generator fails.
+This checks generator parsing, not systemd's runtime specifier expansion or
+container mount/device access.
+
 The final installed-command workload also records curl-based HTTP adversarial evidence from the same disposable VM. That keeps protocol checks on the real appliance without confusing them with browser-rendering tests.
 
 The official-installer path additionally runs `tests/vm/setup-reboot-e2e.py` after the first-run guest suite. It writes a ZFS-backed sentinel, checks the completed V2 service set (including CopyParty and Syncthing), performs authenticated browser checks, reboots twice, and repeats those storage, service, and browser assertions after each boot. The Python runner writes one machine-readable result for the QEMU wrapper; no interactive continuation is required.

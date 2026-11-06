@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
 import pathlib
+import shlex
+import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -91,7 +95,7 @@ class V2QuadletTests(unittest.TestCase):
         self.assertIn("Volume=/run/nas-secrets/demo/token:/run/secrets/token:ro", rendered)
 
     def test_verbatim_podman_keys_are_unquoted_and_percent_escaped(self):
-        # Quadlet forwards Volume/Tmpfs/AddDevice without unquoting, so quotes
+        # Quadlet forwards Volume/Tmpfs without unquoting, so quotes
         # would reach Podman literally. Whitespace is escaped by Quadlet, and a
         # doubled percent survives systemd specifier expansion as one percent.
         effective, service = self.compile_service(
@@ -120,7 +124,7 @@ class V2QuadletTests(unittest.TestCase):
         self.assertIn("Tmpfs=/tmp:size=1024", rendered)
         self.assertNotIn('Volume="', rendered)
         self.assertNotIn('Tmpfs="', rendered)
-        self.assertNotIn('AddDevice="', rendered)
+        self.assertIn('AddDevice="/dev/dri/renderD128:/dev/dri/renderD128:rw"', rendered)
 
     def test_optional_or_native_reference_container_credentials_fail_closed(self):
         for credential, attachment, expected in (
@@ -148,6 +152,84 @@ class V2QuadletTests(unittest.TestCase):
                 with self.assertRaisesRegex(quadlet.QuadletProjectionError, expected):
                     self.render(effective, service)
 
+    def test_real_generator_preserves_attachment_arguments(self):
+        generator = os.environ.get("NAS_V2_QUADLET_GENERATOR_BIN") or shutil.which("podman-system-generator")
+        if not generator:
+            generator = next(
+                (
+                    path
+                    for path in (
+                        "/usr/lib/systemd/system-generators/podman-system-generator",
+                        "/usr/lib/podman/quadlet",
+                    )
+                    if os.access(path, os.X_OK)
+                ),
+                None,
+            )
+        if generator is None:
+            self.skipTest("Podman Quadlet generator not available")
+        effective, service = self.compile_service(
+            {
+                "name": "Demo",
+                "workload": {"kind": "daemon", "activation": "persistent"},
+                "runtime": {"type": "oci", "image": "example.invalid/demo:1", "pull": "never"},
+                "storage": [{"resource": "state", "mountPath": "/srv/my state", "access": "write"}],
+                "credentials": [{"credential": "token", "use": "file", "mountPath": "/run/secrets/token"}],
+                "sandbox": {"tmpfs": [{"path": "/tmp/100% scratch", "sizeBytes": 1024}]},
+                "resources": {
+                    "accelerators": [
+                        {
+                            "kind": "gpu",
+                            "vendor": "AMD",
+                            "device": "/dev/dri/render 100% 'single' \"quoted\"\\tail",
+                            "target": "/dev/dri/renderD128",
+                            "required": True,
+                        }
+                    ]
+                },
+            },
+            storageResources={"state": {"path": '/tank/100% state "quoted"\\tail', "stateClass": "authoritative"}},
+            credentials={"token": {"path": "/run/nas-secrets/demo/token", "required": True}},
+        )
+        with tempfile.TemporaryDirectory(prefix="nas-test-quadlet-") as directory:
+            (pathlib.Path(directory) / "demo.container").write_text(self.render(effective, service))
+            result = subprocess.run(
+                [generator, "--dryrun"],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+                env={**os.environ, "QUADLET_UNIT_DIRS": directory},
+            )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        commands = [
+            line.removeprefix("ExecStart=") for line in result.stdout.splitlines() if line.startswith("ExecStart=")
+        ]
+        self.assertEqual(len(commands), 1, result.stdout)
+        # Inspect Quadlet's serialized arguments, not runtime systemd expansion:
+        # C-style whitespace escapes and doubled specifiers must remain intact.
+        arguments = shlex.split(commands[0])
+        self.assertEqual(
+            [arguments[i + 1] for i, value in enumerate(arguments) if value == "-v"],
+            [
+                r'/tank/100%%\x20state\x20"quoted"\tail:/srv/my\x20state:rw',
+                "/run/nas-secrets/demo/token:/run/secrets/token:ro",
+            ],
+        )
+        self.assertEqual(arguments[arguments.index("--tmpfs") + 1], r"/tmp/100%%\x20scratch:size=1024")
+        self.assertEqual(
+            [arguments[i + 1] for i, value in enumerate(arguments) if value == "--device"],
+            [r"""/dev/dri/render\x20100%%\x20'single'\x20"quoted"\tail:/dev/dri/renderD128:rw"""],
+        )
+
+    def test_shell_supplies_the_pinned_quadlet_generator(self):
+        self.assertTrue(
+            'NAS_V2_QUADLET_GENERATOR_BIN = "${pkgs.podman}/lib/systemd/system-generators/podman-system-generator";'
+            in (ROOT / "flake.nix").read_text(),
+            "the Nix test shell must run the native regression against its pinned Podman generator",
+        )
+
     def test_explicit_shared_device_maps_and_unresolved_required_gpu_fails(self):
         effective, _service = self.compile_service(
             {
@@ -170,7 +252,7 @@ class V2QuadletTests(unittest.TestCase):
         inventory = {"schemaVersion": 1, "capabilities": {}, "accelerators": {}}
         effective = accelerator.resolve_effective(effective, inventory)
         rendered = self.render(effective, effective["services"]["demo"])
-        self.assertIn("AddDevice=/dev/dri/renderD128:/dev/dri/renderD128:rw", rendered)
+        self.assertIn('AddDevice="/dev/dri/renderD128:/dev/dri/renderD128:rw"', rendered)
 
         unresolved, _unresolved_service = self.compile_service(
             {
