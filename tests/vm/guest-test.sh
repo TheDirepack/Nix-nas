@@ -1518,10 +1518,11 @@ jq -e '[.results[] | select(.name == "application.vm-oci-probe.access")] | lengt
 pass "unknown OCI service removal cleaned native runtime, route, and authorization projections"
 assert_oci_retained_state
 pass "OCI definition removal retained authoritative data and credential source"
-zfs destroy "$oci_restore_dataset"
-zfs destroy "$oci_dataset@before-restore"
-zfs destroy "$oci_dataset@consistent"
-zfs destroy "$oci_dataset"
+# Sanoid may snapshot either fixture during the drill. Exercise that case even
+# when no timer fires; -r stays within these test-owned datasets, unlike -R.
+zfs snapshot "$oci_restore_dataset@cleanup-probe" "$oci_dataset@cleanup-probe"
+zfs destroy -r "$oci_restore_dataset"
+zfs destroy -r "$oci_dataset"
 rm -- "$oci_credential"
 rmdir /run/nas-secrets/vm-oci-probe
 
