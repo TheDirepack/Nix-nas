@@ -566,7 +566,9 @@ run_installer() {
   local iso boot_dir os_disk data_disk install_log boot_log pidfile install_marker source_stage source_id marker_id options pid
   local persistent_mode="${NAS_QEMU_PERSISTENT_MODE:-0}"
   local reuse_installed="${NAS_QEMU_REUSE_INSTALLED:-0}"
-  local vm_started_by_this_run=false
+  # Deliberately script-global: a deferred EXIT/TERM trap can run after
+  # run_installer returns and must still know whether this run owns the VM.
+  vm_started_by_this_run=false
   local ssh_key ssh_key_dir full_suite_skip_fuzz github_actions=false
   local package_upgrade="${NAS_QEMU_PACKAGE_UPGRADE:-0}" reconfigure_timeout rebuild_timeout
   local -a accel network_args ssh_args
@@ -585,7 +587,8 @@ run_installer() {
 
   cleanup_vm() {
     # Never terminate a VM that existed before this installer was invoked.
-    [[ "$vm_started_by_this_run" == true ]] || return 0
+    # A deferred EXIT/TERM trap may run after run_installer's locals are gone.
+    [[ "${vm_started_by_this_run:-false}" == true ]] || return 0
     local cleanup_pidfile="$STATE_DIR/qemu.pid"
     nas_qemu_cleanup_pidfile "$cleanup_pidfile" 20 || {
       local pid_status=$?

@@ -252,7 +252,12 @@ Native test logs are printed by the NixOS test driver. The installer path keeps:
 - the persistent OS and ZFS qcow2 disks plus the `nas-test-clean` baseline snapshot when using the persistent wrapper.
 
 The guest error trap prints failed units, the last 250 journal lines, and ZFS
-status before returning a failure. To remove all retained state:
+status before returning a failure. The host wrapper stops only a QEMU process it
+started itself: an EXIT/TERM trap may run after the installer function returns,
+so that ownership flag is script-global and defaults to "not owned" when absent.
+A failed run therefore reports the original failure and still cleans up, without
+signalling a VM that existed before the wrapper was invoked. To remove all
+retained state:
 
 ```bash
 ./scripts/qemu-test.sh clean
