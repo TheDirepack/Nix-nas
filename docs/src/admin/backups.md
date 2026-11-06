@@ -23,6 +23,83 @@ If no external repository is configured, the default repository is `<nas.zfsRoot
 
 CopyParty SQLite databases are staged with online backups instead of copying the entire live state tree, which also contains the mounted NAS data hierarchy.
 
+## Durable OCI application state
+
+Keep the V2 service ID stable when replacing an image. Store the application's
+logical identity, database, tasks and workspaces in an explicit authoritative
+storage attachment, not its container writable layer. Separate rebuildable
+cache from that state and put temporary sockets, display locks and scratch
+files on tmpfs. For example, adapt this desired-state pattern to an approved
+image and configure that application's native state/cache paths:
+
+```yaml
+schemaVersion: 3
+storageResources:
+  app-state:
+    path: /tank/apps/example/state
+    dataset: tank/nas/apps/example/state
+    stateClass: authoritative
+    backup: {enabled: true, consistency: zfs-snapshot}
+  app-cache:
+    path: /tank/apps/example/cache
+    stateClass: cache
+    backup: {enabled: false}
+credentials:
+  app-token: {path: /run/nas-secrets/example/token, required: true}
+services:
+  example:
+    name: Example persistent application
+    workload: {kind: daemon}
+    runtime: {type: oci, image: registry.example.test/team/app:reviewed}
+    network: {mode: isolated, outboundDefault: deny}
+    storage:
+      - {resource: app-state, mountPath: /state, access: write}
+      - {resource: app-cache, mountPath: /cache, access: write}
+    credentials:
+      - {credential: app-token, use: file, mountPath: /run/secrets/token}
+    sandbox:
+      mode: strict
+      tmpfs: [{path: /tmp, sizeBytes: 67108864}]
+```
+
+This is a configuration pattern, not a runnable image recommendation. Provision
+the datasets/directories and set ownership for the **actual** runtime UID/GID
+before activation. Declaring a resource does not create its dataset or prove
+rootless/user-namespace isolation. Keep credential values in KeePass-managed
+runtime secrets; the YAML records references only. Backup metadata selects the
+existing backup machinery; it does not make an arbitrary live database safe.
+
+For a recovery drill:
+
+1. Unlock the NAS manually and confirm the exact dataset, mounts, service ID,
+   image version and credential references. Preserve the current desired-state
+   document using the normal configuration backup.
+2. Use the application's native online backup for a live SQLite/WAL database,
+   or stop **every** writer before taking a ZFS snapshot of its dedicated data
+   dataset. Do not copy a live `.db` file alone or omit its WAL. A filesystem
+   consistency check is not proof of logical application consistency.
+3. Preserve the current data and a safety snapshot. Prefer restoring/cloning
+   the selected recovery point to a separate dataset first. With writers still
+   stopped, verify ownership/modes and use the existing revision-checked V2
+   editor to point the **same** resource/service at the restored data. Keep the
+   credential attachment intact; do not restore obsolete tokens over a revoked
+   credential.
+4. Start the app with a schema-compatible image and run its integrity and
+   application-level checks. Compare identity, task/workspace records and the
+   mounted credential source. If migration or startup fails, keep both datasets,
+   inspect the unit journal, and return the resource to the retained dataset
+   with its compatible image. An image rollback does not undo a database migration.
+5. Remove/archive only the V2 definition when retaining data. Inspect retained
+   datasets and independent backups separately; do not repurpose another
+   application's data or destroy it as part of definition cleanup.
+
+`nas-state` migrates control configuration, not these application databases.
+Use Restic, ZFS replication or application-native recovery for bulk state; a
+same-pool snapshot is not independent disaster recovery. GUI display sockets,
+viewer streams, input state and temporary session tokens are recreated, not
+restored as durable application identity. Creator-scoped delegated lifecycle
+and cross-creator data restrictions are not implemented by this pattern.
+
 ## Migrating pre-tag Restic snapshots
 
 The managed `nas-boot-system` profile selects its Restic parent by `host,tags` and applies retention only to snapshots carrying the `nas-boot-system` tag. Snapshots written before that tag existed are untagged, so `forget` skips them and `prune` cannot reclaim their data. Account for them before deploying the tag-filtered profile; a fresh installation has nothing to migrate.

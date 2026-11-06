@@ -1289,6 +1289,38 @@ NAS_PREFLIGHT_VERIFY_MANIFEST=0 nas-preflight
 pass "all custom command surfaces and in-VM repository preflight succeeded"
 
 log "Unknown OCI service lifecycle"
+oci_dataset=tank/nas/vm-oci-state
+oci_restore_dataset=tank/nas/vm-oci-restored
+oci_state=/tank/vm-oci-state
+oci_container=systemd-nas-v2-vm-oci-probe
+oci_credential=/run/nas-secrets/vm-oci-probe/token
+if zfs list "$oci_dataset" >/dev/null 2>&1 || zfs list "$oci_restore_dataset" >/dev/null 2>&1 ||
+  [[ -e "$oci_state" || -e /tank/vm-oci-restored || -e /run/nas-secrets/vm-oci-probe ]]; then
+  fail "OCI durability fixture paths already exist; preserve and inspect the previous run"
+fi
+zfs create -o mountpoint="$oci_state" "$oci_dataset"
+install -d -m 0700 /run/nas-secrets/vm-oci-probe
+printf '%s\n' 'vm-oci-test-only-credential' >"$oci_credential"
+chmod 0600 "$oci_credential"
+
+oci_sql() {
+  podman exec "$oci_container" /bin/sqlite3 -batch -bail /state/app.db "$@"
+}
+
+assert_oci_durable_state() {
+  local expected_tasks=$1
+  [[ "$(oci_sql 'PRAGMA integrity_check;')" == ok ]] || fail "OCI database integrity check failed"
+  [[ "$(oci_sql 'SELECT id FROM identity;')" == vm-oci-probe ]] || fail "OCI application identity changed"
+  [[ "$(oci_sql 'SELECT group_concat(task, char(44)) FROM (SELECT task FROM tasks ORDER BY task);')" == "$expected_tasks" ]] ||
+    fail "OCI durable task records changed"
+  [[ "$(stat -c '%u:%g:%a' "$oci_state/app.db")" == "$oci_db_metadata" ]] || fail "OCI database ownership or mode changed"
+  podman inspect "$oci_container" | jq -e --arg source "$oci_credential" '
+    .[0].Mounts | any(.Source == $source and .Destination == "/run/secrets/token" and .RW == false)
+  ' >/dev/null || fail "OCI credential was not mounted read-only from its declared source"
+  podman exec "$oci_container" cat /run/secrets/token | cmp --silent "$oci_credential" - ||
+    fail "OCI credential binding changed"
+}
+
 podman load --input /etc/nas-test/oci-vm-probe-v1.tar >/tmp/nas-v2-oci-load-v1.log
 podman load --input /etc/nas-test/oci-vm-probe-v2.tar >/tmp/nas-v2-oci-load-v2.log
 podman image exists localhost/nas-v2-vm-probe:v1
@@ -1296,6 +1328,13 @@ podman image exists localhost/nas-v2-vm-probe:v2
 nas-managed-services-control document >/tmp/nas-v2-oci-original.json
 oci_revision="$(jq -er .revision /tmp/nas-v2-oci-original.json)"
 jq '.document
+  | .storageResources["vm-oci-state"] = {
+      "path": "/tank/vm-oci-state",
+      "dataset": "tank/nas/vm-oci-state",
+      "stateClass": "authoritative",
+      "backup": {"enabled": true, "consistency": "zfs-snapshot"}
+    }
+  | .credentials["vm-oci-token"] = {"path": "/run/nas-secrets/vm-oci-probe/token", "required": true}
   | .services["vm-oci-probe"] = {
       "name": "VM OCI lifecycle probe",
       "enabled": true,
@@ -1309,6 +1348,8 @@ jq '.document
         "capabilities": [{"id": "access", "title": "Access VM OCI lifecycle probe"}]
       },
       "network": {"mode": "isolated"},
+      "storage": [{"resource": "vm-oci-state", "mountPath": "/state", "access": "write"}],
+      "credentials": [{"credential": "vm-oci-token", "use": "file", "mountPath": "/run/secrets/token"}],
       "listeners": {
         "http": {
           "protocol": "tcp",
@@ -1346,6 +1387,35 @@ wait_oneshot_completed nas-managed-services-authentik-reconcile.service
 grep -F 'application.vm-oci-probe.access' /var/lib/authentik/blueprints/nas-managed-services-v2.yaml >/dev/null
 pass "unknown OCI service created with native Quadlet, route, and authorization projections"
 
+podman exec -i "$oci_container" /bin/sh -c 'umask 077; exec /bin/sqlite3 -batch -bail /state/app.db' \
+  >/tmp/nas-v2-oci-database-init.log <<'OCI_DATABASE'
+PRAGMA journal_mode=WAL;
+CREATE TABLE identity(id TEXT PRIMARY KEY);
+INSERT INTO identity VALUES ('vm-oci-probe');
+CREATE TABLE tasks(task TEXT PRIMARY KEY);
+INSERT INTO tasks VALUES ('task-1');
+OCI_DATABASE
+oci_db_metadata="$(stat -c '%u:%g:%a' "$oci_state/app.db")"
+[[ "$oci_db_metadata" == 0:0:600 ]] || fail "OCI rootful fixture database has unexpected ownership or mode"
+assert_oci_durable_state "task-1"
+oci_first_container="$(podman inspect --format '{{.Id}}' "$oci_container")"
+systemctl restart nas-v2-vm-oci-probe.service
+wait_active nas-v2-vm-oci-probe.service
+[[ "$(podman inspect --format '{{.Id}}' "$oci_container")" != "$oci_first_container" ]] ||
+  fail "OCI restart did not exercise container recreation"
+assert_oci_durable_state "task-1"
+pass "OCI container recreation retained identity, SQLite state, ownership, and credential binding"
+
+# All database connections below are finite execs; stop the app as well before
+# capturing its dedicated dataset. Never copy a live SQLite/WAL tree as backup.
+systemctl stop nas-v2-vm-oci-probe.service
+! podman container exists "$oci_container" || fail "OCI writer container survived stop before snapshot"
+zfs snapshot "$oci_dataset@consistent"
+systemctl start nas-v2-vm-oci-probe.service
+wait_active nas-v2-vm-oci-probe.service
+oci_sql "INSERT INTO tasks VALUES ('task-2');"
+assert_oci_durable_state "task-1,task-2"
+
 oci_revision="$(nas-managed-services-control document | jq -er .revision)"
 jq '.services["vm-oci-probe"].runtime.image = "localhost/nas-v2-vm-probe:v2"' \
   /tmp/nas-v2-oci-create.json >/tmp/nas-v2-oci-update.json
@@ -1356,6 +1426,7 @@ wait_http http://127.0.0.1:18088
 [[ "$(curl --fail --silent --show-error http://127.0.0.1:18088)" == "nas-v2-oci-v2" ]] ||
   fail "updated OCI service did not serve the v2 image"
 pass "unknown OCI service update restarted the native runtime"
+assert_oci_durable_state "task-1,task-2"
 
 oci_revision="$(nas-managed-services-control document | jq -er .revision)"
 jq '.services["vm-oci-probe"].runtime.image = "localhost/nas-v2-vm-probe:missing"' \
@@ -1373,6 +1444,28 @@ wait_http http://127.0.0.1:18088
 [[ "$(curl --fail --silent --show-error http://127.0.0.1:18088)" == "nas-v2-oci-v2" ]] ||
   fail "failed OCI update did not restore the applied v2 runtime"
 pass "failed OCI update restored desired and live applied state"
+assert_oci_durable_state "task-1,task-2"
+
+systemctl stop nas-v2-vm-oci-probe.service
+! podman container exists "$oci_container" || fail "OCI writer container survived stop before restore"
+zfs snapshot "$oci_dataset@before-restore"
+zfs clone -o mountpoint=/tank/vm-oci-restored "$oci_dataset@consistent" "$oci_restore_dataset"
+oci_revision="$(nas-managed-services-control document | jq -er .revision)"
+jq '.storageResources["vm-oci-state"].path = "/tank/vm-oci-restored"
+  | .storageResources["vm-oci-state"].dataset = "tank/nas/vm-oci-restored"' \
+  /tmp/nas-v2-oci-update.json >/tmp/nas-v2-oci-restored.json
+nas-managed-services-control replace-json-document - "$oci_revision" \
+  </tmp/nas-v2-oci-restored.json >/tmp/nas-v2-oci-restored-result.json
+oci_state=/tank/vm-oci-restored
+wait_active nas-v2-vm-oci-probe.service
+assert_oci_durable_state "task-1"
+nas-managed-services-control document | jq -e '
+  .document.services["vm-oci-probe"].credentials == [
+    {"credential": "vm-oci-token", "use": "file", "mountPath": "/run/secrets/token"}
+  ]
+' >/dev/null || fail "OCI restore changed the desired credential reference"
+oci_retained_digest="$(sha256sum "$oci_state/app.db")"
+pass "OCI quiesced snapshot restored usable SQLite state without replacing identity or credentials"
 
 oci_revision="$(nas-managed-services-control document | jq -er .revision)"
 jq .document /tmp/nas-v2-oci-original.json >/tmp/nas-v2-oci-remove.json
@@ -1401,6 +1494,15 @@ jq -e '[.results[] | select(.name == "application.vm-oci-probe.access")] | lengt
   /tmp/nas-v2-oci-authentik-groups.json >/dev/null ||
   fail "removed OCI authorization capability remains installed in Authentik"
 pass "unknown OCI service removal cleaned native runtime, route, and authorization projections"
+[[ "$(sha256sum "$oci_state/app.db")" == "$oci_retained_digest" ]] || fail "OCI removal changed authoritative data"
+[[ -f /tank/vm-oci-state/app.db && -f "$oci_credential" ]] || fail "OCI removal deleted retained state or credential source"
+pass "OCI definition removal retained authoritative data and credential source"
+zfs destroy "$oci_restore_dataset"
+zfs destroy "$oci_dataset@before-restore"
+zfs destroy "$oci_dataset@consistent"
+zfs destroy "$oci_dataset"
+rm -- "$oci_credential"
+rmdir /run/nas-secrets/vm-oci-probe
 
 log "Observability and notifications"
 nas-managed-services-control set grafana always | jq -e '.ok == true' >/dev/null
