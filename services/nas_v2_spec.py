@@ -553,7 +553,10 @@ def _validate_route_publications(document: dict[str, Any], listener_owners: dict
                     owners.setdefault(listener["targetPort"], set()).add((service_id, f"{service_id}:{listener_id}"))
         for route_id, route in service["routes"].items():
             target = route["target"]
-            if target["type"] not in {"http", "https"} or target["host"] not in {"127.0.0.1", "localhost", "::1"}:
+            if target["type"] not in {"http", "https"}:
+                continue
+            host = target["host"].lower() if mode == "host" else target["host"]
+            if host not in {"127.0.0.1", "localhost", "::1"}:
                 continue
             if mode == "isolated":
                 isolated.append((service_id, route_id, target["port"]))

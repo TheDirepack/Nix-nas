@@ -104,6 +104,31 @@ class RoutePublicationTests(unittest.TestCase):
         native["runtime"] = {"type": "systemd", "unit": "native.service"}
         self.assert_conflict({"native": native, "beta": isolated_app("beta", 8080)}, "native:web")
 
+    def test_native_localhost_case_variants_reserve_upstream_port(self):
+        for host in ("localhost", "LOCALHOST", "LocalHost"):
+            for target_type in ("http", "https"):
+                with self.subTest(host=host, target_type=target_type):
+                    native = isolated_app("native", 8080)
+                    native.pop("network")
+                    native["runtime"] = {"type": "systemd", "unit": "native.service"}
+                    native["routes"]["web"]["target"].update(host=host, type=target_type)
+                    self.assert_conflict({"native": native, "beta": isolated_app("beta", 8080)}, "native:web")
+
+    def test_native_remote_host_does_not_reserve_local_port_or_change_target(self):
+        native = isolated_app("native", 8080)
+        native.pop("network")
+        native["runtime"] = {"type": "systemd", "unit": "native.service"}
+        native["routes"]["web"]["target"]["host"] = "Backend.Example.test"
+        effective = self.compile(native=native, beta=isolated_app("beta", 8080))
+        self.assertEqual(effective["services"]["native"]["routes"]["web"]["target"]["host"], "Backend.Example.test")
+
+    def test_isolated_localhost_case_variant_keeps_projection_rejection(self):
+        alpha = isolated_app("alpha", 8080)
+        alpha["routes"]["web"]["target"]["host"] = "LOCALHOST"
+        effective = self.compile(alpha=alpha)
+        with self.assertRaisesRegex(quadlet.QuadletProjectionError, "loopback"):
+            quadlet.render_quadlet(effective, "alpha", effective["services"]["alpha"], unit_lines=[], service_lines=[])
+
     def test_native_listener_target_port_is_also_reserved(self):
         native = {
             "name": "Native",
