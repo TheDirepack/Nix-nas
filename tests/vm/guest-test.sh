@@ -1292,6 +1292,7 @@ log "Unknown OCI service lifecycle"
 oci_dataset=tank/nas/vm-oci-state
 oci_restore_dataset=tank/nas/vm-oci-restored
 oci_state=/tank/vm-oci-state
+oci_retained_db=/tank/vm-oci-state/app.db
 oci_container=systemd-nas-v2-vm-oci-probe
 oci_credential=/run/nas-secrets/vm-oci-probe/token
 if zfs list "$oci_dataset" >/dev/null 2>&1 || zfs list "$oci_restore_dataset" >/dev/null 2>&1 ||
@@ -1307,6 +1308,17 @@ oci_sql() {
   podman exec "$oci_container" /bin/sqlite3 -batch -bail /state/app.db "$@"
 }
 
+# Inspect a retained on-disk database without a running container or a writer.
+oci_host_sql() {
+  python3 - "$1" "$2" <<'OCI_HOST_SQL'
+import sqlite3, sys
+from contextlib import closing
+with closing(sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)) as connection:
+    for row in connection.execute(sys.argv[2]):
+        print("|".join("" if value is None else str(value) for value in row))
+OCI_HOST_SQL
+}
+
 assert_oci_durable_state() {
   local expected_tasks=$1
   [[ "$(oci_sql 'PRAGMA integrity_check;')" == ok ]] || fail "OCI database integrity check failed"
@@ -1319,6 +1331,17 @@ assert_oci_durable_state() {
   ' >/dev/null || fail "OCI credential was not mounted read-only from its declared source"
   podman exec "$oci_container" cat /run/secrets/token | cmp --silent "$oci_credential" - ||
     fail "OCI credential binding changed"
+}
+
+# Removal must leave the live dataset exactly as it was: the post-snapshot task
+# must survive, and the restore clone must never silently replace it.
+assert_oci_retained_state() {
+  [[ "$(oci_host_sql "$oci_retained_db" 'SELECT group_concat(task, char(44)) FROM (SELECT task FROM tasks ORDER BY task);')" == "task-1,task-2" ]] ||
+    fail "OCI removal changed or replaced the retained authoritative dataset"
+  [[ "$(stat -c '%u:%g:%a' "$oci_retained_db")" == "$oci_db_metadata" ]] ||
+    fail "OCI retained database ownership or mode changed"
+  [[ -f "$oci_credential" ]] || fail "OCI removal deleted the retained credential source"
+  [[ "$(stat -c '%a' "$oci_credential")" == 600 ]] || fail "OCI retained credential source has unsafe permissions"
 }
 
 podman load --input /etc/nas-test/oci-vm-probe-v1.tar >/tmp/nas-v2-oci-load-v1.log
@@ -1464,7 +1487,6 @@ nas-managed-services-control document | jq -e '
     {"credential": "vm-oci-token", "use": "file", "mountPath": "/run/secrets/token"}
   ]
 ' >/dev/null || fail "OCI restore changed the desired credential reference"
-oci_retained_digest="$(sha256sum "$oci_state/app.db")"
 pass "OCI quiesced snapshot restored usable SQLite state without replacing identity or credentials"
 
 oci_revision="$(nas-managed-services-control document | jq -er .revision)"
@@ -1494,8 +1516,7 @@ jq -e '[.results[] | select(.name == "application.vm-oci-probe.access")] | lengt
   /tmp/nas-v2-oci-authentik-groups.json >/dev/null ||
   fail "removed OCI authorization capability remains installed in Authentik"
 pass "unknown OCI service removal cleaned native runtime, route, and authorization projections"
-[[ "$(sha256sum "$oci_state/app.db")" == "$oci_retained_digest" ]] || fail "OCI removal changed authoritative data"
-[[ -f /tank/vm-oci-state/app.db && -f "$oci_credential" ]] || fail "OCI removal deleted retained state or credential source"
+assert_oci_retained_state
 pass "OCI definition removal retained authoritative data and credential source"
 zfs destroy "$oci_restore_dataset"
 zfs destroy "$oci_dataset@before-restore"

@@ -260,8 +260,13 @@ while retaining the current dataset and a safety snapshot, then activates the
 same V2 service/resource identity against the clone. Database integrity, logical
 records, numeric owner/mode and credential bytes must match. Definition removal
 must retain both datasets and the credential source; explicit fixture cleanup
-runs only after these assertions succeed. Failed runs retain their data for
-diagnosis and refuse reuse of occupied fixture paths.
+runs only after these assertions succeed. A failed guest run leaves its fixture
+data available for diagnosis; the guest refuses reuse of occupied fixture paths.
+Inspect or preserve that data before rerunning `persistent-test`: the wrapper
+restores both disks to the clean baseline before invoking the guest again, so
+the occupied-path check cannot preserve data across that reset. Disposable CI
+VMs also do not retain guest disks indefinitely; preserve the required evidence
+before their teardown.
 
 `tests/test_vm_oci_durability.py` exercises the guest's verifier against real local
 SQLite files, including corrupt/lost records, replaced identity/credential, and

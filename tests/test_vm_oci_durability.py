@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import os
+import gc
 import json
+import os
 import pathlib
 import re
 import sqlite3
@@ -9,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import warnings
+from contextlib import closing
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 GUEST = ROOT / "tests/vm/guest-test.sh"
@@ -31,8 +34,8 @@ class OciDurabilityProbeTests(unittest.TestCase):
         rendered = quadlet.render_quadlet(
             effective, "example", effective["services"]["example"], unit_lines=[], service_lines=[]
         ).decode()
-        self.assertIn('Volume="/tank/apps/example/state:/state:rw"', rendered)
-        self.assertIn('Tmpfs="/tmp:size=67108864"', rendered)
+        self.assertIn("Volume=/tank/apps/example/state:/state:rw", rendered)
+        self.assertIn("Tmpfs=/tmp:size=67108864", rendered)
 
     def test_installed_document_fixture_projects_persistent_state_and_readonly_credential(self):
         source = GUEST.read_text()
@@ -53,8 +56,8 @@ class OciDurabilityProbeTests(unittest.TestCase):
         rendered = quadlet.render_quadlet(
             effective, "vm-oci-probe", effective["services"]["vm-oci-probe"], unit_lines=[], service_lines=[]
         ).decode()
-        self.assertIn('Volume="/tank/vm-oci-state:/state:rw"', rendered)
-        self.assertIn('Volume="/run/nas-secrets/vm-oci-probe/token:/run/secrets/token:ro"', rendered)
+        self.assertIn("Volume=/tank/vm-oci-state:/state:rw", rendered)
+        self.assertIn("Volume=/run/nas-secrets/vm-oci-probe/token:/run/secrets/token:ro", rendered)
         self.assertIn("ReadOnly=true", rendered)
 
     def verifier(self) -> str:
@@ -66,6 +69,15 @@ class OciDurabilityProbeTests(unittest.TestCase):
 
     def test_installed_verifier_rejects_lost_state_identity_credential_or_metadata(self):
         verifier = self.verifier()
+        # The fixture must not defer connection cleanup to interpreter exit:
+        # unclosed SQLite handles keep test databases locked and mask fixture bugs.
+        with warnings.catch_warnings(record=True) as caught:
+            self.run_verifier_faults(verifier)
+            gc.collect()
+        leaks = [str(item.message) for item in caught if issubclass(item.category, ResourceWarning)]
+        self.assertEqual(leaks, [])
+
+    def run_verifier_faults(self, verifier):
         for fault in (
             None,
             "identity",
@@ -79,7 +91,7 @@ class OciDurabilityProbeTests(unittest.TestCase):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
                 root = pathlib.Path(directory)
                 database = root / "app.db"
-                with sqlite3.connect(database) as connection:
+                with closing(sqlite3.connect(database)) as connection, connection:
                     connection.executescript(
                         "CREATE TABLE identity(id TEXT); INSERT INTO identity VALUES('vm-oci-probe');"
                         "CREATE TABLE tasks(task TEXT); INSERT INTO tasks VALUES('task-1');"
@@ -132,7 +144,8 @@ podman() {
 oci_sql() {
   python3 - "$oci_state/app.db" "$1" <<'PYSQL'
 import sqlite3, sys
-with sqlite3.connect(sys.argv[1]) as connection:
+from contextlib import closing
+with closing(sqlite3.connect(sys.argv[1])) as connection:
     for row in connection.execute(sys.argv[2]):
         print('|'.join('' if value is None else str(value) for value in row))
 PYSQL
@@ -155,7 +168,10 @@ PYSQL
 
     def test_guest_quiesces_snapshot_restore_and_retains_data_after_removal(self):
         source = GUEST.read_text()
-        self.assertIn("contents = [ pkgs.busybox pkgs.sqlite ];", (ROOT / "tests/nixos/vm-common.nix").read_text())
+        self.assertTrue(
+            "contents = [ pkgs.busybox pkgs.sqlite ];" in (ROOT / "tests/nixos/vm-common.nix").read_text(),
+            "VM OCI probe image must include SQLite",
+        )
         for marker in (
             '"stateClass": "authoritative"',
             '"resource": "vm-oci-state", "mountPath": "/state", "access": "write"',
@@ -164,9 +180,11 @@ PYSQL
             'assert_oci_durable_state "task-1,task-2"',
             'zfs snapshot "$oci_dataset@consistent"',
             'zfs clone -o mountpoint=/tank/vm-oci-restored "$oci_dataset@consistent" "$oci_restore_dataset"',
-            'pass "OCI definition removal retained authoritative data and credential source"',
+            "oci_retained_db=/tank/vm-oci-state/app.db",
+            "assert_oci_retained_state",
+            'zfs destroy "$oci_restore_dataset"',
         ):
-            self.assertIn(marker, source)
+            self.assertTrue(marker in source, f"guest OCI lifecycle is missing {marker}")
         for operation in ('zfs snapshot "$oci_dataset@consistent"', "zfs clone -o mountpoint=/tank/vm-oci-restored"):
             before = source[: source.index(operation)]
             self.assertGreater(
@@ -175,6 +193,61 @@ PYSQL
             )
         removal = source.index('pass "unknown OCI service removal cleaned')
         self.assertGreater(source.index('pass "OCI definition removal retained'), removal)
+
+    def test_retained_state_check_rejects_destroyed_swapped_or_writable_data(self):
+        source = GUEST.read_text()
+        marker = "assert_oci_retained_state() {"
+        if marker not in source:
+            self.fail("installed OCI lifecycle has no retained-state verifier")
+        verifier = marker + source.split(marker, 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+        for fault in (None, "destroyed", "swapped", "mode", "writable", "missing-credential"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                root = pathlib.Path(directory)
+                database = root / "app.db"
+                if fault != "destroyed":
+                    with closing(sqlite3.connect(database)) as connection, connection:
+                        connection.executescript(
+                            "CREATE TABLE tasks(task TEXT);"
+                            "INSERT INTO tasks VALUES('task-1');"
+                            + ("" if fault == "swapped" else "INSERT INTO tasks VALUES('task-2');")
+                        )
+                    database.chmod(0o644 if fault == "mode" else 0o600)
+                credential = root / "token"
+                if fault != "missing-credential":
+                    credential.write_text("test-only-credential\n")
+                    credential.chmod(0o666 if fault == "writable" else 0o600)
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        """set -euo pipefail
+oci_retained_db=$1/app.db
+oci_credential=$1/token
+oci_db_metadata="$(id -u):$(id -g):600"
+fail() { echo "$*" >&2; exit 1; }
+oci_host_sql() {
+  python3 - "$1" "$2" <<'PYSQL'
+import sqlite3, sys
+from contextlib import closing
+with closing(sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)) as connection:
+    for row in connection.execute(sys.argv[2]):
+        print("|".join("" if value is None else str(value) for value in row))
+PYSQL
+}
+"""
+                        + verifier
+                        + "\nassert_oci_retained_state\n",
+                        "test",
+                        directory,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual(result.returncode == 0, fault is None, result.stdout + result.stderr)
+                if fault is not None:
+                    self.assertIn("OCI", result.stderr)
 
 
 if __name__ == "__main__":
