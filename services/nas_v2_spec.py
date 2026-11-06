@@ -535,6 +535,48 @@ def _listener_ports(exposure: dict[str, Any]) -> range:
     return range(exposure["start"], exposure["end"] + 1)
 
 
+def _validate_route_publications(document: dict[str, Any], listener_owners: dict[tuple[str, int], str]) -> None:
+    services = document["services"]
+    profiles = document["networkProfiles"]
+    owners: dict[int, set[tuple[str, str]]] = {}
+    for (protocol, port), owner in listener_owners.items():
+        if protocol == "tcp":
+            owners.setdefault(port, set()).add((owner.split(":", 1)[0], owner))
+
+    isolated: list[tuple[str, str, int]] = []
+    for service_id, service in services.items():
+        policy = profiles[service["networkProfile"]] if "networkProfile" in service else service.get("network", {})
+        mode = policy.get("mode", "host")
+        if mode == "host":
+            for listener_id, listener in service["listeners"].items():
+                if listener["protocol"] == "tcp" and "targetPort" in listener:
+                    owners.setdefault(listener["targetPort"], set()).add((service_id, f"{service_id}:{listener_id}"))
+        for route_id, route in service["routes"].items():
+            target = route["target"]
+            if target["type"] not in {"http", "https"}:
+                continue
+            host = target["host"].lower() if mode == "host" else target["host"]
+            if host not in {"127.0.0.1", "localhost", "::1"}:
+                continue
+            if mode == "isolated":
+                isolated.append((service_id, route_id, target["port"]))
+            elif mode == "host":
+                owners.setdefault(target["port"], set()).add((service_id, f"{service_id}:{route_id}"))
+
+    # Native routes may intentionally share an upstream. Only an isolated
+    # publication claims a host socket and must not take another service's port.
+    for service_id, route_id, port in sorted(isolated):
+        conflicts = sorted(owner for owner_service, owner in owners.get(port, set()) if owner_service != service_id)
+        if conflicts:
+            raise ManagedServicesV2Error(
+                f"Isolated route TCP/{port} conflicts with {conflicts[0]}; "
+                "choose a unique host port in route.target.port and the matching listener.exposure.port",
+                path=f"$.services.{service_id}.routes.{route_id}.target.port",
+                code="route-port-conflict",
+            )
+        owners.setdefault(port, set()).add((service_id, f"{service_id}:{route_id}"))
+
+
 def _routes_conflict(first: str, second: str) -> bool:
     """True when two path exposures can shadow one another in Caddy.
 
@@ -1115,6 +1157,7 @@ def semantic_validate(
                         code="dependency-condition",
                     )
 
+    _validate_route_publications(document, listener_owners)
     _validate_dependency_graph(services)
 
 

@@ -371,6 +371,13 @@ def _route_ports(service: dict[str, Any]) -> list[tuple[str, str]]:
         port = target.get("port")
         if not isinstance(port, int):
             raise FirewalldProjectionError(f"compiled route {route_id!r} is missing a TCP port")
+        # Netavark DNAT has already translated the host publication by the time
+        # traffic reaches the container zone. A route uses the host endpoint;
+        # this firewall policy must allow its matching listener's container port.
+        for listener in service.get("listeners", {}).values():
+            if listener.get("protocol") == "tcp" and listener.get("exposure", {}).get("port") == port:
+                port = listener.get("targetPort", port)
+                break
         ports.add((str(port), "tcp"))
     return sorted(ports)
 
