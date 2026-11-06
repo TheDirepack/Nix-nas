@@ -1150,8 +1150,9 @@ class SetupApiCapabilityTests(unittest.TestCase):
             with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
                 stale = api.issue_setup_capability("a" * 24)
                 api.record_active_setup_job("a" * 24)
-            with mock.patch.object(
-                api, "first_start_job_status", return_value={"status": "running", "jobId": "a" * 24}
+            with (
+                mock.patch.object(api, "first_start_job_status", return_value={"status": "running", "jobId": "a" * 24}),
+                mock.patch.object(api, "_first_start_worker_live", return_value=True),
             ):
                 status, body = self.exchange(socket_path, "POST", "/setup/api/first-start/resume", body={})
             self.assertIn(b"200", status)
@@ -1160,6 +1161,117 @@ class SetupApiCapabilityTests(unittest.TestCase):
             with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
                 self.assertIsNone(api.lookup_setup_capability(stale))
                 self.assertEqual(api.lookup_setup_capability(body["capability"]), "a" * 24)
+
+    def test_resume_checks_matching_systemd_state_before_reporting_running(self) -> None:
+        job_id = "a" * 24
+        unit = f"nas-first-start-{job_id}.service"
+        _, socket_path = self.live_server(self.temporary.name)
+        for load, active, expected in (
+            ("loaded", "active", "running"),
+            ("loaded", "activating", "running"),
+            ("loaded", "inactive", "failed"),
+            ("loaded", "failed", "failed"),
+            ("not-found", "inactive", "failed"),
+        ):
+            with self.subTest(load=load, active=active):
+                api.record_active_setup_job(job_id)
+                saved = {"schemaVersion": 1, "jobId": job_id, "status": "running", "error": "retained diagnostic"}
+                self.storage_host_query.reset_mock()
+                with (
+                    mock.patch.object(api, "first_start_job_status", return_value=saved),
+                    mock.patch.object(
+                        api,
+                        "run",
+                        return_value=mock.Mock(
+                            returncode=0, stdout=f"Id={unit}\nLoadState={load}\nActiveState={active}\n"
+                        ),
+                    ) as query,
+                ):
+                    status, body = self.exchange(socket_path, "POST", "/setup/api/first-start/resume", body={})
+                self.assertIn(b"200", status)
+                self.assertEqual(body["status"], expected)
+                self.assertEqual(body["error"], "retained diagnostic")
+                self.assertEqual(saved["status"], "running", "resume rewrote durable progress")
+                self.assertEqual(api.read_active_setup_job(), job_id)
+                query.assert_called_once_with(
+                    ["systemctl", "show", "--property=Id,LoadState,ActiveState", unit], check=False, timeout_seconds=10
+                )
+                if expected == "failed":
+                    self.assertEqual(body["previousStatus"], "running")
+                    self.assertIn("stopped", body["message"])
+                    self.storage_host_query.assert_called_once_with()
+
+    def test_resume_of_stale_pending_or_submitted_worker_exposes_retry(self) -> None:
+        _, socket_path = self.live_server(self.temporary.name)
+        for saved_status in ("pending", "submitted", "unknown"):
+            with self.subTest(saved_status=saved_status):
+                api.record_active_setup_job("a" * 24)
+                with (
+                    mock.patch.object(
+                        api, "first_start_job_status", return_value={"jobId": "a" * 24, "status": saved_status}
+                    ),
+                    mock.patch.object(api, "_first_start_worker_live", return_value=False),
+                ):
+                    status, body = self.exchange(socket_path, "POST", "/setup/api/first-start/resume", body={})
+                self.assertIn(b"200", status)
+                self.assertEqual(body["status"], "failed")
+                self.assertEqual(body["previousStatus"], saved_status)
+
+    def test_resume_query_failure_or_detached_storage_preserves_tracking_and_capability(self) -> None:
+        _, socket_path = self.live_server(self.temporary.name)
+        for worker_error, storage_active, storage_error, expected_status in (
+            (True, False, False, b"503"),
+            (False, True, False, b"409"),
+            (False, False, True, b"503"),
+        ):
+            with self.subTest(worker_error=worker_error, storage_error=storage_error):
+                api.record_active_setup_job("a" * 24)
+                with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+                    token = api.issue_setup_capability("a" * 24)
+                capability_path = api._capability_record_path(token)
+                before = capability_path.read_bytes()
+                with (
+                    mock.patch.object(
+                        api, "first_start_job_status", return_value={"jobId": "a" * 24, "status": "running"}
+                    ),
+                    mock.patch.object(
+                        api,
+                        "_first_start_worker_live",
+                        side_effect=api.SetupApiError("worker state unavailable", status=503) if worker_error else None,
+                        return_value=False,
+                    ),
+                    mock.patch.object(
+                        api,
+                        "_storage_host_units_active",
+                        return_value=storage_active,
+                        side_effect=api.SetupApiError("storage state unavailable", status=503)
+                        if storage_error
+                        else None,
+                    ),
+                ):
+                    status, body = self.exchange(socket_path, "POST", "/setup/api/first-start/resume", body={})
+                self.assertIn(expected_status, status)
+                self.assertIn("error", body)
+                self.assertNotIn("capability", body)
+                self.assertEqual(api.read_active_setup_job(), "a" * 24)
+                self.assertEqual(capability_path.read_bytes(), before)
+
+    def test_resume_terminal_status_does_not_require_a_worker(self) -> None:
+        _, socket_path = self.live_server(self.temporary.name)
+        for saved_status in ("failed", "complete", "complete-unverified"):
+            with self.subTest(saved_status=saved_status):
+                api.record_active_setup_job("a" * 24)
+                with (
+                    mock.patch.object(
+                        api, "first_start_job_status", return_value={"jobId": "a" * 24, "status": saved_status}
+                    ),
+                    mock.patch.object(
+                        api, "_first_start_worker_live", side_effect=AssertionError("queried terminal worker")
+                    ),
+                ):
+                    status, body = self.exchange(socket_path, "POST", "/setup/api/first-start/resume", body={})
+                self.assertIn(b"200", status)
+                self.assertEqual(body["status"], saved_status)
 
     def test_reboot_revokes_capabilities_and_clears_active_job(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
