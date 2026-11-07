@@ -1345,6 +1345,7 @@ assert_oci_isolation_profile() {
         pidMode: ($c.HostConfig.PidMode // ""),
         capAdd: ($c.HostConfig.CapAdd // []),
         networkMode: ($c.HostConfig.NetworkMode // ""),
+        networks: (($c.NetworkSettings.Networks // {}) | keys),
         binds: ([$c.Mounts[] | select(.Type == "bind")
                  | {source: .Source, destination: .Destination, readonly: (.RW | not)}]
                 | sort_by(.destination)),
@@ -1357,7 +1358,7 @@ assert_oci_isolation_profile() {
         ($p.securityOpt | any(.[]; test("^no-new-privileges"))) and
         ((["", "private"] | index($p.pidMode)) != null) and
         ($p.capAdd == []) and
-        ($p.networkMode == "nas-v2-vm-oci-probe") and
+        ($p.networks == ["nas-v2-vm-oci-probe"]) and
         ($p.binds | any(. == {source: $state, destination: "/state", readonly: false})) and
         ($p.binds | any(. == {source: $credential, destination: "/run/secrets/token", readonly: true})) and
         ([$p.binds[]

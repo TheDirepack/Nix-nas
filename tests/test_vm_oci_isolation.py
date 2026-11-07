@@ -18,7 +18,9 @@ def isolation_function() -> str:
     return marker + source.split(marker, 1)[1].split("\n}\n", 1)[0] + "\n}\n"
 
 
-def inspect_fixture(*, privileged=False, readonly=True, security=("no-new-privileges",), mounts=None, pid=4242):
+def inspect_fixture(
+    *, privileged=False, readonly=True, security=("no-new-privileges",), mounts=None, pid=4242, networks=None
+):
     return [
         {
             "HostConfig": {
@@ -27,7 +29,10 @@ def inspect_fixture(*, privileged=False, readonly=True, security=("no-new-privil
                 "SecurityOpt": list(security),
                 "PidMode": "",
                 "CapAdd": [],
-                "NetworkMode": "nas-v2-vm-oci-probe",
+                "NetworkMode": "bridge",
+            },
+            "NetworkSettings": {
+                "Networks": {"nas-v2-vm-oci-probe": {}} if networks is None else networks,
             },
             "Mounts": mounts
             if mounts is not None
@@ -111,6 +116,9 @@ pass() {{ printf 'PASS: %s\\n' "$*"; }}
             ),
             "host-pid": inspect_fixture(pid=1),
             "capability-add": capability_add,
+            "extra-network": inspect_fixture(networks={"nas-v2-vm-oci-probe": {}, "host": {}}),
+            "host-network-only": inspect_fixture(networks={"host": {}}),
+            "no-network": inspect_fixture(networks={}),
         }
         for label, inspect in cases.items():
             with self.subTest(label=label):
