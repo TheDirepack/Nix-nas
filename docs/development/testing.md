@@ -277,7 +277,19 @@ before their teardown.
 SQLite files, including corrupt/lost records, replaced identity/credential, and
 changed mode. That verifies the assertions, **not** installed Podman/ZFS behavior.
 Only a successful exact-head unencrypted QEMU/installer run qualifies the drill.
-It is a rootful system-Quadlet fixture, not #141 rootless/security evidence.
+
+The same installed drill records the effective isolation of the V2 OCI app: the
+inspection config must stay non-privileged, read-only-rooted, free of added
+capabilities and host PID sharing, attached only to its declared isolated network
+and exactly the two declared bind mounts (writable state, read-only credential),
+with no Podman socket. Inside the container, the guest checks UID, `NoNewPrivs`,
+active seccomp, effective/bounding capability equality, absence of a full
+capability mask, read-only `/etc`, and writable state plus tmpfs. This fixture is
+a system-level Quadlet, so it runs rootful with container UID 0; the assertions
+pin that baseline and record it as a limitation. They are not user-namespace or
+rootless isolation evidence, and do not qualify #141 by themselves.
+`tests/test_vm_oci_isolation.py` mutates each inspected field and container probe
+locally to prove the assertions reject drift without needing Podman.
 Concurrent-writer crash recovery, missing/locked credentials, database migration
 compatibility, reboot recovery and #139 creator-isolated archive/restore remain
 separate qualification obligations. No timeout or retry budget is raised.
