@@ -260,8 +260,13 @@ while retaining the current dataset and a safety snapshot, then activates the
 same V2 service/resource identity against the clone. Database integrity, logical
 records, numeric owner/mode and credential bytes must match. Definition removal
 must retain both datasets and the credential source; explicit fixture cleanup
-runs only after these assertions succeed. A failed guest run leaves its fixture
-data available for diagnosis; the guest refuses reuse of occupied fixture paths.
+runs only after these assertions succeed. Cleanup creates an extra snapshot on
+each fixture and destroys the clone before the original with `zfs destroy -r`,
+so scheduled Sanoid snapshots cannot make cleanup depend on wall-clock timing.
+It never uses `-R` to destroy dependent clones outside the fixture, and a cleanup
+failure stops before deleting the credential source. A failed guest run leaves
+its remaining fixture data available for diagnosis; the guest refuses reuse of
+occupied fixture paths.
 Inspect or preserve that data before rerunning `persistent-test`: the wrapper
 restores both disks to the clean baseline before invoking the guest again, so
 the occupied-path check cannot preserve data across that reset. Disposable CI

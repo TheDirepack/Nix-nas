@@ -185,7 +185,7 @@ PYSQL
             'zfs clone -o mountpoint=/tank/vm-oci-restored "$oci_dataset@consistent" "$oci_restore_dataset"',
             "oci_retained_db=/tank/vm-oci-state/app.db",
             "assert_oci_retained_state",
-            'zfs destroy "$oci_restore_dataset"',
+            'zfs destroy -r "$oci_restore_dataset"',
         ):
             self.assertTrue(marker in source, f"guest OCI lifecycle is missing {marker}")
         for operation in ('zfs snapshot "$oci_dataset@consistent"', "zfs clone -o mountpoint=/tank/vm-oci-restored"):
@@ -196,6 +196,83 @@ PYSQL
             )
         removal = source.index('pass "unknown OCI service removal cleaned')
         self.assertGreater(source.index('pass "OCI definition removal retained'), removal)
+
+    def test_cleanup_handles_extra_snapshots_and_preserves_failures(self):
+        source = GUEST.read_text()
+        cleanup = source.split(
+            'pass "unknown OCI service removal cleaned native runtime, route, and authorization projections"\n', 1
+        )[1]
+        cleanup = cleanup.split('\nlog "Observability and notifications"', 1)[0]
+        for failure in ("none", "retention", "restore", "state"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = pathlib.Path(directory)
+                (root / "credential").mkdir()
+                (root / "credential/token").write_text("test-only-credential\n")
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        """set -euo pipefail
+root=$1
+failure=$2
+oci_dataset=tank/nas/vm-oci-state
+oci_restore_dataset=tank/nas/vm-oci-restored
+oci_credential=$root/credential/token
+assert_oci_retained_state() { [[ $failure != retention ]] || return 75; }
+pass() { :; }
+zfs() {
+  printf '%s\n' "$*" >>"$root/commands"
+  if [[ $1 == snapshot ]]; then
+    [[ $# == 3 && $2 == "$oci_restore_dataset@cleanup-probe" && $3 == "$oci_dataset@cleanup-probe" ]]
+    return
+  fi
+  [[ $1 == destroy ]] || return 90
+  local target=${!#}
+  case "$target" in
+    "$oci_restore_dataset")
+      [[ $failure != restore ]] || return 73
+      ;;
+    "$oci_dataset")
+      [[ $failure != state ]] || return 74
+      ;;
+    "$oci_dataset@before-restore"|"$oci_dataset@consistent") return 0 ;;
+    *) return 91 ;;
+  esac
+  # Both datasets have extra snapshots, as when Sanoid fires during the drill.
+  [[ $# == 3 && $2 == -r ]] || { echo 'cannot destroy: filesystem has snapshots' >&2; return 1; }
+}
+rmdir() {
+  [[ $# == 1 && $1 == /run/nas-secrets/vm-oci-probe ]] || return 92
+  command rmdir "$root/credential"
+}
+"""
+                        + cleanup,
+                        "test",
+                        directory,
+                        failure,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual(
+                    result.returncode, {"none": 0, "retention": 75, "restore": 73, "state": 74}[failure], result.stderr
+                )
+                commands = root / "commands"
+                observed = commands.read_text().splitlines() if commands.exists() else []
+                expected = (
+                    []
+                    if failure == "retention"
+                    else [
+                        "snapshot tank/nas/vm-oci-restored@cleanup-probe tank/nas/vm-oci-state@cleanup-probe",
+                        "destroy -r tank/nas/vm-oci-restored",
+                    ]
+                )
+                if failure in ("none", "state"):
+                    expected.append("destroy -r tank/nas/vm-oci-state")
+                self.assertEqual(observed, expected)
+                self.assertEqual((root / "credential/token").exists(), failure != "none")
 
     def test_retained_state_check_rejects_destroyed_swapped_or_writable_data(self):
         source = GUEST.read_text()
