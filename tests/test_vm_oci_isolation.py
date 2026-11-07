@@ -65,7 +65,7 @@ def inspect_fixture(
 
 
 class OciIsolationProfileTests(unittest.TestCase):
-    def run_profile(self, *, inspect=None, rootless="false", probes="0 2"):
+    def run_profile(self, *, inspect=None, rootless="false", probes="ok 0 2"):
         function = isolation_function()
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
@@ -129,9 +129,10 @@ pass() {{ printf 'PASS: %s\\n' "$*"; }}
     def test_profile_rejects_unexpected_rootless_or_container_state(self):
         for label, kwargs in {
             "rootless": {"rootless": "true"},
-            "nonroot-uid": {"probes": "1000 2"},
-            "seccomp-disabled": {"probes": "0 0"},
-            "malformed-probes": {"probes": "0"},
+            "nonroot-uid": {"probes": "ok 1000 2"},
+            "seccomp-disabled": {"probes": "ok 0 0"},
+            "malformed-probes": {"probes": "ok 0"},
+            "failed-step": {"probes": "fail"},
         }.items():
             with self.subTest(label=label):
                 result = self.run_profile(**kwargs)

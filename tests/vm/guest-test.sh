@@ -1374,30 +1374,40 @@ assert_oci_isolation_profile() {
     fail "OCI isolation profile drifted from the qualified rootful baseline: $(jq -c 'del(.ok)' <<<"$profile")"
   [[ "$(oci_rootless)" == false ]] ||
     fail "OCI app is unexpectedly rootless; re-qualify the #141 isolation evidence before accepting it"
-  local probes oci_uid oci_seccomp
-  # The probe is expanded by the container's shell, not the guest's.
+  local probes
+  # The probe is expanded by the container's shell, not the guest's. Each step
+  # prints a marker first so a failed probe names the check it stopped on.
   # shellcheck disable=SC2016
-  probes="$(oci_probe '
+  if ! probes="$(oci_probe '
 set -eu
+printf "uid\n"
 [ "$(id -u)" = 0 ]
+printf "no-new-privileges\n"
 [ "$(awk "/^NoNewPrivs:/ {print \$2}" /proc/1/status)" = 1 ]
+printf "seccomp\n"
 seccomp="$(awk "/^Seccomp:/ {print \$2}" /proc/1/status)"
 [ "$seccomp" != 0 ]
+printf "capabilities\n"
 cap_eff="$(awk "/^CapEff:/ {print \$2}" /proc/1/status)"
 [ "$cap_eff" = "$(awk "/^CapPrm:/ {print \$2}" /proc/1/status)" ]
 [ "$cap_eff" != 000001ffffffffff ]
 [ "$cap_eff" != ffffffffffffffff ]
+printf "podman-socket\n"
 [ ! -e /run/podman/podman.sock ]
+printf "read-only-root\n"
 ! touch /etc/.nas-oci-write-probe 2>/dev/null
+printf "writable-state\n"
 touch /state/.nas-oci-write-probe
 rm -f /state/.nas-oci-write-probe
+printf "writable-tmpfs\n"
 touch /tmp/.nas-oci-write-probe
 rm -f /tmp/.nas-oci-write-probe
-printf "%s %s\n" "$(id -u)" "$seccomp"
-')" || fail "OCI container isolation probes failed"
-  read -r oci_uid oci_seccomp <<<"$probes"
-  [[ "$oci_uid $oci_seccomp" =~ ^0\ [1-9][0-9]*$ ]] ||
-    fail "OCI container identity or seccomp state is unexpected: $probes"
+printf "ok %s %s\n" "$(id -u)" "$seccomp"
+')"; then
+    fail "OCI container isolation probes failed at: ${probes##*$'\n'}"
+  fi
+  [[ "$probes" =~ ^ok\ 0\ [1-9][0-9]*$ ]] ||
+    fail "OCI container identity or seccomp state is unexpected: ${probes##*$'\n'}"
   pass "OCI app isolation recorded: rootful system Quadlet, container uid 0, seccomp active, no-new-privileges, read-only root, only declared bind mounts"
 }
 
