@@ -1335,25 +1335,42 @@ oci_probe() {
 # system-level Quadlet, so it is rootful with UID 0 in the container. The
 # assertions pin that qualified baseline; they are not a rootless claim.
 assert_oci_isolation_profile() {
-  oci_inspect | jq -e --arg state "$oci_state" --arg credential "$oci_credential" '
+  local profile
+  profile="$(oci_inspect | jq -c --arg state "$oci_state" --arg credential "$oci_credential" '
     .[0] as $c
-    | [
-        ($c.HostConfig.Privileged == false),
-        ($c.HostConfig.ReadonlyRootfs == true),
-        (($c.HostConfig.SecurityOpt // []) | any(.[]; test("^no-new-privileges"))),
-        ((["", "private"] | index($c.HostConfig.PidMode // "")) != null),
-        (($c.HostConfig.CapAdd // []) == []),
-        (($c.HostConfig.NetworkMode // "") == "nas-v2-vm-oci-probe"),
-        (([$c.Mounts[] | select(.Type == "bind")
-           | {source: .Source, destination: .Destination, readonly: (.RW | not)}]
-          | sort_by(.destination))
-         == ([{source: $state, destination: "/state", readonly: false},
-              {source: $credential, destination: "/run/secrets/token", readonly: true}]
-             | sort_by(.destination))),
-        (($c.State.Pid // 1) != 1)
-      ]
-    | all(.[]; . == true)
-  ' >/dev/null || fail "OCI isolation profile drifted from the qualified rootful baseline"
+    | {
+        privileged: $c.HostConfig.Privileged,
+        readonlyRootfs: $c.HostConfig.ReadonlyRootfs,
+        securityOpt: ($c.HostConfig.SecurityOpt // []),
+        pidMode: ($c.HostConfig.PidMode // ""),
+        capAdd: ($c.HostConfig.CapAdd // []),
+        networkMode: ($c.HostConfig.NetworkMode // ""),
+        binds: ([$c.Mounts[] | select(.Type == "bind")
+                 | {source: .Source, destination: .Destination, readonly: (.RW | not)}]
+                | sort_by(.destination)),
+        hostPid: ($c.State.Pid // 1)
+      }
+    | . as $p
+    | $p + {ok: (
+        ($p.privileged == false) and
+        ($p.readonlyRootfs == true) and
+        ($p.securityOpt | any(.[]; test("^no-new-privileges"))) and
+        ((["", "private"] | index($p.pidMode)) != null) and
+        ($p.capAdd == []) and
+        ($p.networkMode == "nas-v2-vm-oci-probe") and
+        ($p.binds | any(. == {source: $state, destination: "/state", readonly: false})) and
+        ($p.binds | any(. == {source: $credential, destination: "/run/secrets/token", readonly: true})) and
+        ([$p.binds[]
+          | select((.destination as $d
+                    | ["/etc/hosts", "/etc/hostname", "/etc/resolv.conf",
+                       "/run/.containerenv", "/.containerenv"]
+                    | index($d)) == null)]
+         | length == 2) and
+        ($p.hostPid != 1)
+      )}
+  ')" || fail "OCI inspection failed"
+  [[ "$(jq -r '.ok' <<<"$profile")" == true ]] ||
+    fail "OCI isolation profile drifted from the qualified rootful baseline: $(jq -c 'del(.ok)' <<<"$profile")"
   [[ "$(oci_rootless)" == false ]] ||
     fail "OCI app is unexpectedly rootless; re-qualify the #141 isolation evidence before accepting it"
   local probes oci_uid oci_seccomp
