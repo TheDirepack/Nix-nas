@@ -1406,8 +1406,10 @@ printf "ok %s %s\n" "$(id -u)" "$seccomp"
 ')"; then
     fail "OCI container isolation probes failed at: ${probes##*$'\n'}"
   fi
+  probes="${probes%$'\n'}"
+  probes="${probes##*$'\n'}"
   [[ "$probes" =~ ^ok\ 0\ [1-9][0-9]*$ ]] ||
-    fail "OCI container identity or seccomp state is unexpected: ${probes##*$'\n'}"
+    fail "OCI container identity or seccomp state is unexpected: $probes"
   pass "OCI app isolation recorded: rootful system Quadlet, container uid 0, seccomp active, no-new-privileges, read-only root, only declared bind mounts"
 }
 

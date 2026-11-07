@@ -65,7 +65,7 @@ def inspect_fixture(
 
 
 class OciIsolationProfileTests(unittest.TestCase):
-    def run_profile(self, *, inspect=None, rootless="false", probes="ok 0 2"):
+    def run_profile(self, *, inspect=None, rootless="false", probes="uid\nseccomp\nok 0 2"):
         function = isolation_function()
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
