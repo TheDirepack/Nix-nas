@@ -135,6 +135,58 @@ class SharedQemuInstallStateTests(unittest.TestCase):
         self.assertIn("cannot clean VM cache while another shared QEMU operation is active", source)
         self.assertIn("persistent reset cannot run while a shared QEMU operation is active", source)
 
+    def test_cleanup_trap_never_fails_closed_on_an_out_of_scope_flag(self):
+        function = RUNNER.read_text(encoding="utf-8")
+        begin = function.index("  cleanup_vm() {")
+        end = function.index("\n  }\n", begin) + len("\n  }\n")
+        # A local would disappear before a deferred trap runs.
+        self.assertIn("\n  vm_started_by_this_run=false\n", function)
+        self.assertNotIn("local vm_started_by_this_run", function)
+        # The EXIT trap can run after run_installer returned, where its local
+        # flag no longer exists. Cleanup must default to "did not start a VM"
+        # instead of aborting under nounset and leaking the VM.
+        for value, expected in (("unset", ""), ("true", "stop:qemu.pid"), ("false", "")):
+            with self.subTest(value=value):
+                script = (
+                    "set -euo pipefail; STATE_DIR=/tmp/virt; "
+                    'nas_qemu_cleanup_pidfile() { printf "stop:%s\\n" "${1##*/}"; }; '
+                    'die() { printf "die: %s\\n" "$*" >&2; exit 1; }; '
+                    + function[begin:end]
+                    + ("\ncleanup_vm\n" if value == "unset" else f"\nvm_started_by_this_run={value}\ncleanup_vm\n")
+                )
+                result = subprocess.run(
+                    ["bash", "-c", script],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=8,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected, result.stderr)
+                self.assertNotIn("unbound variable", result.stderr)
+
+    def test_deferred_trap_after_installer_return_still_stops_its_own_vm(self):
+        function = RUNNER.read_text(encoding="utf-8")
+        begin = function.index("  cleanup_vm() {")
+        end = function.index("\n  }\n", begin) + len("\n  }\n")
+        script = (
+            "set -euo pipefail; STATE_DIR=/tmp/virt; "
+            'nas_qemu_cleanup_pidfile() { printf "stop:%s\\n" "${1##*/}"; }; '
+            'die() { printf "die: %s\\n" "$*" >&2; exit 1; }; '
+            + function[begin:end]
+            + """
+installer() {
+  vm_started_by_this_run=false
+  trap cleanup_vm EXIT
+  vm_started_by_this_run=true
+}
+installer
+"""
+        )
+        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False, timeout=8)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "stop:qemu.pid", result.stderr)
+
     def test_guard_precedes_installer_cleanup_and_disk_replacement(self):
         source = RUNNER.read_text(encoding="utf-8")
         begin = source.index("run_installer() {")
@@ -143,7 +195,7 @@ class SharedQemuInstallStateTests(unittest.TestCase):
         disk_replace = source.index('rm -f "$os_disk" "$data_disk"', begin)
         self.assertLess(guard, cleanup)
         self.assertLess(guard, disk_replace)
-        self.assertIn('[[ "$vm_started_by_this_run" == true ]] || return 0', source)
+        self.assertIn('[[ "${vm_started_by_this_run:-false}" == true ]] || return 0', source)
         self.assertGreaterEqual(source[begin:].count("nas_qemu_guard_shared_installer_state"), 3)
 
 
