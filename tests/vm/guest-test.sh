@@ -1319,6 +1319,100 @@ with closing(sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)) as connec
 OCI_HOST_SQL
 }
 
+oci_inspect() {
+  podman inspect "$oci_container"
+}
+
+oci_rootless() {
+  podman info --format '{{.Host.Security.Rootless}}'
+}
+
+oci_probe() {
+  podman exec "$oci_container" /bin/sh -c "$1"
+}
+
+# Record the effective isolation of a V2 OCI app (#141). This fixture uses
+# system-level Quadlet, so it is rootful with UID 0 in the container. The
+# assertions pin that qualified baseline; they are not a rootless claim.
+assert_oci_isolation_profile() {
+  local profile
+  profile="$(oci_inspect | jq -c --arg state "$oci_state" --arg credential "$oci_credential" '
+    .[0] as $c
+    | {
+        privileged: $c.HostConfig.Privileged,
+        readonlyRootfs: $c.HostConfig.ReadonlyRootfs,
+        securityOpt: ($c.HostConfig.SecurityOpt // []),
+        pidMode: ($c.HostConfig.PidMode // ""),
+        capAdd: ($c.HostConfig.CapAdd // []),
+        networkMode: ($c.HostConfig.NetworkMode // ""),
+        networks: (($c.NetworkSettings.Networks // {}) | keys),
+        binds: ([$c.Mounts[] | select(.Type == "bind")
+                 | {source: .Source, destination: .Destination, readonly: (.RW | not)}]
+                | sort_by(.destination)),
+        hostPid: ($c.State.Pid // 1)
+      }
+    | . as $p
+    | $p + {ok: (
+        ($p.privileged == false) and
+        ($p.readonlyRootfs == true) and
+        ($p.securityOpt | any(.[]; test("^no-new-privileges"))) and
+        ((["", "private"] | index($p.pidMode)) != null) and
+        ($p.capAdd == []) and
+        ($p.networks == ["nas-v2-vm-oci-probe"]) and
+        ($p.binds | any(. == {source: $state, destination: "/state", readonly: false})) and
+        ($p.binds | any(. == {source: $credential, destination: "/run/secrets/token", readonly: true})) and
+        ([$p.binds[]
+          | select((.destination as $d
+                    | ["/etc/hosts", "/etc/hostname", "/etc/resolv.conf",
+                       "/run/.containerenv", "/.containerenv"]
+                    | index($d)) == null)]
+         | length == 2) and
+        ($p.hostPid != 1)
+      )}
+  ')" || fail "OCI inspection failed"
+  [[ "$(jq -r '.ok' <<<"$profile")" == true ]] ||
+    fail "OCI isolation profile drifted from the qualified rootful baseline: $(jq -c 'del(.ok)' <<<"$profile")"
+  [[ "$(oci_rootless)" == false ]] ||
+    fail "OCI app is unexpectedly rootless; re-qualify the #141 isolation evidence before accepting it"
+  local probes
+  # The probe is expanded by the container's shell, not the guest's. Each step
+  # prints a marker first so a failed probe names the check it stopped on.
+  # shellcheck disable=SC2016
+  if ! probes="$(oci_probe '
+set -eu
+printf "uid\n"
+[ "$(id -u)" = 0 ]
+printf "no-new-privileges\n"
+[ "$(awk "/^NoNewPrivs:/ {print \$2}" /proc/1/status)" = 1 ]
+printf "seccomp\n"
+seccomp="$(awk "/^Seccomp:/ {print \$2}" /proc/1/status)"
+[ "$seccomp" != 0 ]
+printf "capabilities\n"
+cap_eff="$(awk "/^CapEff:/ {print \$2}" /proc/1/status)"
+[ "$cap_eff" = "$(awk "/^CapPrm:/ {print \$2}" /proc/1/status)" ]
+[ "$cap_eff" != 000001ffffffffff ]
+[ "$cap_eff" != ffffffffffffffff ]
+printf "podman-socket\n"
+[ ! -e /run/podman/podman.sock ]
+printf "read-only-root\n"
+! touch /etc/.nas-oci-write-probe 2>/dev/null
+printf "writable-state\n"
+touch /state/.nas-oci-write-probe
+rm -f /state/.nas-oci-write-probe
+printf "writable-tmpfs\n"
+touch /tmp/.nas-oci-write-probe
+rm -f /tmp/.nas-oci-write-probe
+printf "ok %s %s\n" "$(id -u)" "$seccomp"
+')"; then
+    fail "OCI container isolation probes failed at: ${probes##*$'\n'}"
+  fi
+  probes="${probes%$'\n'}"
+  probes="${probes##*$'\n'}"
+  [[ "$probes" =~ ^ok\ 0\ [1-9][0-9]*$ ]] ||
+    fail "OCI container identity or seccomp state is unexpected: $probes"
+  pass "OCI app isolation recorded: rootful system Quadlet, container uid 0, seccomp active, no-new-privileges, read-only root, only declared bind mounts"
+}
+
 assert_oci_durable_state() {
   local expected_tasks=$1
   [[ "$(oci_sql 'PRAGMA integrity_check;')" == ok ]] || fail "OCI database integrity check failed"
@@ -1373,6 +1467,7 @@ jq '.document
       "network": {"mode": "isolated"},
       "storage": [{"resource": "vm-oci-state", "mountPath": "/state", "access": "write"}],
       "credentials": [{"credential": "vm-oci-token", "use": "file", "mountPath": "/run/secrets/token"}],
+      "sandbox": {"tmpfs": [{"path": "/tmp", "sizeBytes": 67108864}]},
       "listeners": {
         "http": {
           "protocol": "tcp",
@@ -1421,6 +1516,7 @@ OCI_DATABASE
 oci_db_metadata="$(stat -c '%u:%g:%a' "$oci_state/app.db")"
 [[ "$oci_db_metadata" == 0:0:600 ]] || fail "OCI rootful fixture database has unexpected ownership or mode"
 assert_oci_durable_state "task-1"
+assert_oci_isolation_profile
 oci_first_container="$(podman inspect --format '{{.Id}}' "$oci_container")"
 systemctl restart nas-v2-vm-oci-probe.service
 wait_active nas-v2-vm-oci-probe.service

@@ -61,6 +61,7 @@ class OciDurabilityProbeTests(unittest.TestCase):
         ).decode()
         self.assertIn("Volume=/tank/vm-oci-state:/state:rw", rendered)
         self.assertIn("Volume=/run/nas-secrets/vm-oci-probe/token:/run/secrets/token:ro", rendered)
+        self.assertIn("Tmpfs=/tmp:size=67108864", rendered)
         self.assertIn("ReadOnly=true", rendered)
 
     def verifier(self) -> str:
