@@ -61,6 +61,31 @@ def parse_first_start_request(text: str) -> dict[str, Any]:
     return request
 
 
+def validate_first_start_administrator(administrator: Any) -> dict[str, str]:
+    if not isinstance(administrator, dict) or set(administrator) != {"username", "name", "email", "password"}:
+        raise SetupError("First-start administrator details are invalid")
+    limits = {"username": 64, "name": 256, "email": 320, "password": 4096}
+    for field, limit in limits.items():
+        value = administrator[field]
+        if (
+            not isinstance(value, str)
+            or not value
+            or len(value) > limit
+            or any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
+        ):
+            raise SetupError(f"Administrator {field} must be a bounded nonempty single-line value")
+    username = administrator["username"]
+    if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", username):
+        raise SetupError("Administrator username is invalid")
+    if username == "akadmin":
+        raise SetupError("Administrator username is the reserved bootstrap identity")
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", administrator["email"]):
+        raise SetupError("Administrator email is invalid")
+    if len(administrator["password"]) < 12:
+        raise SetupError("Administrator password must contain at least 12 characters")
+    return dict(administrator)
+
+
 def parse_first_start_secrets(text: str) -> tuple[str, dict[str, Any]]:
     try:
         payload = json.loads(text)
@@ -71,8 +96,8 @@ def parse_first_start_secrets(text: str) -> tuple[str, dict[str, Any]]:
     password = payload["keepass"]
     if not isinstance(password, str):
         raise SetupError("First-start KeePass database password is invalid")
+    if "\n" in password or "\r" in password:
+        raise SetupError("KeePassXC database password must be a single line")
     password = normalize_secret_line(password, "KeePass database password")
-    administrator = payload["administrator"]
-    if not isinstance(administrator, dict) or set(administrator) != {"username", "name", "email", "password"}:
-        raise SetupError("First-start administrator secret payload is invalid")
+    administrator = validate_first_start_administrator(payload["administrator"])
     return password, administrator

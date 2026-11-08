@@ -31,6 +31,73 @@ def valid_request() -> dict:
 
 
 class FirstStartRequestContractTests(unittest.TestCase):
+    def test_cli_secret_input_uses_the_same_backend_contract(self):
+        import io
+        import sys
+        import nas_setup as setup
+
+        secret = {
+            "keepass": "database-password",
+            "administrator": {
+                "username": "nasadmin",
+                "name": "Admin",
+                "email": "admin@example.test",
+                "password": "administrator-password",
+            },
+        }
+        argv = [
+            "nas-setup",
+            "first-run",
+            "--config",
+            "/config.json",
+            "--confirm-plan-digest",
+            "a" * 64,
+            "--secret-payload-stdin",
+        ]
+        for payload, accepted in (
+            (json.dumps(secret), True),
+            (json.dumps({**secret, "administrator": {}}), False),
+            (json.dumps(secret) + "\nextra", False),
+            ("x" * 8193, False),
+        ):
+            with (
+                self.subTest(accepted=accepted),
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(sys, "stdin", io.StringIO(payload)),
+                mock.patch.object(sys, "stdout", io.StringIO()) as output,
+                mock.patch.object(sys, "stderr", io.StringIO()) as errors,
+                mock.patch.object(setup, "first_run", return_value={"ok": True}) as run,
+            ):
+                self.assertEqual(setup.main(), 0 if accepted else 1)
+                if accepted:
+                    self.assertEqual(run.call_args.args[0].administrator, secret["administrator"])
+                    self.assertEqual(run.call_args.args[0].keepass_password_value, secret["keepass"])
+                else:
+                    run.assert_not_called()
+                self.assertNotIn(secret["keepass"], output.getvalue() + errors.getvalue())
+                self.assertNotIn(secret["administrator"]["password"], output.getvalue() + errors.getvalue())
+
+    def test_secret_contract_enforces_administrator_policy_before_any_worker_effect(self):
+        good = {
+            "username": "nasadmin",
+            "name": "Administrator",
+            "email": "admin@example.test",
+            "password": "long-enough-password",
+        }
+        for field, value in (
+            ("username", "akadmin"),
+            ("username", "../root"),
+            ("email", "invalid"),
+            ("password", "short"),
+            ("password", "line\nbreak-password"),
+            ("name", ""),
+            ("name", "x\x00y"),
+        ):
+            with self.subTest(field=field), self.assertRaises(SetupError):
+                parse_first_start_secrets(
+                    json.dumps({"keepass": "database-password", "administrator": {**good, field: value}})
+                )
+
     def test_valid_request_keeps_exact_authorized_fields(self) -> None:
         payload = valid_request()
         self.assertEqual(parse_first_start_request(json.dumps(payload)), payload)
@@ -143,7 +210,12 @@ class FirstStartRequestContractTests(unittest.TestCase):
                 cancel.assert_called_once_with("b" * 32)
 
     def test_secrets_reject_shape_and_password_failures(self) -> None:
-        admin = {"username": "admin", "name": "Administrator", "email": "admin@example.test", "password": "secret"}
+        admin = {
+            "username": "admin",
+            "name": "Administrator",
+            "email": "admin@example.test",
+            "password": "long-enough-password",
+        }
         self.assertEqual(
             parse_first_start_secrets(json.dumps({"keepass": "valid-secret", "administrator": admin})),
             ("valid-secret", admin),

@@ -24,3 +24,11 @@ Do not add a setup daemon, a second mutable desired-state store, or another lock
 5. Remove obsolete setup compatibility paths rather than carrying migrations for behavior that is no longer supported.
 
 Each extraction should leave the public command surface smaller and should delete the old implementation in the same change once its replacement is wired.
+
+## Current first-start boundary
+
+Cockpit links to the canonical standalone wizard. The API and detached worker
+share administrator/secret validation in `nas_setup_first_start.py`; the
+`nas-setup first-run --secret-payload-stdin` integration uses it too. The GUI
+collects input and displays outcomes; all authorization, plan/device validation,
+locking and recovery remain in the installed commands.
