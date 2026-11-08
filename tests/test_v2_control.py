@@ -81,6 +81,36 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
             if role == "schedule":
                 self.assertFalse(result["running"], "an armed timer is not a running application")
 
+    def test_status_does_not_report_unavailable_or_transitional_units_as_idle(self):
+        for mode in ("always", "on-demand"):
+            for load, active, expected in (
+                ("not-found", "inactive", "Status unavailable"),
+                ("error", "inactive", "Status unavailable"),
+                ("bad-setting", "active", "Status unavailable"),
+                ("loaded", "activating", "Starting"),
+                ("loaded", "deactivating", "Stopping"),
+                ("loaded", "reloading", "Reloading"),
+                ("loaded", "maintenance", "Status unavailable"),
+            ):
+                with self.subTest(mode=mode, load=load, active=active):
+                    row = {
+                        "id": "demo",
+                        "effective": True,
+                        "effectiveMode": mode,
+                        "units": [{"unit": "demo.service", "role": "owner"}],
+                    }
+                    snapshot = {"demo.service": {"LoadState": load, "ActiveState": active}}
+                    with (
+                        mock.patch.object(control, "desired_status", return_value={"services": [row]}),
+                        mock.patch.object(control, "_unit_snapshot", return_value=snapshot),
+                    ):
+                        result = control.status()["services"][0]
+                    self.assertEqual(result["stateLabel"], expected)
+                    self.assertEqual(result["statusLevel"], "warning")
+                    self.assertIsNone(result["healthy"])
+                    self.assertEqual(result["units"][0]["loadState"], load)
+                    self.assertFalse(result["running"])
+
     def test_set_mode_reconciles_after_atomic_editor_update(self):
         with tempfile.TemporaryDirectory() as tmp:
             desired_path = pathlib.Path(tmp) / "services.yaml"
