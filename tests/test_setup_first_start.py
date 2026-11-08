@@ -57,6 +57,12 @@ class FirstStartRequestContractTests(unittest.TestCase):
         for payload, accepted in (
             (json.dumps(secret), True),
             (json.dumps({**secret, "administrator": {}}), False),
+            (
+                json.dumps(
+                    {**secret, "administrator": {**secret["administrator"], "password": "administrator:password"}}
+                ),
+                False,
+            ),
             (json.dumps(secret) + "\nextra", False),
             ("x" * 8193, False),
         ):
@@ -89,6 +95,7 @@ class FirstStartRequestContractTests(unittest.TestCase):
             ("username", "../root"),
             ("email", "invalid"),
             ("password", "short"),
+            ("password", "administrator:password"),
             ("password", "line\nbreak-password"),
             ("name", ""),
             ("name", "x\x00y"),

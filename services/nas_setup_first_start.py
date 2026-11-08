@@ -83,6 +83,8 @@ def validate_first_start_administrator(administrator: Any) -> dict[str, str]:
         raise SetupError("Administrator email is invalid")
     if len(administrator["password"]) < 12:
         raise SetupError("Administrator password must contain at least 12 characters")
+    if ":" in administrator["password"]:
+        raise SetupError("Administrator password must not contain a colon")
     return dict(administrator)
 
 
