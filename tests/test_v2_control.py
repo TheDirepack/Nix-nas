@@ -111,6 +111,29 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
                     self.assertEqual(result["units"][0]["loadState"], load)
                     self.assertFalse(result["running"])
 
+    def test_masked_units_distinguish_blocked_wake_from_running_and_off(self):
+        for mode, active, label, level, running in (
+            ("on-demand", "inactive", "Status unavailable", "warning", False),
+            ("on-demand", "active", "Running", "ok", True),
+            ("off", "inactive", "Stopped", "warning", False),
+        ):
+            with self.subTest(mode=mode, active=active):
+                row = {
+                    "id": "demo",
+                    "effectiveMode": mode,
+                    "units": [{"unit": "demo.service", "role": "owner"}],
+                }
+                snapshot = {"demo.service": {"LoadState": "masked", "ActiveState": active}}
+                with (
+                    mock.patch.object(control, "desired_status", return_value={"services": [row]}),
+                    mock.patch.object(control, "_unit_snapshot", return_value=snapshot),
+                ):
+                    result = control.status()["services"][0]
+                self.assertEqual(result["stateLabel"], label)
+                self.assertEqual(result["statusLevel"], level)
+                self.assertEqual(result["running"], running)
+                self.assertIsNone(result["healthy"])
+
     def test_set_mode_reconciles_after_atomic_editor_update(self):
         with tempfile.TemporaryDirectory() as tmp:
             desired_path = pathlib.Path(tmp) / "services.yaml"

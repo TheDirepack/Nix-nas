@@ -112,7 +112,15 @@ def status() -> dict[str, Any]:
             state = snapshot.get(unit, {}) if isinstance(unit, str) else {}
             load_state = state.get("LoadState", "unknown")
             load_failed = load_state in {"not-found", "error", "bad-setting"}
-            unavailable = unavailable or load_failed
+            unavailable = (
+                unavailable
+                or load_failed
+                or (
+                    row.get("effectiveMode") == "on-demand"
+                    and load_state == "masked"
+                    and state.get("ActiveState") == "inactive"
+                )
+            )
             active = state.get("ActiveState") == "active" and not load_failed
             running = running or (active and unit_row.get("role", "owner") == "owner")
             memory_raw = state.get("MemoryCurrent")
