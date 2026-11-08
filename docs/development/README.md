@@ -9,6 +9,7 @@ This directory documents how the appliance is built and validated. It is intenti
 - [Non-negotiable invariants](invariants.md) — rules that code and configuration must preserve.
 - [Code map](code-map.md) — where a change belongs.
 - [Testing and validation](testing.md) — local, NixOS, VM, browser, and hardware validation.
+- [Testing work list](testing-worklist.md) — installed custom-app qualification and remaining workload/failure coverage.
 - [Known risks](known-risks.md) — unresolved multi-step failure boundaries and recovery expectations.
 - [State bundle scope](state-bundle-scope.md) — boundary between small control-configuration bundles and Restic/ZFS/native application recovery.
 - [ADR-0001: Authentik-only browser access](adr-0001-authentik-only-browser-access.md) — browser authentication and recovery boundary.

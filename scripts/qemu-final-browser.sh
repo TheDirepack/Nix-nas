@@ -318,6 +318,8 @@ case "$WORKLOAD" in
     PLAYWRIGHT_HTML_OUTPUT_DIR="$EVIDENCE_DIR/playwright-report" \
     npm --prefix "$ROOT/cockpit" exec -- playwright test --config "$ROOT/cockpit/e2e/playwright.config.mjs" \
       --output "$EVIDENCE_DIR/test-results"
+    ssh "${ssh_args[@]}" admin@"${HOST_BIND_ADDRESS:-127.0.0.1}" \
+      'sudo -n nas-vm-guest-test --oci-probe remove'
     ;;
   installed-command-fuzz)
     fuzz_out="${NAS_INSTALLED_FUZZ_OUT:-$ROOT/installed-command-fuzz.json}"

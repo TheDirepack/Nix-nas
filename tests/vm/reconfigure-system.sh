@@ -12,6 +12,7 @@ rebuild() {
   local status
   if timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
     "$TIMEOUT" nixos-rebuild "$@" --option warn-dirty false; then
+    nas-vm-guest-test --oci-probe verify --stage "rebuild $1" || return $?
     return 0
   else
     status=$?
@@ -113,6 +114,7 @@ fi
 [[ "$(cat "$SENTINEL")" == preserve-me ]] || fail "failed candidate damaged persistent state"
 grep -q 'intentional QEMU rejected-candidate test' /tmp/nas-invalid-generation.log || \
   fail "invalid candidate failed for an unexpected reason"
+nas-vm-guest-test --oci-probe verify --stage rejected-candidate
 
 log "Candidate switch and system generation rollback"
 cp -a "$SOURCE/." "$work/candidate/"

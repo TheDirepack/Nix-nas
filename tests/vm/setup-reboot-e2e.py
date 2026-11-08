@@ -220,6 +220,7 @@ def activate_after_reboot() -> None:
         or run("systemctl", "is-active", "--quiet", "nas-protected-services.target").returncode == 0
     ):
         raise CheckError("protected services or runtime secrets remained active across the locked reboot")
+    require(("nas-vm-guest-test", "--oci-probe", "locked"))
     require(("zpool", "import", "-N", "tank"))
     result = run(
         "runuser",
@@ -254,6 +255,7 @@ def activate_after_reboot() -> None:
 
 
 def verify_services(stage: str) -> None:
+    require(("nas-vm-guest-test", "--oci-probe", "verify", "--stage", stage))
     status = require(("nas-setup", "status"))
     try:
         setup = json.loads(status)

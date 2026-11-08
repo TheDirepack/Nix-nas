@@ -1097,6 +1097,38 @@ def read_secret(path: str) -> str:
     return value
 
 
+def verify_oci_route_account(origin: str, username: str, password: str, allowed: bool) -> None:
+    driver = browser()
+    try:
+        login(driver, origin, username, password)
+        result = authenticated_https_request(driver, origin, "/vm-oci-probe/", "GET")
+        if allowed:
+            if result["status"] != 200 or result["body"].strip() != "nas-v2-oci-v2":
+                raise RuntimeError(
+                    f"OCI route did not return the live application for {username}: HTTP {result['status']}"
+                )
+        elif result["status"] != 403 or "nas-v2-oci-v2" in result["body"]:
+            raise RuntimeError(f"OCI capability denial failed for {username}: HTTP {result['status']}")
+    finally:
+        close_browser(driver)
+
+
+def verify_oci_authorization(
+    origin: str, administrator_password: str, baseline_password: str, alice_password: str
+) -> None:
+    verify_oci_route_account(origin, "nasadmin", administrator_password, True)
+    verify_oci_route_account(origin, "alice", alice_password, False)
+    verify_oci_route_account(origin, "baseline", baseline_password, False)
+    try:
+        assign_application_capabilities(
+            origin, "nasadmin", administrator_password, "baseline", ["application.vm-oci-probe.access"]
+        )
+        verify_oci_route_account(origin, "baseline", baseline_password, True)
+    finally:
+        assign_application_capabilities(origin, "nasadmin", administrator_password, "baseline", [])
+    verify_oci_route_account(origin, "baseline", baseline_password, False)
+
+
 def capability_routes() -> dict[str, str]:
     return {
         "files": "/shares/",
@@ -1119,7 +1151,19 @@ def main() -> int:
     parser.add_argument("--bootstrap-only", action="store_true")
     parser.add_argument("--identity-xss-only", action="store_true")
     parser.add_argument("--syncthing-admin-only", action="store_true")
+    parser.add_argument("--oci-only", action="store_true")
     args = parser.parse_args()
+    if args.oci_only:
+        if not all((args.administrator_password_file, args.baseline_password_file, args.alice_password_file)):
+            parser.error("--oci-only requires administrator, baseline and alice password files")
+        verify_oci_authorization(
+            args.origin,
+            read_secret(args.administrator_password_file),
+            read_secret(args.baseline_password_file),
+            read_secret(args.alice_password_file),
+        )
+        print("dynamic OCI capability grant, denial and revocation checks ok")
+        return 0
     if args.bootstrap_only:
         if args.bootstrap_password_file is None:
             parser.error("--bootstrap-only requires --bootstrap-password-file")

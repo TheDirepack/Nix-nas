@@ -814,7 +814,8 @@ run_installer() {
     'set -euo pipefail; \
      test "$(cat /var/lib/nas-install-test/reinstall-sentinel)" = preserve-me; \
      sudo -n nas-vm-guest-test --setup-reboot-e2e --verify; \
-     sudo -n nas-doctor --json >/tmp/nas-post-switch-reboot-doctor.json'
+     sudo -n nas-doctor --json >/tmp/nas-post-switch-reboot-doctor.json; \
+     sudo -n nas-vm-guest-test --oci-probe verify --stage final-reboot'
   ssh "${ssh_args[@]}" \
     -p "$SSH_PORT" admin@127.0.0.1 'sudo -n poweroff' >/dev/null 2>&1 || true
   if [[ -s "$pidfile" ]]; then

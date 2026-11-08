@@ -67,6 +67,11 @@ let
       export NAS_PREFLIGHT_SKIP_NIX=1
       export NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1
 
+      if [[ "''${1:-}" == "--oci-probe" ]]; then
+        shift
+        exec python3 /var/lib/nas-test/repo/tests/vm/oci-probe.py "$@"
+      fi
+
       if [[ "''${1:-}" == "--setup-reboot-e2e" ]]; then
         shift
         exec python3 /var/lib/nas-test/repo/tests/vm/setup-reboot-e2e.py "$@"

@@ -95,6 +95,47 @@ class BrowserAuthzInputTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.authz = load_authz()
 
+    def test_dynamic_oci_route_requires_exact_live_response_or_explicit_denial(self):
+        for allowed, status, body, accepted in (
+            (True, 200, "nas-v2-oci-v2\n", True),
+            (True, 200, "unrelated app", False),
+            (True, 302, "login", False),
+            (False, 403, "Forbidden", True),
+            (False, 200, "nas-v2-oci-v2", False),
+            (False, 503, "unavailable", False),
+            (False, 403, "nas-v2-oci-v2", False),
+        ):
+            with (
+                self.subTest(allowed=allowed, status=status, body=body),
+                mock.patch.object(self.authz, "browser") as browser,
+                mock.patch.object(self.authz, "login"),
+                mock.patch.object(self.authz, "close_browser") as close,
+                mock.patch.object(
+                    self.authz, "authenticated_https_request", return_value={"status": status, "body": body}
+                ),
+            ):
+                if accepted:
+                    self.authz.verify_oci_route_account("https://nas-test.local", "baseline", "password", allowed)
+                else:
+                    with self.assertRaises(RuntimeError):
+                        self.authz.verify_oci_route_account("https://nas-test.local", "baseline", "password", allowed)
+                close.assert_called_once_with(browser.return_value)
+
+    def test_dynamic_oci_grant_is_revoked_even_if_granted_request_fails(self):
+        def probe(_origin, username, _password, allowed):
+            if username == "baseline" and allowed:
+                raise RuntimeError("granted app request failed")
+
+        with (
+            mock.patch.object(self.authz, "verify_oci_route_account", side_effect=probe),
+            mock.patch.object(self.authz, "assign_application_capabilities") as assign,
+            self.assertRaisesRegex(RuntimeError, "granted app request failed"),
+        ):
+            self.authz.verify_oci_authorization("https://nas-test.local", "admin", "baseline", "alice")
+        self.assertEqual(assign.call_count, 2)
+        self.assertEqual(assign.call_args_list[0].args[-1], ["application.vm-oci-probe.access"])
+        self.assertEqual(assign.call_args_list[1].args[-1], [])
+
     @staticmethod
     def secret(root: pathlib.Path, name: str, value: str) -> pathlib.Path:
         path = root / name

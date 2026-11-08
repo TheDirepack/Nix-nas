@@ -556,3 +556,70 @@ test("final VM CSP blocks inline script execution in the NAS component frame", a
   });
   expect(result).toBe(0);
 });
+
+test("installed Services editor reconciles form changes and preserves rejected edits", async ({
+  page,
+  context,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "chromium-final-vm",
+    "One mutation flow owns the shared appliance document; other projects qualify rendering and authentication.",
+  );
+  test.setTimeout(180_000);
+  const openEditor = async (target) => {
+    await target.goto("/console/nas");
+    const frame = await getNasComponentFrame(target);
+    await frame.locator(".pf-v6-c-nav").getByText("Services", {exact: true}).click();
+    await frame.getByRole("button", {name: "Edit services", exact: true}).click();
+    const app = frame.locator(".nas-schema-map-entry").filter({
+      has: frame.getByRole("textbox", {name: "Key for vm-oci-persist", exact: true}),
+    });
+    const name = app.getByRole("textbox", {name: "name", exact: true});
+    await expect(name).toBeVisible();
+    return {
+      frame,
+      name,
+      save: frame.getByRole("button", {name: "Validate, save, and reconcile", exact: true}),
+    };
+  };
+  await login(page);
+  const first = await openEditor(page);
+  const original = await first.name.inputValue();
+  const otherPage = await context.newPage();
+  try {
+    const stale = await openEditor(otherPage);
+    await first.name.fill("VM OCI edited through installed Cockpit");
+    await first.save.click();
+    await expect(first.save).toBeEnabled({timeout: 60_000});
+    await expect(first.frame.locator(".nas-editor-card [role='alert']")).toHaveCount(0);
+    await expect(first.name).toHaveValue("VM OCI edited through installed Cockpit");
+
+    await stale.name.fill("stale edit must survive rejection");
+    await stale.save.click();
+    await expect(stale.frame.locator(".nas-editor-card [role='alert']")).toContainText(
+      /revision|changed|conflict/i,
+      {timeout: 60_000},
+    );
+    await expect(stale.name).toHaveValue("stale edit must survive rejection");
+
+    await first.frame.getByRole("button", {name: "Advanced YAML", exact: true}).click();
+    const yaml = first.frame.locator(".nas-editor-card textarea");
+    const invalid = "schemaVersion: 3\nservices: []\n";
+    await yaml.fill(invalid);
+    await first.save.click();
+    await expect(first.frame.locator(".nas-editor-card [role='alert']")).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(yaml).toHaveValue(invalid);
+
+    await page.reload();
+    const persisted = await openEditor(page);
+    await expect(persisted.name).toHaveValue("VM OCI edited through installed Cockpit");
+    await persisted.name.fill(original);
+    await persisted.save.click();
+    await expect(persisted.save).toBeEnabled({timeout: 60_000});
+    await expect(persisted.frame.locator(".nas-editor-card [role='alert']")).toHaveCount(0);
+  } finally {
+    await otherPage.close();
+  }
+});
