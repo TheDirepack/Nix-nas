@@ -569,7 +569,7 @@ test("installed Services editor reconciles form changes and preserves rejected e
   const openEditor = async (target) => {
     await target.goto("/console/nas");
     const frame = await getNasComponentFrame(target);
-    await frame.locator(".pf-v6-c-nav").getByText("Services", {exact: true}).click();
+    await frame.locator(".pf-v6-c-nav").getByText("Managed services", {exact: true}).click();
     await frame.getByRole("button", {name: "Edit services", exact: true}).click();
     const app = frame.locator(".nas-schema-map-entry").filter({
       has: frame.getByRole("textbox", {name: "Key for vm-oci-persist", exact: true}),
