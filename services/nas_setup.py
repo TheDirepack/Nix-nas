@@ -955,18 +955,22 @@ def apply_accounts(plan: Mapping[str, Any], *, confirm_password_reapply: bool = 
     return value
 
 
+def _personal_share_paths(accounts: Sequence[Mapping[str, Any]]) -> Iterator[pathlib.Path]:
+    for account in accounts:
+        groups = set(account.get("groups", []))
+        if account.get("active") is True and GUEST_GROUP not in groups:
+            yield SHARE_ROOT / "users" / str(account["username"])
+
+
 def provision_share_directories(accounts: Sequence[Mapping[str, Any]]) -> list[str]:
     """Prepare backing directories independently of Authentik app assignments."""
     run_root(["install", "-d", "-m", "2770", "-o", "copyparty", "-g", "copyparty", str(SHARE_ROOT)])
     users_root = SHARE_ROOT / "users"
     run_root(["install", "-d", "-m", "2770", "-o", "copyparty", "-g", "copyparty", str(users_root)])
     created: list[str] = []
-    for account in accounts:
-        groups = set(account.get("groups", []))
-        if account.get("active") is True and GUEST_GROUP not in groups:
-            path = users_root / str(account["username"])
-            run_root(["install", "-d", "-m", "2770", "-o", "copyparty", "-g", "copyparty", str(path)])
-            created.append(str(path))
+    for path in _personal_share_paths(accounts):
+        run_root(["install", "-d", "-m", "2770", "-o", "copyparty", "-g", "copyparty", str(path)])
+        created.append(str(path))
     return created
 
 
@@ -1384,14 +1388,7 @@ def share_directories_ready(accounts: Sequence[Mapping[str, Any]]) -> bool:
         completed = run_root_noninteractive(["stat", "-c", "%F", str(path)], check=False)
         return completed.returncode == 0 and completed.stdout.strip() == "directory"
 
-    for account in accounts:
-        groups = set(account.get("groups", []))
-        if account.get("active") is not True or GUEST_GROUP in groups:
-            continue
-        path = SHARE_ROOT / "users" / str(account["username"])
-        if not directory_is_safe(path):
-            return False
-    return True
+    return all(directory_is_safe(path) for path in _personal_share_paths(accounts))
 
 
 def setup_state_matches(report: Mapping[str, Any]) -> bool:

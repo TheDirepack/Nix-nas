@@ -708,16 +708,16 @@ def source_control(request: dict[str, Any]) -> dict[str, Any]:
     """Read-only source inspection. Mutations belong exclusively to nas-update."""
 
     operation = _json_string(request, "operation", required=True, max_length=32)
-    allowed = {"status", "diff", "log"}
-    if operation not in allowed:
-        raise ApiError("Unsupported source-control operation")
-    if not CONFIG_DIR.is_dir():
-        raise ApiError(f"Configuration directory does not exist: {CONFIG_DIR}")
-    command = {
+    commands = {
         "status": ["git", "-C", str(CONFIG_DIR), "status", "--short", "--branch"],
         "diff": ["git", "-C", str(CONFIG_DIR), "diff", "--stat"],
         "log": ["git", "-C", str(CONFIG_DIR), "log", "--oneline", "-20"],
-    }[operation]
+    }
+    if operation not in commands:
+        raise ApiError("Unsupported source-control operation")
+    if not CONFIG_DIR.is_dir():
+        raise ApiError(f"Configuration directory does not exist: {CONFIG_DIR}")
+    command = commands[operation]
     result = run(command, check=False, timeout_seconds=60)
     return {
         "ok": result.returncode == 0,
@@ -731,8 +731,7 @@ def update_control(request: dict[str, Any]) -> dict[str, Any]:
     """Route every deployment activation through the guarded nas-update authority."""
 
     operation = _json_string(request, "operation", required=True, max_length=32)
-    allowed = {"preview", "sync", "apply"}
-    if operation not in allowed:
+    if operation not in UPDATE_UNITS:
         raise ApiError("Unsupported update operation")
     if not CONFIG_DIR.is_dir():
         raise ApiError(f"Configuration directory does not exist: {CONFIG_DIR}")

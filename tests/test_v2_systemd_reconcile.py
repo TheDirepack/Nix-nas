@@ -285,6 +285,51 @@ class V2SystemdReconcileTests(unittest.TestCase):
             self.assertEqual(before, state.read_bytes())
             self.assertEqual((runtime / unit).resolve(), (old / "units" / unit).resolve())
 
+    def test_restart_failure_restores_both_link_types_and_cleans_new_dropin(self):
+        for keep_sibling in (False, True):
+            with self.subTest(keep_sibling=keep_sibling), tempfile.TemporaryDirectory() as raw:
+                root = pathlib.Path(raw)
+                projection = root / "projection"
+                projection.mkdir()
+                source = projection / "nas-v2-demo.service"
+                source.write_text("[Service]\nExecStart=/bin/true\n")
+                quadlet = projection / "nas-v2-demo.container"
+                quadlet.write_text("[Container]\nImage=demo\n")
+                manifest = projection / "manifest.json"
+                self.write_manifest(manifest, source, quadlet_source=quadlet)
+                runtime = root / "systemd"
+                runtime.mkdir()
+                state = root / "state.json"
+                ctl, log = self.make_systemctl(root)
+                kwargs = dict(
+                    manifest=manifest, projection=projection, runtime=runtime, state=state, systemctl=ctl, log=log
+                )
+                self.run_reconcile(**kwargs)
+                before = state.read_bytes()
+                dropin_dir = runtime / "copyparty.service.d"
+                sibling = dropin_dir / "local.conf"
+                if keep_sibling:
+                    dropin_dir.mkdir()
+                    sibling.write_text("[Unit]\nDescription=local\n")
+                dropin_source = projection / "50-nas-v2.conf"
+                dropin_source.write_text("[Unit]\nAfter=network.target\n")
+                self.write_manifest(manifest, source, fingerprint="changed")
+                payload = json.loads(manifest.read_text())
+                payload["links"].append({"target": "copyparty.service.d/50-nas-v2.conf", "source": str(dropin_source)})
+                manifest.write_text(json.dumps(payload))
+                self.make_systemctl(root, fail_on={"restart nas-v2-demo.service"})
+
+                with self.assertRaisesRegex(reconcile.SystemdReconcileError, "restart"):
+                    self.run_reconcile(**kwargs)
+
+                self.assertEqual(state.read_bytes(), before)
+                self.assertEqual((runtime / source.name).resolve(strict=True), source)
+                self.assertEqual((root / "quadlet" / quadlet.name).resolve(strict=True), quadlet)
+                self.assertFalse((dropin_dir / "50-nas-v2.conf").is_symlink())
+                self.assertEqual(dropin_dir.exists(), keep_sibling)
+                if keep_sibling:
+                    self.assertEqual(sibling.read_text(), "[Unit]\nDescription=local\n")
+
     def test_on_demand_restart_failure_preserves_previous_state_and_retry(self):
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
