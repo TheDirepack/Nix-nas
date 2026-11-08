@@ -18,6 +18,15 @@ Interfaces not listed in `nas.trustedInterfaces` remain fail-closed by default.
 
 Locked boot exposes no browser management endpoint. Use the local console, SSH with a provisioned recovery key, or hardware KVM to run `sudo nas-secrets activate`. After activation, use the normal Caddy route and Authentik login.
 
+## Restoring network configuration
+
+Normal network administration uses Cockpit Networking. A `nas-state` restore
+that changes saved NetworkManager profiles or firewall configuration requires
+`--allow-network-disconnect` through the recovery terminal. Use this only with
+working console or hardware KVM access: it acknowledges possible disconnection
+and does not provide timed automatic rollback. Restores of unrelated settings
+leave matching network files and services alone.
+
 ## Optional ports
 
 Syncthing, NUT, TFTP, and other optional listeners are opened only when their feature and firewall policy require them. Use Cockpit Networking or `firewall-cmd` to inspect the effective runtime policy.

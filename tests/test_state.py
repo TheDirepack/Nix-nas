@@ -27,6 +27,133 @@ SPEC.loader.exec_module(state)
 
 
 class StateBundleTests(unittest.TestCase):
+    def test_failed_application_restore_preserves_a_later_external_network_change(self):
+        root = pathlib.Path(self.temporary.name)
+        profile, app = root / "profile", root / "app"
+        profile.write_text("same network")
+        app.write_text("saved application config")
+        registry = json.loads(self.registry(profile, app, root / "missing"))[:2]
+        registry[0]["name"] = "networkmanager"
+        registry[1]["sensitive"] = False
+        bundle = root / "config.tar.gz"
+        reapply_attempts = 0
+
+        def fail_after_network_change(snapshot):
+            nonlocal reapply_attempts
+            reapply_attempts += 1
+            if reapply_attempts == 1:
+                profile.write_text("external network change")
+                raise state.StateError("application restart failed")
+
+        with mock.patch.dict(os.environ, self.environment(json.dumps(registry))):
+            state.export_bundle(bundle, include_sensitive=False)
+            app.write_text("current application config")
+            with (
+                mock.patch.object(
+                    state, "restore_units", return_value=("NetworkManager.service", "firewalld.service", "app.service")
+                ),
+                mock.patch.object(state, "capture_unit_state", return_value={"app.service": True}) as capture,
+                mock.patch.object(state, "stop_active_units") as stop,
+                mock.patch.object(state, "reapply_runtime_consumers", side_effect=fail_after_network_change) as reapply,
+            ):
+                with self.assertRaisesRegex(state.StateError, "application restart failed"):
+                    state.restore_bundle(
+                        bundle, confirm_host=socket.gethostname(), allow_partial=False, include_sensitive=False
+                    )
+            self.assertEqual(capture.call_args_list, [mock.call(["app.service"]), mock.call(("app.service",))])
+            self.assertEqual(stop.call_args_list, [mock.call({"app.service": True}), mock.call({"app.service": True})])
+            self.assertEqual(
+                reapply.call_args_list, [mock.call({"app.service": True}), mock.call({"app.service": True})]
+            )
+            self.assertEqual(app.read_text(), "current application config")
+            self.assertEqual(profile.read_text(), "external network change")
+            self.assertEqual(json.loads(state.RESTORE_JOURNAL.read_text())["status"], "failed-rolled-back")
+
+    def test_application_restore_does_not_rewrite_or_stop_unchanged_network_state(self):
+        root = pathlib.Path(self.temporary.name)
+        profile, app = root / "profile", root / "app"
+        profile.write_text("same network")
+        app.write_text("saved application config")
+        registry = json.loads(self.registry(profile, app, root / "missing"))[:2]
+        registry[0]["name"] = "networkmanager"
+        registry[1]["sensitive"] = False
+        bundle = root / "config.tar.gz"
+        with mock.patch.dict(os.environ, self.environment(json.dumps(registry))):
+            state.export_bundle(bundle, include_sensitive=False)
+            app.write_text("changed application config")
+            original_mtime = profile.stat().st_mtime_ns
+            with (
+                mock.patch.object(
+                    state, "restore_units", return_value=("NetworkManager.service", "firewalld.service", "app.service")
+                ),
+                mock.patch.object(state, "capture_unit_state", return_value={"app.service": True}) as capture,
+                mock.patch.object(state, "stop_active_units") as stop,
+                mock.patch.object(state, "reapply_runtime_consumers"),
+            ):
+                result = state.restore_bundle(
+                    bundle, confirm_host=socket.gethostname(), allow_partial=False, include_sensitive=False
+                )
+            self.assertTrue(result["ok"])
+            capture.assert_called_once_with(["app.service"])
+            stop.assert_called_once_with({"app.service": True})
+            self.assertEqual(app.read_text(), "saved application config")
+            self.assertEqual(profile.stat().st_mtime_ns, original_mtime)
+
+    def test_network_restore_requires_acknowledgement_before_any_mutation(self):
+        root = pathlib.Path(self.temporary.name)
+        network = root / "connections"
+        network.mkdir()
+        profile = network / "lan.nmconnection"
+        profile.write_text("old network configuration")
+        registry = json.loads(self.registry(network, root / "sensitive", root / "missing"))[:1]
+        registry[0]["name"] = "networkmanager"
+        bundle = root / "network.tar.gz"
+        with mock.patch.dict(os.environ, self.environment(json.dumps(registry))):
+            state.export_bundle(bundle, include_sensitive=False)
+            profile.write_text("current network configuration")
+            with (
+                mock.patch.object(state, "export_bundle") as capture,
+                mock.patch.object(state, "capture_unit_state") as units,
+            ):
+                with self.assertRaisesRegex(state.StateError, "allow-network-disconnect"):
+                    state.restore_bundle(
+                        bundle, confirm_host=socket.gethostname(), allow_partial=False, include_sensitive=False
+                    )
+                capture.assert_not_called()
+                units.assert_not_called()
+            self.assertEqual(profile.read_text(), "current network configuration")
+            with (
+                mock.patch.object(state, "capture_unit_state", return_value={}),
+                mock.patch.object(state, "reapply_runtime_consumers"),
+            ):
+                result = state.restore_bundle(
+                    bundle,
+                    confirm_host=socket.gethostname(),
+                    allow_partial=False,
+                    include_sensitive=False,
+                    allow_network_disconnect=True,
+                )
+            self.assertTrue(result["ok"])
+            self.assertEqual(profile.read_text(), "old network configuration")
+
+    def test_unchanged_network_restore_needs_no_disconnection_acknowledgement(self):
+        root = pathlib.Path(self.temporary.name)
+        network = root / "profile"
+        network.write_text("same configuration")
+        registry = json.loads(self.registry(network, root / "sensitive", root / "missing"))[:1]
+        registry[0]["name"] = "networkmanager"
+        bundle = root / "network.tar.gz"
+        with (
+            mock.patch.dict(os.environ, self.environment(json.dumps(registry))),
+            mock.patch.object(state, "capture_unit_state", return_value={}),
+        ):
+            state.export_bundle(bundle, include_sensitive=False)
+            self.assertTrue(
+                state.restore_bundle(
+                    bundle, confirm_host=socket.gethostname(), allow_partial=False, include_sensitive=False
+                )["skipped"]
+            )
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -888,7 +1015,7 @@ class StateBundleTests(unittest.TestCase):
     def test_installed_state_registry_fails_closed_when_generated_registry_is_missing(self) -> None:
         with mock.patch.dict(
             os.environ,
-            {"NAS_STATE_REGISTRY_FILE": "", "NAS_STATE_REGISTRY_REQUIRED": "1"},
+            {"NAS_STATE_REGISTRY_FILE": ""},
             clear=True,
         ):
             with self.assertRaisesRegex(state.StateError, "required"):
@@ -1156,7 +1283,7 @@ class StateBundleTests(unittest.TestCase):
                 self.assertEqual("failed-rolled-back", data.get("status"))
                 # The database restore ran while the writers were quiesced; the
                 # rollback stopped them again before overwriting restored data.
-                self.assertTrue(data["unitSnapshot"]["firewalld.service"])
+                self.assertNotIn("firewalld.service", data["unitSnapshot"])
 
     def test_rollback_snapshot_captured_before_quiesce(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -6,6 +6,10 @@ from repo_test_utils import text
 
 
 class V2PythonContextTests(unittest.TestCase):
+    def test_development_shell_can_import_the_xml_runtime(self) -> None:
+        shell = text("flake.nix").split("devShells.x86_64-linux.test =", 1)[1].split("shellHook", 1)[0]
+        self.assertIn("defusedxml", shell)
+
     def test_source_path_is_declared_only_in_shared_context(self) -> None:
         self.assertIn("v2Source = ../../../services;", text("modules/nas/internal/v2-tools.nix"))
         for module in (

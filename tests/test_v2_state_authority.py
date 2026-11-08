@@ -27,7 +27,7 @@ class V2StateAuthorityContractTests(unittest.TestCase):
     def test_installed_nas_state_uses_generated_registry_not_legacy_feature_root(self) -> None:
         account_tools = (ROOT / "modules/nas/internal/account-tools.nix").read_text(encoding="utf-8")
         wrapper = account_tools.split("nasState = pkgs.writeShellApplication {", 1)[1].split("nasDoctorScript =", 1)[0]
-        self.assertIn("NAS_STATE_REGISTRY_REQUIRED=1", wrapper)
+        self.assertIn("NAS_STATE_REGISTRY_FILE=", wrapper)
         self.assertNotIn("NAS_FEATURE_STATE_ROOT", wrapper)
 
     def test_registry_contains_only_control_configuration(self) -> None:
@@ -62,17 +62,10 @@ class V2StateAuthorityContractTests(unittest.TestCase):
         self.assertIn('lib.optional cfg.networking.enable "NetworkManager.service"', account_tools)
         self.assertIn('"nas-protected-services.target"', account_tools.split("stateRestoreUnits =", 1)[1])
 
-    def test_development_fallback_has_one_v2_managed_services_authority(self) -> None:
-        with mock.patch.dict(
-            "os.environ",
-            {"NAS_MANAGED_SERVICES_STATE_PATH": "/tmp/v2-services.yaml"},
-            clear=False,
-        ):
-            registry = nas_state.default_authorities()
-        managed = [authority for authority in registry if authority.name == "managed-services"]
-        self.assertEqual(1, len(managed))
-        self.assertEqual("/tmp/v2-services.yaml", managed[0].source)
-        self.assertFalse(any(authority.name == "feature-control" for authority in registry))
+    def test_direct_execution_cannot_fall_back_to_a_broad_legacy_registry(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            with self.assertRaisesRegex(nas_state.StateError, "registry is required"):
+                nas_state.authorities()
 
 
 if __name__ == "__main__":

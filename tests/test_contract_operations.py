@@ -310,7 +310,7 @@ class ContractTests(unittest.TestCase):
     def test_state_wrapper_is_profile_aware_private_and_excludes_regenerable_metrics(self) -> None:
         account = text("modules/nas/internal/account-tools.nix")
         system = text("modules/nas/config/system.nix")
-        self.assertIn("NAS_STATE_REGISTRY_REQUIRED=1", account)
+        self.assertIn("NAS_STATE_REGISTRY_FILE=", account)
         self.assertIn("NAS_STATE_RUNTIME_ROOT=/run/nas-state", account)
         self.assertIn("NAS_STATE_QUIESCE_UNITS_JSON", account)
         self.assertIn('"d /run/nas-state 0700 root root -"', system)
