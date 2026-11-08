@@ -8,6 +8,7 @@ import json
 import pathlib
 import subprocess
 import sys
+import time
 import urllib.request
 
 SERVICE = "vm-oci-persist"
@@ -18,6 +19,11 @@ DATA = pathlib.Path("/tank/vm-oci-persist/sentinel")
 CADDY = pathlib.Path("/run/nas-control/caddy-managed.conf")
 TOKEN = pathlib.Path("/run/nas-authentik/api-token")
 MANIFEST = pathlib.Path("/var/lib/nas-control/authentik-v2-objects.json")
+PROJECTIONS = (
+    pathlib.Path("/run/containers/systemd/nas-v2-vm-oci-persist.container"),
+    pathlib.Path("/run/containers/systemd/nas-v2-net-vm-oci-persist.network"),
+    pathlib.Path("/run/systemd/generator/nas-v2-vm-oci-persist.service"),
+)
 BASELINE = pathlib.Path("/var/lib/nas-test/oci-probe-baseline.json")
 
 
@@ -26,8 +32,8 @@ def require(condition: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
-def command(*argv: str, input_text: str | None = None) -> str:
-    result = subprocess.run(argv, input=input_text, capture_output=True, text=True, timeout=120, check=False)
+def command(*argv: str, input_text: str | None = None, timeout: float = 120) -> str:
+    result = subprocess.run(argv, input=input_text, capture_output=True, text=True, timeout=timeout, check=False)
     require(result.returncode == 0, f"{argv[0]} failed ({result.returncode}): {result.stderr[-1200:]}")
     return result.stdout.strip()
 
@@ -82,9 +88,7 @@ def create() -> None:
     command(
         "nas-managed-services-control", "replace-json-document", "-", value["revision"], input_text=json.dumps(desired)
     )
-    command(
-        "podman", "exec", CONTAINER, "sh", "-c", "umask 077; printf '%s\\n' nas-v2-persistent-data > /data/sentinel"
-    )
+    command("podman", "exec", CONTAINER, "sh", "-c", "umask 077; printf '%s\n' nas-v2-persistent-data > /data/sentinel")
     command("zfs", "snapshot", "tank/nas/vm-oci-persist@qualification")
     record()
     verify("creation")
@@ -105,6 +109,21 @@ def record() -> None:
     BASELINE.chmod(0o600)
 
 
+def wait_ready(stage: str, timeout: float = 60.0) -> None:
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            command("systemctl", "is-active", "--quiet", UNIT, timeout=5)
+            command(
+                "curl", "--fail", "--silent", "--show-error", "--max-time", "2", "http://127.0.0.1:18089/", timeout=5
+            )
+            return
+        except (RuntimeError, subprocess.TimeoutExpired) as error:
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"OCI did not become ready after {stage}") from error
+            time.sleep(1)
+
+
 def verify(stage: str) -> None:
     baseline = json.loads(BASELINE.read_text())
     value = document()
@@ -120,7 +139,7 @@ def verify(stage: str) -> None:
         f"OCI data is not on its declared ZFS dataset after {stage}",
     )
     require(data_state() == baseline["data"], f"OCI data or ownership changed after {stage}")
-    command("systemctl", "is-active", "--quiet", UNIT)
+    wait_ready(stage)
     require(
         command("podman", "inspect", "--format", "{{.ImageName}}", CONTAINER) == "localhost/nas-v2-vm-probe:v2",
         f"wrong OCI image is running after {stage}",
@@ -172,15 +191,8 @@ def remove() -> None:
     require(
         command("systemctl", "show", UNIT, "--property=ActiveState", "--value") == "inactive", "removed OCI is active"
     )
-    for path in (
-        "/run/containers/systemd/nas-v2-vm-oci-persist.container",
-        "/run/containers/systemd/nas-v2-net-vm-oci-persist.network",
-        "/run/systemd/generator/nas-v2-vm-oci-persist.service",
-    ):
-        require(
-            not pathlib.Path(path).exists() and not pathlib.Path(path).is_symlink(),
-            f"removed OCI projection remains: {path}",
-        )
+    for path in PROJECTIONS:
+        require(not path.exists() and not path.is_symlink(), f"removed OCI projection remains: {path}")
     for kind, name in (("container", CONTAINER), ("network", "nas-v2-vm-oci-persist")):
         result = subprocess.run(["podman", kind, "exists", name], capture_output=True, timeout=30, check=False)
         require(result.returncode == 1, f"removed OCI {kind} remains or inspection failed")

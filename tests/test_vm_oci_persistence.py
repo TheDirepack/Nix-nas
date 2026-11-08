@@ -112,7 +112,7 @@ class OciPersistenceTests(unittest.TestCase):
 
                 calls = []
 
-                def command(*argv):
+                def command(*argv, **kwargs):
                     calls.append(argv)
                     if argv[0] == "findmnt":
                         return f"zfs {'wrong' if fault == 'mount' else 'tank/nas/vm-oci-persist'} {probe.DATA.parent}"
@@ -144,6 +144,22 @@ class OciPersistenceTests(unittest.TestCase):
                 self.assertEqual(probe.BASELINE.read_bytes(), before)
                 self.assertFalse(any("start" in call or "restart" in call for call in calls))
 
+    def test_readiness_retries_read_only_until_ready_and_times_out(self):
+        probe = load_probe()
+        with (
+            mock.patch.object(probe, "command", side_effect=[RuntimeError("starting"), "", "ok"]) as command,
+            mock.patch.object(probe.time, "monotonic", side_effect=[0, 1]),
+            mock.patch.object(probe.time, "sleep"),
+        ):
+            probe.wait_ready("reboot")
+        self.assertEqual([call.args[0] for call in command.call_args_list], ["systemctl", "systemctl", "curl"])
+        with (
+            mock.patch.object(probe, "command", side_effect=RuntimeError("not ready")),
+            mock.patch.object(probe.time, "monotonic", side_effect=[0, 60]),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "after reboot"):
+                probe.wait_ready("reboot")
+
     def test_locked_oracle_rejects_running_app_and_unrelated_transport_failures(self):
         probe = load_probe()
         for state, code, accepted in (
@@ -172,10 +188,15 @@ class OciPersistenceTests(unittest.TestCase):
                 probe.verify("test reboot")
 
     def test_removal_preserves_unrelated_desired_state_and_rejects_incomplete_cleanup(self):
-        for fault in (None, "data", "container", "inspection", "group"):
+        for fault in (None, "data", "container", "inspection", "group", "projection", "symlink"):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as raw:
                 probe = load_probe()
                 root = pathlib.Path(raw)
+                probe.PROJECTIONS = (root / "projection",)
+                if fault == "projection":
+                    probe.PROJECTIONS[0].touch()
+                elif fault == "symlink":
+                    probe.PROJECTIONS[0].symlink_to(root / "missing")
                 probe.DATA = root / "sentinel"
                 probe.DATA.write_text("nas-v2-persistent-data\n")
                 probe.BASELINE = root / "baseline"

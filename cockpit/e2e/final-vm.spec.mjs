@@ -591,12 +591,12 @@ test("installed Services editor reconciles form changes and preserves rejected e
     await first.name.fill("VM OCI edited through installed Cockpit");
     await first.save.click();
     await expect(first.save).toBeEnabled({timeout: 60_000});
-    await expect(first.frame.locator(".nas-editor-card [role='alert']")).toHaveCount(0);
+    await expect(first.frame.locator(".nas-editor-card .pf-v6-c-alert")).toHaveCount(0);
     await expect(first.name).toHaveValue("VM OCI edited through installed Cockpit");
 
     await stale.name.fill("stale edit must survive rejection");
     await stale.save.click();
-    await expect(stale.frame.locator(".nas-editor-card [role='alert']")).toContainText(
+    await expect(stale.frame.locator(".nas-editor-card .pf-v6-c-alert")).toContainText(
       /revision|changed|conflict/i,
       {timeout: 60_000},
     );
@@ -607,7 +607,7 @@ test("installed Services editor reconciles form changes and preserves rejected e
     const invalid = "schemaVersion: 3\nservices: []\n";
     await yaml.fill(invalid);
     await first.save.click();
-    await expect(first.frame.locator(".nas-editor-card [role='alert']")).toBeVisible({
+    await expect(first.frame.locator(".nas-editor-card .pf-v6-c-alert")).toContainText(/services.*mapping/i, {
       timeout: 60_000,
     });
     await expect(yaml).toHaveValue(invalid);
@@ -618,8 +618,18 @@ test("installed Services editor reconciles form changes and preserves rejected e
     await persisted.name.fill(original);
     await persisted.save.click();
     await expect(persisted.save).toBeEnabled({timeout: 60_000});
-    await expect(persisted.frame.locator(".nas-editor-card [role='alert']")).toHaveCount(0);
+    await expect(persisted.frame.locator(".nas-editor-card .pf-v6-c-alert")).toHaveCount(0);
   } finally {
+    try {
+      await page.reload();
+      const cleanup = await openEditor(page);
+      await cleanup.name.fill(original);
+      await cleanup.save.click();
+      await expect(cleanup.save).toBeEnabled({timeout: 60_000});
+      await expect(cleanup.frame.locator(".nas-editor-card .pf-v6-c-alert")).toHaveCount(0);
+    } catch (error) {
+      await testInfo.attach("editor-cleanup-error", {body: String(error), contentType: "text/plain"});
+    }
     await otherPage.close();
   }
 });
