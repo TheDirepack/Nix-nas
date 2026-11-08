@@ -572,6 +572,20 @@ printf '%s\n' "$bootstrap_authentik_password" >"$wizard_secret_dir/akadmin"
 printf '%s\n' "$KEEPASS_PASSWORD" >"$wizard_secret_dir/keepass"
 cp /var/lib/nas-test/setup/nasadmin.password "$wizard_secret_dir/nasadmin"
 chmod 0600 "$wizard_secret_dir/akadmin" "$wizard_secret_dir/keepass" "$wizard_secret_dir/nasadmin"
+setup_sock=/run/nas-setup-api/setup.sock
+setup_api=http://localhost/setup/api
+if runuser -u nobody -- curl --silent --show-error --max-time 10 \
+  --unix-socket "$setup_sock" "$setup_api/first-start" >/dev/null 2>&1; then
+  fail "unprivileged local user reached the setup API directly"
+fi
+if systemd-run --collect --pipe --wait -p DynamicUser=yes -p RestrictAddressFamilies=AF_UNIX -- \
+  curl --silent --show-error --max-time 10 --unix-socket "$setup_sock" "$setup_api/first-start" >/dev/null 2>&1; then
+  fail "sandboxed service identity reached the setup API directly"
+fi
+[[ "$(curl --silent --show-error --max-time 10 -o /dev/null -w '%{http_code}' \
+  --unix-socket "$setup_sock" "$setup_api/first-start/job/aaaaaaaaaaaaaaaaaaaaaaaa")" == 404 ]] || \
+  fail "legacy job-id URL did not fail closed"
+pass "setup API rejects local unprivileged peers and legacy job-id URLs"
 timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
   "$(nas_vm_timeout_value firstRun)" \
   python3 /var/lib/nas-test/repo/tests/browser/first-run-wizard.py \
