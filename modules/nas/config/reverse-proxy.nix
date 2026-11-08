@@ -21,6 +21,7 @@ in
     virtualHosts.${lanHost}.extraConfig = ''
       tls internal
       encode zstd gzip
+      ${builtins.readFile ../../../services/nas_policy/proxy-probes.caddy}
       header {
         -Server
         -X-Powered-By

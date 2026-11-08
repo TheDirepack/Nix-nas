@@ -6,6 +6,11 @@ import pathlib
 import shutil
 import sys
 import unittest
+import http.client
+import socket
+import subprocess
+import tempfile
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
@@ -40,6 +45,54 @@ class ManagedServicesV2RealCaddyTests(unittest.TestCase):
 
     def compile(self, services: dict) -> dict:
         return v2.compile_document({"schemaVersion": 3, "services": services}, self.schema)
+
+    def test_proxy_probe_methods_stop_at_edge_and_normal_options_remains_available(self):
+        assert self.caddy_bin is not None
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        with tempfile.TemporaryDirectory() as raw:
+            config = pathlib.Path(raw) / "Caddyfile"
+            policy = (SERVICES / "nas_policy/proxy-probes.caddy").read_text()
+            config.write_text(
+                "{\n  admin off\n}\nhttp://127.0.0.1:"
+                + str(port)
+                + " {\n"
+                + policy
+                + '\nrespond "application" 200\n}\n'
+            )
+            process = subprocess.Popen(
+                [self.caddy_bin, "run", "--config", str(config), "--adapter", "caddyfile"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                for attempt in range(100):
+                    try:
+                        with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                            break
+                    except OSError:
+                        time.sleep(0.02)
+                for method, headers, expected in (
+                    ("TRACE", {}, 405),
+                    ("TRACK", {}, 405),
+                    ("OPTIONS", {"Max-Forwards": "0"}, 405),
+                    ("OPTIONS", {"Max-Forwards": "7"}, 405),
+                    ("OPTIONS", {"Origin": "https://example.test", "Access-Control-Request-Method": "POST"}, 200),
+                    ("GET", {}, 200),
+                    ("POST", {}, 200),
+                    ("PROPFIND", {}, 200),
+                ):
+                    with self.subTest(method=method, headers=headers):
+                        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+                        connection.request(method, "/console/", headers=headers)
+                        response = connection.getresponse()
+                        self.assertEqual(response.status, expected)
+                        self.assertEqual(response.read(), b"" if expected == 405 else b"application")
+                        connection.close()
+            finally:
+                process.terminate()
+                process.wait(timeout=5)
 
     def test_empty_projection_is_accepted_by_real_caddy(self):
         effective = self.compile({})

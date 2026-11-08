@@ -35,6 +35,114 @@ class NativeZapTests(unittest.TestCase):
             timeout=910,
         ).strip()
 
+    def test_contextual_observations_preserve_native_exit_gates(self) -> None:
+        source = (ROOT / "scripts/lib/zap-context.js").read_text()
+        seed = r"""
+var Alert = Java.type("org.parosproxy.paros.core.scanner.Alert");
+var Message = Java.type("org.parosproxy.paros.network.HttpMessage");
+var URI = Java.type("org.apache.commons.httpclient.URI");
+var ext = Java.type("org.parosproxy.paros.control.Control").getSingleton().getExtensionLoader().getExtension("ExtensionAlert");
+var msg = new Message(new URI("https://localhost/console/cockpit/socket", false));
+msg.setResponseHeader("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n");
+var alert = new Alert(RULE, RISK, 2, "Native context control");
+alert.setUri("https://localhost/console/cockpit/socket");
+alert.setEvidence(EVIDENCE);
+alert.setOtherInfo(FRAME);
+alert.setMessage(msg);
+ext.alertFound(alert, null);
+if (ext.getAllAlerts().size() !== 1) throw new Error("Native control was not registered");
+var fixtureAlerts = ext.getAllAlerts();
+var Data = Java.extend(Java.type("org.zaproxy.addon.automation.JobResultData"), {
+    getKey: function() { return "native-context"; },
+    getAllAlertData: function() { return fixtureAlerts; }
+});
+var af = Java.type("org.parosproxy.paros.control.Control").getSingleton().getExtensionLoader().getExtension("ExtensionAutomation");
+af.getRunningPlans().get(0).getProgress().addJobResultData(new Data("native-context"));
+"""
+        with tempfile.TemporaryDirectory() as raw:
+            directory = pathlib.Path(raw)
+            for name, rule, risk, evidence, frame, expected in (
+                ("fraction", 110005, 3, "4112318978587", "[WebSocket Message] 5:10!9\n[[1722.4112318978587]]", 0),
+                ("card", 110005, 3, "4111111111111111", "[WebSocket Message] 5:10!9\n[[4111111111111111]]", 1),
+                ("session", 90027, 1, "", "", 2),
+            ):
+                with self.subTest(control=name):
+                    setup = (
+                        seed.replace("RULE", str(rule))
+                        .replace("RISK", str(risk))
+                        .replace("EVIDENCE", json.dumps(evidence))
+                        .replace("FRAME", json.dumps(frame))
+                    )
+
+                    def script(action, name, inline=None):
+                        parameters = {"action": action, "type": "standalone", "name": name}
+                        if inline is not None:
+                            parameters.update(engine="ECMAScript : Graal.js", inline=inline)
+                        return {"type": "script", "parameters": parameters}
+
+                    plan = {
+                        "env": {
+                            "contexts": [
+                                {
+                                    "name": "fixture",
+                                    "urls": ["https://localhost/"],
+                                    "includePaths": [r"https://localhost/.*"],
+                                }
+                            ],
+                            "parameters": {"failOnError": True},
+                        },
+                        "jobs": [
+                            script("add", "seed", setup),
+                            script("run", "seed"),
+                            script("add", "classify", 'var nasScanOrigin = "https://localhost";\n' + source),
+                            script("run", "classify"),
+                            {
+                                "type": "exitStatus",
+                                "parameters": {
+                                    "errorLevel": "Medium",
+                                    "warnLevel": "Low",
+                                    "okExitValue": 0,
+                                    "warnExitValue": 2,
+                                    "errorExitValue": 1,
+                                },
+                            },
+                        ],
+                    }
+                    (directory / "plan.json").write_text(json.dumps(plan))
+                    result = subprocess.run(
+                        [
+                            "docker",
+                            "run",
+                            "--rm",
+                            "--network",
+                            "none",
+                            "--hostname",
+                            "localhost",
+                            "--user",
+                            f"{os.getuid()}:{os.getgid()}",
+                            "-e",
+                            "HOME=/tmp",
+                            "-e",
+                            "JAVA_TOOL_OPTIONS=-Duser.home=/tmp",
+                            "-v",
+                            f"{directory}:/fixture:ro",
+                            "--entrypoint",
+                            "zap.sh",
+                            self.image,
+                            "-cmd",
+                            "-silent",
+                            "-dir",
+                            "/tmp/zap-context",
+                            "-autorun",
+                            "/fixture/plan.json",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=180,
+                    )
+                    self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                    self.assertNotIn("Script failed", result.stdout + result.stderr)
+
     def test_cookie_transport_with_real_network_sender(self) -> None:
         driver = """
 import os, pathlib, subprocess, tempfile, zipfile

@@ -166,7 +166,7 @@ sys.exit(int(os.environ.get('FAKE_ZAP_RC', '0')))
         self.assertIn("-c\nzap-packaged.conf", invocation)
         rules = (reports / "zap-packaged.conf").read_text(encoding="utf-8")
         configured = [line.split("\t")[:2] for line in rules.splitlines() if line and not line.startswith("#")]
-        self.assertEqual(configured, [["10015", "INFO"], ["10049", "INFO"], ["10109", "INFO"]])
+        self.assertEqual(configured, [["10015", "INFO"], ["10049", "INFO"], ["10109", "INFO"], ["10112", "INFO"]])
         warning = subprocess.run(
             ["bash", "scripts/zap-scan.sh", "baseline", "https://nas-test.local:8443/"],
             cwd=self.clean_root,
@@ -416,6 +416,15 @@ sys.exit(int(os.environ.get('FAKE_ZAP_RC', '0')))
                 self.assertEqual(context["urls"], ["https://127.0.0.1:8443/console/"])
                 self.assertEqual(context.get("includePaths"), [r"https://127\.0\.0\.1:8443/.*"])
                 self.assertNotIn("excludePaths", context)
+                classification = next(
+                    job for job in plan["jobs"] if job["type"] == "script" and job["parameters"]["action"] == "add"
+                )
+                self.assertIn("classifyObservation", classification["parameters"]["inline"])
+                self.assertEqual(classification["parameters"]["engine"], "ECMAScript : Graal.js")
+                exit_job = next(job for job in plan["jobs"] if job["type"] == "exitStatus")
+                self.assertEqual(exit_job["parameters"]["warnLevel"], "Low")
+                self.assertEqual(exit_job["parameters"]["warnExitValue"], 2)
+                self.assertEqual(exit_job["parameters"]["errorExitValue"], 1)
                 spider = next(job for job in plan["jobs"] if job["type"] == "spiderClient")
                 if mode == "authenticated":
                     self.assertEqual(spider["parameters"]["user"], "nas-browser-user")

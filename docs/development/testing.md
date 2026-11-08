@@ -429,3 +429,34 @@ The `run-unit-tests.py --group fast` selector is the single authoritative set of
 fast-suite exclusions. Preflight, CI unit qualification, and the non-root CI
 run all use that selector; targeted integration and tooling tests still run
 separately. `--pattern` and `--exclude` remain available for focused runs.
+
+### Installed ZAP observations
+
+The packaged policy keeps session-management discovery (10112) informational,
+as specified by [ZAP](https://www.zaproxy.org/docs/alerts/10112/). It does not
+change cookie-security, session-verification, or Low+ failure thresholds.
+
+The automation plan runs `scripts/lib/zap-context.js` after passive scanning and
+before reports and the native exit-status job. Classified alerts remain in the
+reports with their original risk and the reason in Other Info. Classification
+requires the exact scan origin, rule, endpoint and evidence:
+
+- Authentik's `authentik_csrf` cookie on the default authentication flow must
+  remain readable by its frontend to construct the CSRF header. Session cookies
+  and missing Secure/SameSite protections receive no exception.
+- Cockpit's network-editor JavaScript includes the static example `10.0.0.1`.
+- The decimal SHA-1 constants 1518500249, 1732584193 and 1859775393 in the
+  Cockpit Podman/terminal bundles are algorithm constants, not disclosed dates.
+- A PII match inside the fractional part of a Cockpit numeric metrics frame
+  is informational only when the entire frame parses as nested numeric arrays.
+  Standalone card numbers, string/object payloads and truncated frames retain
+  their original risk.
+
+Private-IP WebSocket alerts remain fatal. The inherited installed report also
+contains administrative NetworkManager data and a truncated journal frame;
+these require further qualification of the protected management channel rather
+than an endpoint-wide exception. Proxy disclosure remains enabled: the edge
+rejects TRACE/TRACK and OPTIONS with Max-Forwards before routing, while retaining
+normal CORS OPTIONS. Installed ZAP and browser authorization tests must verify
+that policy on the exact candidate head. Host source tests are not installed
+qualification.
