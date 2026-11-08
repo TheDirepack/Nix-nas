@@ -608,7 +608,7 @@ test("installed Services editor reconciles form changes and preserves rejected e
     await yaml.fill(invalid);
     await first.save.click();
     await expect(first.frame.locator(".nas-editor-card .pf-v6-c-alert")).toContainText(
-      /services.*mapping/i,
+      /services.*not of type.*object/i,
       {
         timeout: 60_000,
       },
