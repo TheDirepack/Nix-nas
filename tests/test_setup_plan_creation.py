@@ -67,6 +67,26 @@ class SetupPlanCreationTests(unittest.TestCase):
             self.create()
         self.assertFalse(target.exists())
 
+    def test_plan_publication_syncs_directory_before_reporting_success(self):
+        synced = []
+
+        def sync(path):
+            self.assertEqual(path, self.path.parent)
+            self.assertTrue(self.path.is_file())
+            synced.append(path)
+
+        with mock.patch.object(setup, "fsync_directory", side_effect=sync):
+            self.create()
+        self.assertEqual(synced, [self.path.parent])
+
+    def test_directory_sync_failure_cannot_report_success(self):
+        with (
+            mock.patch.object(setup, "fsync_directory", side_effect=OSError("sync failed")),
+            self.assertRaisesRegex(OSError, "sync failed"),
+        ):
+            self.create()
+        self.assertTrue(self.path.is_file())
+
     def test_started_or_completed_setup_blocks_plan_creation(self):
         for path in (setup.STATE_PATH, setup.JOURNAL_PATH):
             with self.subTest(path=path):

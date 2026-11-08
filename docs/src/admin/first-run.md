@@ -34,6 +34,10 @@ To retain a plan previously stored at `/etc/nixos/nixos-nas/first-run.json`,
 set `nas.firstStart.configFile` to that path explicitly before upgrading.
 Existing plans are never imported or overwritten automatically.
 
+Installation readiness permits the default plan to be absent before setup starts,
+so the wizard can create it. An explicit custom path must already contain a
+root-owned plan. After setup starts, the original plan remains required for recovery.
+
 `nas-setup` performs the actual appliance workflow by calling the existing
 component authorities in their required order. It does not replace NixOS,
 KeePassXC, Authentik, CopyParty, or ZFS.

@@ -40,7 +40,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from nas_common import ADMIN_GROUP, DISABLED_GROUP, GUEST_GROUP, USER_GROUP, run_command
+from nas_common import ADMIN_GROUP, DISABLED_GROUP, GUEST_GROUP, USER_GROUP, fsync_directory, run_command
 from nas_operation_journal import JournalError, OperationJournal, atomic_write_json, load_json
 from nas_operation_lock import (
     COORDINATION_TOKEN_ENV,
@@ -488,6 +488,7 @@ def create_first_start_plan(config_source: str, request: dict[str, Any]) -> dict
                 # Link publishes complete bytes atomically and cannot replace a
                 # plan created concurrently by another administrator.
                 os.link(temporary, path, follow_symlinks=False)
+                fsync_directory(path.parent)
             finally:
                 temporary.unlink(missing_ok=True)
         return prepare_first_start(str(path))
