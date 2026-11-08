@@ -474,3 +474,23 @@ report on an HTTPS origin is classified. Fingerprinted nodes, silent proxy
 cookies, and TRACE-enabled findings retain their risk. Installed ZAP and browser
 authorization tests must verify the probe policy on the exact candidate head.
 Host source tests are not installed qualification.
+
+### Fresh first-start qualification
+
+The default plan is `/var/lib/nas-first-start/first-run.json`. The unencrypted
+installed guest starts without that file or a KeePass database. Its browser
+creates the plan from discovered disks, reviews it, confirms erasure and submits
+setup. It then verifies the permanent administrator and exercises the account
+CLI for ordinary users. It does not restart the proxy outpost to make login work.
+The encrypted native guest creates its plan through `nas-setup
+create-first-start-plan` and completes `first-run --secret-payload-stdin` through
+the existing authorized-root integration, with preflight enabled. Both retain
+locked-boot, storage, identity, secret and service assertions.
+
+Run the wizard interaction tests with `npm --prefix cockpit exec -- playwright
+test first-run-wizard.spec.mjs --config e2e/playwright.config.mjs`. These use
+controlled API responses; only a successful native/installer run establishes
+actual Authentik, systemd and ZFS setup. For hardware acceptance, use the
+installation walkthrough unchanged: do not pre-create the default plan, insert
+runtime secrets, patch units, or manually restart failed setup components.
+Capture the setup journal and repair the owning implementation if that path fails.

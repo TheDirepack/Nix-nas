@@ -4,7 +4,6 @@ import hashlib
 import os
 import json
 import pathlib
-import re
 import shutil
 import subprocess
 import tempfile
@@ -31,7 +30,7 @@ class VmSuiteWrapperTests(unittest.TestCase):
             source = path.read_text(encoding="utf-8")
             start = source.index("[[ ! -e /run/nas-secrets/ready ]]")
             end = (
-                source.index("\n# The outpost caches", start)
+                source.index("\nwait_http http://127.0.0.1:9000", start)
                 if path == GUEST_TEST
                 else source.index("\nfor _ in", start)
             )
@@ -58,7 +57,10 @@ class VmSuiteWrapperTests(unittest.TestCase):
                 self.assertTrue(marker in source, "post-activation projection assertion is absent")
                 before = source.split(marker, 1)[0]
                 block = call + before.rsplit(call, 1)[1]
-                self.assertGreater(before.rfind(call), source.index('"$setup_api/first-run"'))
+                self.assertGreater(
+                    before.rfind(call),
+                    source.index("--create-plan" if path == GUEST_TEST else "--secret-payload-stdin"),
+                )
                 for started, condition, state, accepted in (
                     (1, "yes", "inactive", True),
                     (0, "no", "inactive", False),
@@ -443,18 +445,16 @@ fail() { echo "$*" >&2; exit 1; }
         fixture = (ROOT / "tests/nixos/qemu-installed.nix").read_text(encoding="utf-8")
         self.assertIn('boot.kernelParams = [ "console=ttyS0,115200n8" ];', fixture)
 
-    def test_live_setup_fixtures_use_canonical_storage_fields(self) -> None:
-        for path in (GUEST_TEST, ENCRYPTED_GUEST_TEST):
-            with self.subTest(path=path.name):
-                source = path.read_text(encoding="utf-8")
-                fixture = re.search(r"<<EOFSETUP\n(.*?)\nEOFSETUP", source, re.S)
-                if fixture is None:
-                    self.fail(f"setup JSON fixture missing from {path}")
-                storage = json.loads(fixture.group(1))["storage"]
-                self.assertEqual(storage.get("devices"), ["$ZFS_DEVICE"])
-                self.assertIs(storage.get("wipeDevices"), True)
-                self.assertNotIn("device", storage)
-                self.assertNotIn("wipeDevice", storage)
+    def test_live_setup_uses_fresh_gui_and_cli_entrypoints(self) -> None:
+        guest = GUEST_TEST.read_text(encoding="utf-8")
+        encrypted = ENCRYPTED_GUEST_TEST.read_text(encoding="utf-8")
+        self.assertIn("--create-plan", guest)
+        self.assertNotIn("<<EOFSETUP", guest)
+        self.assertNotIn("systemctl restart nas-authentik-proxy-outpost.service", guest)
+        self.assertIn("create-first-start-plan", encrypted)
+        self.assertIn("--secret-payload-stdin", encrypted)
+        self.assertNotIn("--skip-preflight", encrypted)
+        self.assertNotIn("<<EOFSETUP", encrypted)
 
     def test_source_refresh_waits_for_boot_repository_materialization(self) -> None:
         source = QEMU.read_text(encoding="utf-8")
@@ -632,7 +632,8 @@ fail() { echo "$*" >&2; exit 1; }
         guest = GUEST_TEST.read_text(encoding="utf-8")
         self.assertIn('administrator="akadmin"', guest)
         self.assertIn("/var/lib/nas-setup/local-administrator.json", guest)
-        self.assertIn("chown akadmin:users /var/lib/nas-test/setup/first-run.json", guest)
+        self.assertIn("--create-plan", guest)
+        self.assertNotIn("cat >/var/lib/nas-first-start/first-run.json", guest)
         self.assertIn("chown -R nasadmin:users /var/lib/nas-test/setup", guest)
         self.assertIn("install -d -m 0700 -o akadmin -g users /var/lib/nas-test/setup", guest)
         self.assertIn('.result.localAdministrator.username == "nasadmin"', guest)
@@ -643,7 +644,7 @@ fail() { echo "$*" >&2; exit 1; }
         self.assertIn("findmnt -n -o FSTYPE -T /tank/homes/nasadmin", guest)
         self.assertIn("spawn runuser -u admin -- su - akadmin", guest)
         self.assertIn("spawn runuser -u admin -- su - nasadmin", guest)
-        self.assertIn("discarded-bootstrap-keepass-password", guest)
+        self.assertIn("fresh setup unexpectedly has a KeePass database", guest)
         self.assertIn("keepassxc-cli db-info --quiet", guest)
         self.assertNotIn("keepassxc-cli db-info --quiet --pw-stdin", guest)
         self.assertIn("state-bundle-signing-key", guest)

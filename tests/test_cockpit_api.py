@@ -544,6 +544,30 @@ class SetupApiTransportTests(unittest.TestCase):
 
 
 class SetupApiCapabilityTests(unittest.TestCase):
+    def test_plan_creation_transport_uses_fixed_cli_path_and_stdin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, socket_path = self.live_server(directory)
+            request = {"storage": {"createPool": True, "devices": ["/dev/vdb"]}}
+            with mock.patch.object(api, "run", return_value=api.CommandResult(0, '{"status":"ready"}', "")) as run:
+                status, result = self.exchange(socket_path, "POST", "/setup/api/first-start/plan", body=request)
+            self.assertIn(b"200", status)
+            self.assertEqual(result, {"status": "ready"})
+            run.assert_called_once_with(
+                [api._setup_entry(), "create-first-start-plan", "--config", api.FIRST_RUN_CONFIG],
+                check=False,
+                timeout_seconds=60,
+                input_text=json.dumps(request),
+            )
+
+    def test_disk_discovery_transport_uses_cli(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, socket_path = self.live_server(directory)
+            with mock.patch.object(api, "run", return_value=api.CommandResult(0, '{"devices":[]}', "")) as run:
+                status, result = self.exchange(socket_path, "GET", "/setup/api/storage-options")
+            self.assertIn(b"200", status)
+            self.assertEqual(result, {"devices": []})
+            run.assert_called_once_with([api._setup_entry(), "storage-options"], check=False, timeout_seconds=60)
+
     """A05/A13: header capability lifecycle, resume, and reboot authorization."""
 
     def setUp(self) -> None:

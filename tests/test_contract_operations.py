@@ -329,14 +329,16 @@ class ContractTests(unittest.TestCase):
         self.assertIn('"numConnections": 1', identity_model)
         self.assertFalse((ROOT / "modules/nas/internal/feature-catalog.nix").exists())
 
-    def test_vm_first_start_uses_normalized_plan_digest_and_negative_stale_digest(self) -> None:
-        for path in ("tests/vm/guest-test.sh", "tests/vm/encrypted-guest-test.sh"):
-            guest = text(path)
-            self.assertIn("/setup/api", guest)
-            self.assertIn("planDigest", guest)
-            self.assertIn("stale", guest.lower())
-            self.assertIn("systemd-run --collect --pipe --wait", guest)
-        self.assertIn("prepare-first-start", text("tests/vm/guest-test.sh"))
+    def test_vm_first_start_exercises_gui_and_cli_boundaries(self) -> None:
+        guest = text("tests/vm/guest-test.sh")
+        encrypted = text("tests/vm/encrypted-guest-test.sh")
+        self.assertIn("--create-plan", guest)
+        self.assertIn("prepare-first-start", guest)
+        self.assertIn("create-first-start-plan", encrypted)
+        self.assertIn("--confirm-plan-digest", encrypted)
+        self.assertIn("--secret-payload-stdin", encrypted)
+        self.assertIn("--confirm-storage-device", encrypted)
+        self.assertIn("--allow-destructive-storage", encrypted)
 
     def test_encrypted_vm_waits_for_reconciliation_before_each_lock_drill(self) -> None:
         guest = text("tests/vm/encrypted-guest-test.sh")

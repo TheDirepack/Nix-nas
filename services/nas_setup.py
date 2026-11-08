@@ -379,17 +379,18 @@ def validate_storage_request(
     validate_unused_devices(devices)
 
 
-def validate_unused_devices(devices: Sequence[str]) -> None:
+def storage_device_inventory() -> list[dict[str, Any]]:
     try:
         inventory = json.loads(
             run_storage_host(
                 [
                     "lsblk",
                     "--json",
+                    "--bytes",
                     "--paths",
                     "--tree",
                     "--output",
-                    "PATH,MAJ:MIN,TYPE,MOUNTPOINTS",
+                    "PATH,MAJ:MIN,TYPE,MOUNTPOINTS,SIZE,MODEL,SERIAL,RO",
                 ]
             ).stdout
         )
@@ -407,7 +408,7 @@ def validate_unused_devices(devices: Sequence[str]) -> None:
             if stat.S_ISBLK(info.st_mode):
                 swap_devices.add(f"{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}")
         unsafe: set[str] = set()
-        known: set[str] = set()
+        rows: list[dict[str, Any]] = []
 
         def visit(node: Any, parents: tuple[str, ...]) -> None:
             if not isinstance(node, dict):
@@ -420,25 +421,76 @@ def validate_unused_devices(devices: Sequence[str]) -> None:
             if not isinstance(path, str) or not isinstance(mounts, list):
                 raise ValueError("invalid device mount information")
             chain = (*parents, identity)
-            known.add(identity)
+            rows.append(
+                {
+                    "path": path,
+                    "identity": identity,
+                    "type": node["type"],
+                    "size": node.get("size"),
+                    "model": node.get("model") or "",
+                    "serial": node.get("serial") or "",
+                }
+            )
             # Parents of mounted partitions/mappers are also in use. Refuse
             # live mapper/RAID holders even when they have no mounted filesystem.
-            if any(mounts) or path in swaps or identity in swap_devices or node["type"] not in {"disk", "part", "loop"}:
+            if (
+                any(mounts)
+                or path in swaps
+                or identity in swap_devices
+                or node.get("ro", False)
+                or node["type"] not in {"disk", "part", "loop"}
+            ):
                 unsafe.update(chain)
             for child in node.get("children", []):
                 visit(child, chain)
 
         for root in roots:
             visit(root, ())
-        for device in devices:
-            info = os.stat(device)
-            identity = f"{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}"
-            if identity not in known:
-                raise ValueError(f"device missing from inventory: {device}")
-            if identity in unsafe:
-                raise SetupError(f"Configured storage device is in use: {device}")
+        return [{**row, "available": row["identity"] not in unsafe} for row in rows]
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise SetupError(f"Unable to validate storage device inventory: {exc}") from exc
+
+
+def validate_unused_devices(devices: Sequence[str]) -> None:
+    inventory = {row["identity"]: row for row in storage_device_inventory()}
+    for device in devices:
+        info = os.stat(device)
+        identity = f"{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}"
+        if identity not in inventory:
+            raise SetupError(f"Storage device missing from inventory: {device}")
+        if not inventory[identity]["available"]:
+            raise SetupError(f"Configured storage device is in use or read-only: {device}")
+
+
+def create_first_start_plan(config_source: str, request: dict[str, Any]) -> dict[str, Any]:
+    if os.geteuid() != 0:
+        raise SetupError("Creating the initial plan requires root authorization through sudo or the setup API")
+    if set(request) != {"storage"}:
+        raise SetupError("Initial plan input must contain only storage; account secrets are submitted separately")
+    config = normalize_config({"schemaVersion": SCHEMA_VERSION, "storage": request["storage"], "runPreflight": True})
+    path = pathlib.Path(config_source)
+    if not path.is_absolute() or path.parent.resolve() != path.parent:
+        raise SetupError("Initial plan destination must be absolute with no symlink parents")
+    with acquire_operation("create-first-start-plan", SETUP_OPERATION_CLASSES):
+        if any(item.exists() or item.is_symlink() for item in (STATE_PATH, JOURNAL_PATH)):
+            raise SetupError("First-run already started; recover the original plan instead of creating another")
+        if path.exists() or path.is_symlink():
+            raise SetupError("First-run configuration already exists; refresh and review it")
+        validate_storage_request(config["storage"], config["storage"]["devices"], True)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", dir=path.parent, prefix=".first-run-", delete=False) as handle:
+            temporary = pathlib.Path(handle.name)
+            try:
+                json.dump(config, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+                # Link publishes complete bytes atomically and cannot replace a
+                # plan created concurrently by another administrator.
+                os.link(temporary, path, follow_symlinks=False)
+            finally:
+                temporary.unlink(missing_ok=True)
+        return prepare_first_start(str(path))
 
 
 def _managed_services_status(*, noninteractive: bool = False) -> dict[str, Any]:
@@ -1906,7 +1958,7 @@ def first_start_status(config_source: str) -> dict[str, Any]:
             "schemaVersion": SCHEMA_VERSION,
             "status": "configuration-missing",
             "configPath": config_source,
-            "message": "Create the first-run JSON file, then recheck configuration.",
+            "message": "Create the storage plan in the first-start wizard, or supply a reviewed first-run JSON file.",
         }
     try:
         config = normalize_config(read_json_source(config_source))
@@ -2265,6 +2317,12 @@ def build_parser() -> argparse.ArgumentParser:
     prepare = sub.add_parser("prepare-first-start", help="Publish non-secret first-start state for Cockpit and systemd")
     prepare.add_argument("--config", required=True, help="Setup JSON file")
 
+    sub.add_parser("storage-options", help="Inspect storage choices without changing disks")
+    create_plan = sub.add_parser(
+        "create-first-start-plan", help="Create a missing initial plan from non-secret stdin JSON"
+    )
+    create_plan.add_argument("--config", required=True, help="Initial setup JSON destination; never overwrites a file")
+
     first = sub.add_parser("first-run", help="Perform idempotent first-time appliance setup")
     first.add_argument("--config", required=True, help="Setup JSON file")
     password_input = first.add_mutually_exclusive_group()
@@ -2353,6 +2411,16 @@ def main() -> int:
             result = normalize_config(read_json_source(args.config))
         elif args.command == "prepare-first-start":
             result = prepare_first_start(args.config)
+        elif args.command == "storage-options":
+            result = {"devices": storage_device_inventory(), "poolPresent": pool_exists()}
+        elif args.command == "create-first-start-plan":
+            raw = sys.stdin.read(65537)
+            if len(raw.encode("utf-8")) > 65536:
+                raise SetupError("Initial plan input exceeds its size limit")
+            request = json.loads(raw)
+            if not isinstance(request, dict):
+                raise SetupError("Initial plan input must be an object")
+            result = create_first_start_plan(args.config, request)
         elif args.command == "first-run":
             if args.secret_payload_stdin:
                 raw = sys.stdin.read(8193)
@@ -2378,7 +2446,7 @@ def main() -> int:
             result = status_report()
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
-    except (SetupError, OSError, ValueError, json.JSONDecodeError) as exc:
+    except (SetupError, OperationBusyError, OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"nas-setup: {exc}", file=sys.stderr)
         return 1
 
