@@ -61,10 +61,58 @@ af.getRunningPlans().get(0).getProgress().addJobResultData(new Data("native-cont
 """
         with tempfile.TemporaryDirectory() as raw:
             directory = pathlib.Path(raw)
-            for name, rule, risk, evidence, frame, expected in (
-                ("fraction", 110005, 3, "4112318978587", "[WebSocket Message] 5:10!9\n[[1722.4112318978587]]", 0),
-                ("card", 110005, 3, "4111111111111111", "[WebSocket Message] 5:10!9\n[[4111111111111111]]", 1),
-                ("session", 90027, 1, "", "", 2),
+            network = "[WebSocket Message] 4:6!6\n" + json.dumps(
+                {
+                    "notify": {
+                        "/org/freedesktop/NetworkManager/IP4Config/2": {
+                            "org.freedesktop.NetworkManager.IP4Config": {"Gateway": "10.0.2.2"}
+                        }
+                    }
+                }
+            )
+            journal = (
+                "[WebSocket Message] 4:4!3\npartial\n"
+                + json.dumps(
+                    {
+                        "_SYSTEMD_UNIT": "firewalld.service",
+                        "SYSLOG_IDENTIFIER": "firewalld",
+                        "MESSAGE": "ERROR: UNKNOWN_SOURCE: '10.89.0.0/24' is not in any zone",
+                    }
+                )
+                + '\n{"partial":'
+            )
+            proxy = (
+                "Using the TRACE, OPTIONS, and TRACK methods, the following proxy servers have been "
+                "identified between ZAP and the application/web server:\n- Unknown\n"
+                "The following web/application server has been identified:\n- Unknown\n"
+            )
+            for name, rule, risk, evidence, frame, authenticated, expected in (
+                ("fraction", 110005, 3, "4112318978587", "[WebSocket Message] 5:10!9\n[[1722.4112318978587]]", True, 0),
+                ("card", 110005, 3, "4111111111111111", "[WebSocket Message] 5:10!9\n[[4111111111111111]]", True, 1),
+                ("session", 90027, 1, "", "", True, 2),
+                ("admin-network", 110006, 1, "10.0.2.2", network, True, 0),
+                ("public-network", 110006, 1, "10.0.2.2", network, False, 2),
+                ("admin-journal", 110006, 1, "10.89.0.0", journal, True, 0),
+                (
+                    "unknown-journal",
+                    110006,
+                    1,
+                    "10.89.0.0",
+                    journal.replace("firewalld.service", "other.service"),
+                    True,
+                    2,
+                ),
+                ("plaintext-proxy", 40025, 2, "", proxy, True, 0),
+                (
+                    "fingerprinted-proxy",
+                    40025,
+                    2,
+                    "",
+                    proxy.replace("server:\n- Unknown", "server:\n- nginx/1.24"),
+                    True,
+                    1,
+                ),
+                ("trace-proxy", 40025, 3, "", proxy + "TRACE is enabled", True, 1),
             ):
                 with self.subTest(control=name):
                     setup = (
@@ -94,7 +142,15 @@ af.getRunningPlans().get(0).getProgress().addJobResultData(new Data("native-cont
                         "jobs": [
                             script("add", "seed", setup),
                             script("run", "seed"),
-                            script("add", "classify", 'var nasScanOrigin = "https://localhost";\n' + source),
+                            script(
+                                "add",
+                                "classify",
+                                'var nasScanOrigin = "https://localhost";\n'
+                                + "var nasAuthenticatedScan = "
+                                + json.dumps(authenticated)
+                                + ";\n"
+                                + source,
+                            ),
                             script("run", "classify"),
                             {
                                 "type": "exitStatus",

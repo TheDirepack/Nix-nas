@@ -201,7 +201,8 @@ if user_name:
     })
 
 with open(classification_script, encoding="utf-8") as handle:
-    classification_source = "var nasScanOrigin = " + json.dumps(f"{parsed.scheme}://{parsed.netloc}") + ";\n" + handle.read()
+    classification_source = ("var nasScanOrigin = " + json.dumps(f"{parsed.scheme}://{parsed.netloc}") + ";\n"
+        + "var nasAuthenticatedScan = " + json.dumps(mode == "authenticated") + ";\n" + handle.read())
 
 plan = {
     "env": {

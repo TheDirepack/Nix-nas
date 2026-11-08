@@ -452,11 +452,25 @@ requires the exact scan origin, rule, endpoint and evidence:
   Standalone card numbers, string/object payloads and truncated frames retain
   their original risk.
 
-Private-IP WebSocket alerts remain fatal. The inherited installed report also
-contains administrative NetworkManager data and a truncated journal frame;
-these require further qualification of the protected management channel rather
-than an endpoint-wide exception. Proxy disclosure remains enabled: the edge
-rejects TRACE/TRACK and OPTIONS with Max-Forwards before routing, while retaining
-normal CORS OPTIONS. Installed ZAP and browser authorization tests must verify
-that policy on the exact candidate head. Host source tests are not installed
-qualification.
+Private-IP WebSocket classification additionally requires authenticated scan
+mode, whose identity/session assertions run before the classifier. Only address,
+route, and DNS properties in complete Cockpit NetworkManager notifications are
+classified. For Cockpit's fragmented journal stream, every line containing the
+matched IP must be a complete JSON record of firewalld's exact unassigned-source
+diagnostic, with the expected systemd unit and identifier. Unauthenticated data,
+other properties or journal messages, and incomplete matching records remain
+fatal. This does not classify other rules on the management socket. Native ZAP
+controls verify that the authenticated NetworkManager and journal observations
+pass while unauthenticated observations, real PII and session failures still
+fail. Installed authorization checks remain required; a WebSocket URL alone is
+not proof of access control.
+
+Proxy disclosure remains enabled: the edge rejects TRACE/TRACK and OPTIONS with
+Max-Forwards before routing, while retaining normal CORS OPTIONS. In the
+automation plan, rule 40025 also sends a plaintext request to the TLS port as a
+blind-spot probe; its 400 rejection differs from the normal HTTPS status and the
+rule reports a second, unidentifiable node. Only that exact two-unknown-node report on an HTTPS origin
+is classified. Fingerprinted nodes, silent proxy cookies, and TRACE-enabled
+findings retain their risk. Installed ZAP and browser authorization tests must
+verify the probe policy on the exact candidate head. Host source tests are not
+installed qualification.
