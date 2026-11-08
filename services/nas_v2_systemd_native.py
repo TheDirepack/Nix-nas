@@ -876,27 +876,32 @@ def validate_projection(
     virt_xml_validate_bin: str | None = None,
 ) -> None:
     unit_files = {p: d for p, d in files.items() if p.suffix in {".service", ".timer", ".target", ".socket", ".path"}}
-    if unit_files:
+    has_quadlets = any(p.suffix == ".container" for p in files)
+    if has_quadlets and quadlet_generator_bin is None:
+        raise SystemdProjectionError("Quadlet projection requires a Podman system generator binary")
+    if unit_files or has_quadlets:
         with tempfile.TemporaryDirectory(prefix="nas-v2-systemd-verify-") as raw_tmp:
             tmp = pathlib.Path(raw_tmp)
-            verify_paths: list[str] = []
+            if quadlet_generator_bin is not None and has_quadlets:
+                try:
+                    # Readiness/activation units require the actual generator-owned container units.
+                    validate_quadlets(files, generator_bin=quadlet_generator_bin, output_dir=tmp)
+                except QuadletProjectionError as exc:
+                    raise SystemdProjectionError(str(exc)) from exc
             for src, data in unit_files.items():
                 dst = tmp / src.name
+                if dst.exists() or dst.is_symlink():
+                    raise SystemdProjectionError(f"generated unit conflicts with Quadlet output: {src.name}")
                 dst.write_bytes(data)
-                verify_paths.append(str(dst))
+            verify_paths = sorted(
+                str(p) for p in tmp.iterdir() if p.suffix in {".service", ".timer", ".target", ".socket", ".path"}
+            )
             result = subprocess.run(
                 [systemd_analyze_bin, "verify", *verify_paths], capture_output=True, text=True, timeout=30, check=False
             )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()[:4000]
             raise SystemdProjectionError(f"systemd-analyze rejected generated units: {detail}")
-    if any(p.suffix == ".container" for p in files):
-        if quadlet_generator_bin is None:
-            raise SystemdProjectionError("Quadlet projection requires a Podman system generator binary")
-        try:
-            validate_quadlets(files, generator_bin=quadlet_generator_bin)
-        except QuadletProjectionError as exc:
-            raise SystemdProjectionError(str(exc)) from exc
     vm_xml = [d for p, d in files.items() if p.parent.name == "vm" and p.suffix == ".xml"]
     if vm_xml:
         if virt_xml_validate_bin is None:

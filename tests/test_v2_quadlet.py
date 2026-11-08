@@ -346,6 +346,45 @@ class V2QuadletTests(unittest.TestCase):
         self.assertIn("nas-v2-demo.service", manifest["startUnits"])
         self.assertFalse(any(item["target"] == "nas-v2-demo.service" for item in manifest["links"]))
 
+    def test_real_projection_validation_resolves_quadlet_readiness_dependencies(self):
+        generator = os.environ.get("NAS_V2_QUADLET_GENERATOR_BIN") or next(
+            (
+                path
+                for path in (
+                    "/usr/lib/systemd/system-generators/podman-system-generator",
+                    "/usr/lib/podman/quadlet",
+                )
+                if os.access(path, os.X_OK)
+            ),
+            None,
+        )
+        analyzer = shutil.which("systemd-analyze")
+        if not generator or not analyzer:
+            self.skipTest("Podman generator and systemd-analyze are required")
+        files = {
+            pathlib.Path(
+                "/projection/quadlet/nas-v2-demo.container"
+            ): b"[Container]\nImage=example.invalid/demo:1\nPull=never\n",
+            pathlib.Path(
+                "/projection/units/nas-v2-ready-demo.service"
+            ): b"[Unit]\nRequires=nas-v2-demo.service\nAfter=nas-v2-demo.service\n"
+            b"[Service]\nType=oneshot\nExecStart=/bin/true\n",
+        }
+        before = files.copy()
+        systemd.validate_projection(files, systemd_analyze_bin=analyzer, quadlet_generator_bin=generator)
+        self.assertEqual(files, before)
+        conflicting = {
+            **files,
+            pathlib.Path("/projection/units/nas-v2-demo.service"): b"[Service]\nExecStart=/bin/true\n",
+        }
+        with self.assertRaisesRegex(systemd.SystemdProjectionError, "conflicts with Quadlet output"):
+            systemd.validate_projection(conflicting, systemd_analyze_bin=analyzer, quadlet_generator_bin=generator)
+        files[pathlib.Path("/projection/quadlet/nas-v2-demo.container")] = (
+            b"[Unit]\nRequires=nas-v2-nonexistent.service\n[Container]\nImage=example.invalid/demo:1\nPull=never\n"
+        )
+        with self.assertRaisesRegex(systemd.SystemdProjectionError, "nas-v2-nonexistent.service"):
+            systemd.validate_projection(files, systemd_analyze_bin=analyzer, quadlet_generator_bin=generator)
+
     def test_quadlet_generator_validation_failure_is_fatal(self):
         files = {pathlib.Path("/projection/quadlet/nas-v2-demo.container"): b"[Container]\nImage=x\n"}
         with tempfile.TemporaryDirectory() as tmp:
