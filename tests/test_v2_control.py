@@ -49,10 +49,37 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
             result = control.status()
         row = result["services"][0]
         self.assertTrue(row["running"])
-        self.assertTrue(row["healthy"])
+        self.assertIsNone(row["healthy"])
+        self.assertEqual(row["stateLabel"], "Running")
+        self.assertEqual(row["healthState"], "unknown")
         self.assertEqual(row["units"][0]["memoryBytes"], 4096)
         self.assertNotIn("features", result)
         self.assertEqual(result["controller"], "managed-services-v2")
+
+    def test_cli_status_distinguishes_failed_unknown_sleeping_and_scheduled_owners(self):
+        for state, mode, kind, role, expected in (
+            ({}, "always", "daemon", "owner", "Status unavailable"),
+            ({"ActiveState": "failed"}, "always", "daemon", "owner", "Failed"),
+            ({"ActiveState": "inactive"}, "on-demand", "daemon", "owner", "Sleeping"),
+            ({"ActiveState": "active"}, "always", "job", "schedule", "Scheduled"),
+        ):
+            row = {
+                "id": "demo",
+                "effective": True,
+                "effectiveMode": mode,
+                "workloadKind": kind,
+                "units": [{"unit": "demo.service", "role": role}],
+            }
+            with (
+                self.subTest(expected=expected),
+                mock.patch.object(control, "desired_status", return_value={"services": [row]}),
+                mock.patch.object(control, "_unit_snapshot", return_value={"demo.service": state}),
+            ):
+                result = control.status()["services"][0]
+            self.assertEqual(result["stateLabel"], expected)
+            self.assertIsNone(result["healthy"])
+            if role == "schedule":
+                self.assertFalse(result["running"], "an armed timer is not a running application")
 
     def test_set_mode_reconciles_after_atomic_editor_update(self):
         with tempfile.TemporaryDirectory() as tmp:

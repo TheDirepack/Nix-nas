@@ -14,6 +14,7 @@ import json
 import os
 import pathlib
 import sys
+from datetime import datetime, timezone
 from typing import Any
 
 from nas_common import parse_systemd_show, run_command
@@ -95,6 +96,7 @@ def status() -> dict[str, Any]:
         if isinstance(unit, dict) and isinstance(unit.get("unit"), str)
     ]
     snapshot = _unit_snapshot(list(dict.fromkeys(units)))
+    checked_at = datetime.now(timezone.utc).isoformat()
     for row in service_rows:
         if not isinstance(row, dict):
             continue
@@ -108,10 +110,12 @@ def status() -> dict[str, Any]:
             unit = unit_row.get("unit")
             state = snapshot.get(unit, {}) if isinstance(unit, str) else {}
             active = state.get("ActiveState") == "active"
-            running = running or active
+            running = running or (active and unit_row.get("role", "owner") == "owner")
             memory_raw = state.get("MemoryCurrent")
             try:
                 memory = int(memory_raw) if memory_raw and memory_raw != "[not set]" else None
+                if memory is not None and not 0 <= memory < 2**64 - 1:
+                    memory = None
             except ValueError:
                 memory = None
             unit_row.update(
@@ -124,10 +128,28 @@ def status() -> dict[str, Any]:
             )
         row["running"] = running
         row["resident"] = row.get("effectiveMode") == "always"
-        row["healthState"] = "healthy" if row.get("effective") and running else "inactive"
-        if row.get("effectiveMode") == "on-demand" and not running:
-            row["healthState"] = "inactive"
-        row["healthy"] = row["healthState"] == "healthy"
+        states = [unit.get("activeState", "unknown") for unit in unit_rows if isinstance(unit, dict)]
+        if not states or "unknown" in states:
+            label, level = "Status unavailable", "warning"
+        elif "failed" in states:
+            label, level = "Failed", "warning"
+        elif running:
+            label, level = "Running", "ok"
+        elif row.get("workloadKind") == "job" and "active" in states:
+            label, level = "Scheduled", "ok"
+        elif row.get("effectiveMode") == "on-demand":
+            label, level = "Sleeping", "ok"
+        else:
+            label, level = "Stopped", "warning"
+        row.update(
+            {
+                "stateLabel": label,
+                "statusLevel": level,
+                "checkedAt": checked_at,
+                "healthState": "unknown",
+                "healthy": None,
+            }
+        )
     value["services"] = service_rows
     value["schemaVersion"] = 3
     value["controller"] = "managed-services-v2"

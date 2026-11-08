@@ -75,7 +75,7 @@ offline error format.
 - `cockpit/src/components/`: shared presentation components (status label, output block, section header, link/service cards).
 - `cockpit/src/hooks/`: `use-overview` data fetch and `use-mutation` busy/error/notice wrapper shared by all pages.
 - `cockpit/src/schema-editor.jsx`, `cockpit/src/schema-model.js`: schema-driven desired-state form generated from the canonical V2 JSON Schema.
-- `cockpit/src/systemd.js`: systemd timer/unit helpers for the UI.
+- Native systemd status and display labels come from `nas-managed-services-control`; the overview hook renders that CLI snapshot.
 - `cockpit/src/api.js`: allowed Cockpit bridge invocations, including finite Managed Services document/status/edit calls and stdin-only secret delivery after browser authorization.
 - `cockpit/src/view-model.js`: pure backend-to-view conversion and visibility policy.
 - `cockpit/src/lib/format.js`: error-message and JSON display helpers.

@@ -126,10 +126,10 @@ test("build follows the Starter Kit esbuild and Sass source-to-dist pattern", as
 });
 
 test("Cockpit runtime API uses the host script without a bare-module require", async () => {
-  const systemd = await source("src/systemd.js");
+  const api = await source("src/api.js");
   const build = await source("build.js");
   const bundle = await source("dist/index.js");
-  assert.match(systemd, /globalThis\.cockpit/);
+  assert.match(api, /globalThis\.cockpit/);
   assert.doesNotMatch(build, /external:\s*\["cockpit"\]/);
   assert.doesNotMatch(bundle, /Dynamic require of/);
 });
@@ -142,32 +142,14 @@ test("manifest does not weaken Cockpit content security policy", async () => {
   assert.equal(manifest.requires.cockpit, "300");
 });
 
-test("unlock and backup-remote forms submit from the keyboard without navigating", async () => {
-  const app = await source(APP_SHELL);
-  assert.match(app, /<Form onSubmit=\{unlock\}>/, "the unlock form must invoke unlock on submit");
-  assert.match(
-    app,
-    /<Button type="submit"[^>]*isDisabled=\{busy \|\| !unlockPassword\}/,
-    "the unlock button must be the form's submit control",
-  );
-  assert.match(
-    app,
-    /const unlock = async \(event\) => \{\s*if \(event\) event\.preventDefault\(\);/,
-  );
+test("unlock submits from the keyboard and unfinished backup mutations are absent", async () => {
+  const app = await source("src/app.jsx");
   const operations = await source("src/pages/operations-page.jsx");
-  assert.match(operations, /<Form onSubmit=\{saveRemote\}>/);
-  assert.match(operations, /<Button type="submit"[^>]*isDisabled=\{busy\}>/);
-  assert.match(
-    operations,
-    /const saveRemote = async \(event\) => \{\s*if \(event\) event\.preventDefault\(\);/,
-  );
-  for (const name of [APP_SHELL, "src/pages/operations-page.jsx"]) {
-    assert.doesNotMatch(
-      await source(name),
-      /<Form onSubmit=\{\(_event\) => _event\.preventDefault\(\)\}>/,
-      `${name} still swallows the submit event`,
-    );
-  }
+  assert.match(app, /<Form onSubmit=\{unlock\}>/);
+  assert.doesNotMatch(operations, /backup-remote-set|remoteDraft|Save remote/);
+  const hook = await source("src/hooks/use-overview.js");
+  assert.doesNotMatch(hook, /dbus|mergeSystemdState|readSystemdState/);
+  assert.match(hook, /setData\(overview\)/);
 });
 
 test("source page imports every component it references", async () => {

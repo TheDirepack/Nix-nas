@@ -153,17 +153,7 @@ export function setupModel(data = {}) {
 
 export function managedServiceUnitState(service = {}) {
   service = service && typeof service === "object" && !Array.isArray(service) ? service : {};
-  const units = Array.isArray(service.units) ? service.units : [];
-  if (!units.length) return service.managed === false ? "Platform service" : "No native unit";
-  const active = units.filter(
-    (unit) => unit?.active === true || unit?.activeState === "active",
-  ).length;
-  if (active === units.length) return "Running";
-  return active
-    ? "Partially running"
-    : service.effectiveMode === "on-demand"
-      ? "Sleeping"
-      : "Stopped";
+  return typeof service.stateLabel === "string" ? service.stateLabel : "Status unavailable";
 }
 
 export function managedServiceRuntimeText(service = {}) {

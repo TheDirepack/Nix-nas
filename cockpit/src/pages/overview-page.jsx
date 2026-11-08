@@ -55,7 +55,7 @@ export function OverviewPage({data, refresh, busy}) {
         <>
           <p>
             <StatusLabel ok={zfsHealthy}>
-              {zfsHealthy ? "healthy" : "attention required"}
+              {data?.zfs?.stateLabel || "Status unavailable"}
             </StatusLabel>
           </p>
           <OutputBlock>{data?.zfs?.summary || "Unavailable"}</OutputBlock>
@@ -65,19 +65,20 @@ export function OverviewPage({data, refresh, busy}) {
     },
     {
       title: "Failures",
-      body:
-        Array.isArray(data?.failedUnits) && data.failedUnits.length ? (
-          <OutputBlock>
-            {data.failedUnits.map((unit, index) => (
-              <React.Fragment key={`${index}-${String(unit)}`}>
-                <span>{unit}</span>
-                {index < data.failedUnits.length - 1 ? "\n" : null}
-              </React.Fragment>
-            ))}
-          </OutputBlock>
-        ) : (
-          <p>No failed units reported.</p>
-        ),
+      body: !Array.isArray(data?.failedUnits) ? (
+        <p>Failed-unit status unavailable. Refresh to retry.</p>
+      ) : Array.isArray(data?.failedUnits) && data.failedUnits.length ? (
+        <OutputBlock>
+          {data.failedUnits.map((unit, index) => (
+            <React.Fragment key={`${index}-${String(unit)}`}>
+              <span>{unit}</span>
+              {index < data.failedUnits.length - 1 ? "\n" : null}
+            </React.Fragment>
+          ))}
+        </OutputBlock>
+      ) : (
+        <p>No failed units reported.</p>
+      ),
     },
   ];
   return (

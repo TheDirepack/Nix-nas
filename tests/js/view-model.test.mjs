@@ -54,9 +54,13 @@ test("managed service and application link models follow V2 state", () => {
 });
 
 test("service runtime and memory formatting are deterministic", () => {
-  assert.equal(managedServiceUnitState({managed: false, units: []}), "Platform service");
+  assert.equal(managedServiceUnitState({managed: false, units: []}), "Status unavailable");
   assert.equal(
-    managedServiceUnitState({units: [{active: true}, {active: false}], effectiveMode: "always"}),
+    managedServiceUnitState({
+      stateLabel: "Partially running",
+      units: [{active: true}, {active: false}],
+      effectiveMode: "always",
+    }),
     "Partially running",
   );
   assert.match(
