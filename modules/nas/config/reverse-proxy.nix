@@ -21,6 +21,7 @@ in
     virtualHosts.${lanHost}.extraConfig = ''
       tls internal
       encode zstd gzip
+      ${builtins.readFile ../../../services/nas_policy/proxy-probes.caddy}
       header {
         -Server
         -X-Powered-By
@@ -69,7 +70,9 @@ in
           header_down Location "^http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}(.*)$" "https://${lanHost}${cfg.identity.authentikPath}$1"
         }
       }
-      redir ${authentikPathNoSlash} ${cfg.identity.authentikPath}
+      handle ${authentikPathNoSlash} {
+        redir * ${cfg.identity.authentikPath}
+      }
       @authentikUi path ${cfg.identity.authentikPath}*
       handle @authentikUi {
         header ?Content-Security-Policy ${builtins.toJSON authentikCsp}

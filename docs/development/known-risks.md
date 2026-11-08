@@ -37,7 +37,7 @@ qualification, including Lit's nonce-bearing stylesheet fallback. External
 branding/assets cannot rely on wildcard image or inline script/style allowances.
 ZAP qualification remains unresolved until complete installed scans pass without
 breaking upstream authentication/application interfaces.
-The packaged scanner keeps the three known informational cache/application
+The packaged scanner keeps the known informational cache/application/session
 rules visible as `INFO`; every unclassified warning and security failure remains
 fatal.
 

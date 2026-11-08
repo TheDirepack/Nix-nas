@@ -331,6 +331,8 @@ class ShareProvisioningTests(unittest.TestCase):
             {"username": "admin2", "active": True, "groups": ["nas_admin"]},
             {"username": "guest", "active": True, "groups": ["nas_guests"]},
             {"username": "disabled", "active": False, "groups": ["nas_disabled"]},
+            {"username": "truthy", "active": 1, "groups": ["nas_users"]},
+            {"username": "missing", "groups": ["nas_users"]},
         ]
         calls: list[list[str]] = []
 
@@ -351,6 +353,43 @@ class ShareProvisioningTests(unittest.TestCase):
         rendered = "\n".join(" ".join(call) for call in calls)
         self.assertNotIn("nas_allow_", rendered)
         self.assertNotIn("nas_deny_", rendered)
+
+    def test_readiness_checks_only_eligible_personal_directories(self) -> None:
+        accounts = [
+            {"username": "alice", "active": True, "groups": ["nas_users"]},
+            {"username": "guest", "active": True, "groups": ["nas_guests"]},
+            {"username": "disabled", "active": False},
+            {"username": "truthy", "active": 1},
+            {"username": "missing"},
+        ]
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(setup, "SHARE_ROOT", pathlib.Path(tmp)),
+            mock.patch.object(setup.os, "geteuid", return_value=1000),
+            mock.patch.object(
+                setup, "run_root_noninteractive", return_value=setup.Completed((), "directory\n", "")
+            ) as probe,
+        ):
+            self.assertTrue(setup.share_directories_ready(accounts))
+            probe.assert_called_once_with(["stat", "-c", "%F", str(pathlib.Path(tmp) / "users/alice")], check=False)
+            probe.return_value = setup.Completed((), "symbolic link\n", "")
+            self.assertFalse(setup.share_directories_ready(accounts))
+
+    def test_root_readiness_rejects_missing_directories_and_symlinks(self) -> None:
+        accounts = [{"username": "alice", "active": True}]
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(setup, "SHARE_ROOT", pathlib.Path(tmp)),
+            mock.patch.object(setup.os, "geteuid", return_value=0),
+        ):
+            path = pathlib.Path(tmp) / "users/alice"
+            path.parent.mkdir()
+            self.assertFalse(setup.share_directories_ready(accounts))
+            path.mkdir()
+            self.assertTrue(setup.share_directories_ready(accounts))
+            path.rmdir()
+            path.symlink_to(path.parent, target_is_directory=True)
+            self.assertFalse(setup.share_directories_ready(accounts))
 
 
 class StorageProvisioningTests(unittest.TestCase):

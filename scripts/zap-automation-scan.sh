@@ -98,7 +98,7 @@ report_prefix="zap-automation-$MODE"
 
 # JSON is valid YAML. Auth credentials stay as environment-variable references
 # so the generated plan and uploaded reports never contain the plaintext secret.
-python3 - "$MODE" "$TARGET" "$DURATION" "$BROWSERS" "$plan" "$report_prefix" <<'PY_PLAN'
+python3 - "$MODE" "$TARGET" "$DURATION" "$BROWSERS" "$plan" "$report_prefix" "$SCRIPT_DIR/lib/zap-context.js" <<'PY_PLAN'
 from __future__ import annotations
 
 import json
@@ -107,7 +107,7 @@ import re
 import sys
 from urllib.parse import urlsplit
 
-mode, target, duration_text, browsers_text, output, prefix = sys.argv[1:]
+mode, target, duration_text, browsers_text, output, prefix, classification_script = sys.argv[1:]
 duration = int(duration_text)
 browsers = int(browsers_text)
 parsed = urlsplit(target)
@@ -200,6 +200,10 @@ if user_name:
         "tests": session_tests,
     })
 
+with open(classification_script, encoding="utf-8") as handle:
+    classification_source = ("var nasScanOrigin = " + json.dumps(f"{parsed.scheme}://{parsed.netloc}") + ";\n"
+        + "var nasAuthenticatedScan = " + json.dumps(mode == "authenticated") + ";\n" + handle.read())
+
 plan = {
     "env": {
         "contexts": [context],
@@ -222,6 +226,9 @@ plan = {
         },
         {"type": "activeScan", "parameters": active_parameters},
         {"type": "passiveScan-wait"},
+        {"type": "script", "parameters": {"action": "add", "type": "standalone",
+            "engine": "ECMAScript : Graal.js", "name": "nas-context", "inline": classification_source}},
+        {"type": "script", "parameters": {"action": "run", "type": "standalone", "name": "nas-context"}},
         {
             "type": "report",
             "parameters": {

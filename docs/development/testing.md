@@ -429,3 +429,48 @@ The `run-unit-tests.py --group fast` selector is the single authoritative set of
 fast-suite exclusions. Preflight, CI unit qualification, and the non-root CI
 run all use that selector; targeted integration and tooling tests still run
 separately. `--pattern` and `--exclude` remain available for focused runs.
+
+### Installed ZAP observations
+
+The packaged policy keeps session-management discovery (10112) informational,
+as specified by [ZAP](https://www.zaproxy.org/docs/alerts/10112/). It does not
+change cookie-security, session-verification, or Low+ failure thresholds.
+
+The automation plan runs `scripts/lib/zap-context.js` after passive scanning and
+before reports and the native exit-status job. Classified alerts remain in the
+reports with their original risk and the reason in Other Info. Classification
+requires the exact scan origin, rule, endpoint and evidence:
+
+- Authentik's `authentik_csrf` cookie on the default authentication flow must
+  remain readable by its frontend to construct the CSRF header. Session cookies
+  and missing Secure/SameSite protections receive no exception.
+- Cockpit's network-editor JavaScript includes the static example `10.0.0.1`.
+- The decimal SHA-1 constants 1518500249, 1732584193 and 1859775393 in the
+  Cockpit Podman/terminal bundles are algorithm constants, not disclosed dates.
+- A PII match inside the fractional part of a Cockpit numeric metrics frame
+  is informational only when the entire frame parses as nested numeric arrays.
+  Standalone card numbers, string/object payloads and truncated frames retain
+  their original risk.
+
+Private-IP WebSocket classification additionally requires authenticated scan
+mode, whose identity/session assertions run before the classifier. Only address,
+route, and DNS properties in complete Cockpit NetworkManager notifications are
+classified. For Cockpit's fragmented journal stream, every line containing the
+matched IP must be a complete JSON record of firewalld's exact unassigned-source
+diagnostic, with the expected systemd unit and identifier. Unauthenticated data,
+other properties or journal messages, and incomplete matching records remain
+fatal. This does not classify other rules on the management socket. Native ZAP
+controls verify that the authenticated NetworkManager and journal observations
+pass while unauthenticated observations, real PII and session failures still
+fail. Installed authorization checks remain required; a WebSocket URL alone is
+not proof of access control.
+
+Proxy disclosure remains enabled: the edge rejects TRACE/TRACK and OPTIONS with
+Max-Forwards before routing, while retaining normal CORS OPTIONS. In the
+automation plan, rule 40025 also sends a plaintext request to the TLS port as a
+blind-spot probe; its 400 rejection differs from the normal HTTPS status and the
+rule reports a second, unidentifiable node. Only that exact two-unknown-node
+report on an HTTPS origin is classified. Fingerprinted nodes, silent proxy
+cookies, and TRACE-enabled findings retain their risk. Installed ZAP and browser
+authorization tests must verify the probe policy on the exact candidate head.
+Host source tests are not installed qualification.

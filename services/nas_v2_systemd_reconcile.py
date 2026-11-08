@@ -11,6 +11,7 @@ V2 transaction selects the previous desired-state generation.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -19,7 +20,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from typing import Any
+from typing import Any, Mapping
 
 from nas_common import fsync_directory as _fsync_directory
 
@@ -208,6 +209,23 @@ def _set_link(
     target.symlink_to(resolved_source)
 
 
+def _update_links(
+    runtime_root: pathlib.Path,
+    links: Mapping[str, pathlib.Path | None],
+    projection_roots: tuple[pathlib.Path, ...],
+    *,
+    quadlet: bool = False,
+) -> None:
+    """Use ownership-checked targets for activation, retirement, and rollback; retain nonempty drop-in dirs."""
+    safe_target = _safe_quadlet_target if quadlet else _safe_target
+    for relative, source in links.items():
+        target, _ = safe_target(runtime_root, relative)
+        _set_link(target, source, projection_roots=projection_roots)
+        if source is None and target.parent != runtime_root:
+            with contextlib.suppress(OSError):
+                target.parent.rmdir()
+
+
 def _parse_links(
     manifest: dict[str, Any],
     *,
@@ -326,6 +344,7 @@ def reconcile(
     state_path: pathlib.Path,
     systemctl: str,
 ) -> dict[str, Any]:
+    """Apply native topology transactionally; lost transient sessions require manual recovery."""
     manifest = _read_json(manifest_path, required=True)
     previous = _read_json(state_path, required=False)
     if manifest.get("schemaVersion") != 1:
@@ -464,17 +483,8 @@ def reconcile(
         )
 
     def rollback_links() -> None:
-        for target_rel, source in live_systemd.items():
-            target_path, _ = _safe_target(systemd_runtime_dir, target_rel)
-            _set_link(target_path, source, projection_roots=roots)
-            if source is None and target_path.parent != systemd_runtime_dir:
-                try:
-                    target_path.parent.rmdir()
-                except OSError:
-                    pass
-        for target_rel, source in live_quadlet.items():
-            target_path, _ = _safe_quadlet_target(quadlet_runtime_dir, target_rel)
-            _set_link(target_path, source, projection_roots=roots)
+        _update_links(systemd_runtime_dir, live_systemd, roots)
+        _update_links(quadlet_runtime_dir, live_quadlet, roots, quadlet=True)
         if topology_changed:
             _run_systemctl(systemctl, "daemon-reload")
 
@@ -513,23 +523,10 @@ def reconcile(
         for unit in sorted(retired_units):
             _run_systemctl(systemctl, "reset-failed", unit, check=False)
 
-        for target_rel, source in links.items():
-            target_path, _ = _safe_target(systemd_runtime_dir, target_rel)
-            _set_link(target_path, source, projection_roots=roots)
-        for target_rel, source in quadlet_links.items():
-            target_path, _ = _safe_quadlet_target(quadlet_runtime_dir, target_rel)
-            _set_link(target_path, source, projection_roots=roots)
-        for target_rel in sorted(stale_links):
-            target_path, _ = _safe_target(systemd_runtime_dir, target_rel)
-            _set_link(target_path, None, projection_roots=roots)
-            if target_path.parent != systemd_runtime_dir:
-                try:
-                    target_path.parent.rmdir()
-                except OSError:
-                    pass
-        for target_rel in sorted(stale_quadlet_links):
-            target_path, _ = _safe_quadlet_target(quadlet_runtime_dir, target_rel)
-            _set_link(target_path, None, projection_roots=roots)
+        _update_links(systemd_runtime_dir, links, roots)
+        _update_links(quadlet_runtime_dir, quadlet_links, roots, quadlet=True)
+        _update_links(systemd_runtime_dir, dict.fromkeys(sorted(stale_links)), roots)
+        _update_links(quadlet_runtime_dir, dict.fromkeys(sorted(stale_quadlet_links)), roots, quadlet=True)
 
         if topology_changed:
             _run_systemctl(systemctl, "daemon-reload")

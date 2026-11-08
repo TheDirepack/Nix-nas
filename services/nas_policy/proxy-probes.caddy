@@ -1,0 +1,6 @@
+# A top-level route sorts after redir, so canonical redirects would answer
+# probes first. Matching handle blocks run in source order; keep this before them.
+@nas_probe expression `{method} == "TRACE" || {method} == "TRACK" || ({method} == "OPTIONS" && {header.Max-Forwards} != "")`
+handle @nas_probe {
+  respond 405
+}

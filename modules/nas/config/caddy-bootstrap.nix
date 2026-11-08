@@ -13,7 +13,7 @@ let
   authentikPathNoSlash = lib.removeSuffix "/" cfg.identity.authentikPath;
   activeCaddyPath = "/run/nas-control/caddy-active.conf";
   bootstrapCaddyfileGen = pkgs.writeShellScript "bootstrap-caddyfile-gen" ''
-    cat <<EOCF
+    cat <<'EOCF'
 {
   log {
     output file ${config.services.caddy.logDir}/access.log {
@@ -29,6 +29,7 @@ let
 https://${lanHost} {
   tls internal
   encode zstd gzip
+  ${builtins.readFile ../../../services/nas_policy/proxy-probes.caddy}
   header {
     -Server
     X-Content-Type-Options "nosniff"
@@ -80,7 +81,9 @@ https://${lanHost} {
     }
   }
 
-  redir ${authentikPathNoSlash} ${cfg.identity.authentikPath}
+  handle ${authentikPathNoSlash} {
+    redir * ${cfg.identity.authentikPath}
+  }
   @authentikUi path ${cfg.identity.authentikPath}*
   handle @authentikUi {
     reverse_proxy 127.0.0.1:${toString authentikPort}

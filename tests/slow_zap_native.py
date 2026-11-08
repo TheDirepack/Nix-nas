@@ -35,6 +35,170 @@ class NativeZapTests(unittest.TestCase):
             timeout=910,
         ).strip()
 
+    def test_contextual_observations_preserve_native_exit_gates(self) -> None:
+        source = (ROOT / "scripts/lib/zap-context.js").read_text()
+        seed = r"""
+var Alert = Java.type("org.parosproxy.paros.core.scanner.Alert");
+var Message = Java.type("org.parosproxy.paros.network.HttpMessage");
+var URI = Java.type("org.apache.commons.httpclient.URI");
+var ext = Java.type("org.parosproxy.paros.control.Control").getSingleton().getExtensionLoader().getExtension("ExtensionAlert");
+var msg = new Message(new URI("https://localhost/console/cockpit/socket", false));
+msg.setResponseHeader("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n");
+var alert = new Alert(__RULE__, __RISK__, 2, "Native context control");
+alert.setUri("https://localhost/console/cockpit/socket");
+alert.setEvidence(__EVIDENCE__);
+alert.setOtherInfo(__FRAME__);
+alert.setMessage(msg);
+ext.alertFound(alert, null);
+if (ext.getAllAlerts().size() !== 1) throw new Error("Native control was not registered");
+var fixtureAlerts = ext.getAllAlerts();
+var Data = Java.extend(Java.type("org.zaproxy.addon.automation.JobResultData"), {
+    getKey: function() { return "native-context"; },
+    getAllAlertData: function() { return fixtureAlerts; }
+});
+var af = Java.type("org.parosproxy.paros.control.Control").getSingleton().getExtensionLoader().getExtension("ExtensionAutomation");
+af.getRunningPlans().get(0).getProgress().addJobResultData(new Data("native-context"));
+"""
+        with tempfile.TemporaryDirectory() as raw:
+            directory = pathlib.Path(raw)
+            network = "[WebSocket Message] 4:6!6\n" + json.dumps(
+                {
+                    "notify": {
+                        "/org/freedesktop/NetworkManager/IP4Config/2": {
+                            "org.freedesktop.NetworkManager.IP4Config": {"Gateway": "10.0.2.2"}
+                        }
+                    }
+                }
+            )
+            journal = (
+                "[WebSocket Message] 4:4!3\npartial\n"
+                + json.dumps(
+                    {
+                        "_SYSTEMD_UNIT": "firewalld.service",
+                        "SYSLOG_IDENTIFIER": "firewalld",
+                        "MESSAGE": "ERROR: UNKNOWN_SOURCE: '10.89.0.0/24' is not in any zone",
+                    }
+                )
+                + '\n{"partial":'
+            )
+            proxy = (
+                "Using the TRACE, OPTIONS, and TRACK methods, the following proxy servers have been "
+                "identified between ZAP and the application/web server:\n- Unknown\n"
+                "The following web/application server has been identified:\n- Unknown\n"
+            )
+            for name, rule, risk, evidence, frame, authenticated, expected in (
+                ("fraction", 110005, 3, "4112318978587", "[WebSocket Message] 5:10!9\n[[1722.4112318978587]]", True, 0),
+                ("card", 110005, 3, "4111111111111111", "[WebSocket Message] 5:10!9\n[[4111111111111111]]", True, 1),
+                ("session", 90027, 1, "", "", True, 2),
+                ("admin-network", 110006, 1, "10.0.2.2", network, True, 0),
+                ("public-network", 110006, 1, "10.0.2.2", network, False, 2),
+                ("admin-journal", 110006, 1, "10.89.0.0", journal, True, 0),
+                (
+                    "unknown-journal",
+                    110006,
+                    1,
+                    "10.89.0.0",
+                    journal.replace("firewalld.service", "other.service"),
+                    True,
+                    2,
+                ),
+                ("plaintext-proxy", 40025, 2, "", proxy, True, 0),
+                (
+                    "fingerprinted-proxy",
+                    40025,
+                    2,
+                    "",
+                    proxy.replace("server:\n- Unknown", "server:\n- nginx/1.24"),
+                    True,
+                    1,
+                ),
+                ("trace-proxy", 40025, 3, "", proxy + "TRACE is enabled", True, 1),
+            ):
+                with self.subTest(control=name):
+                    setup = (
+                        seed.replace("__RULE__", str(rule))
+                        .replace("__RISK__", str(risk))
+                        .replace("__EVIDENCE__", json.dumps(evidence))
+                        .replace("__FRAME__", json.dumps(frame))
+                    )
+
+                    def script(action, name, inline=None):
+                        parameters = {"action": action, "type": "standalone", "name": name}
+                        if inline is not None:
+                            parameters.update(engine="ECMAScript : Graal.js", inline=inline)
+                        return {"type": "script", "parameters": parameters}
+
+                    plan = {
+                        "env": {
+                            "contexts": [
+                                {
+                                    "name": "fixture",
+                                    "urls": ["https://localhost/"],
+                                    "includePaths": [r"https://localhost/.*"],
+                                }
+                            ],
+                            "parameters": {"failOnError": True},
+                        },
+                        "jobs": [
+                            script("add", "seed", setup),
+                            script("run", "seed"),
+                            script(
+                                "add",
+                                "classify",
+                                'var nasScanOrigin = "https://localhost";\n'
+                                + "var nasAuthenticatedScan = "
+                                + json.dumps(authenticated)
+                                + ";\n"
+                                + source,
+                            ),
+                            script("run", "classify"),
+                            {
+                                "type": "exitStatus",
+                                "parameters": {
+                                    "errorLevel": "Medium",
+                                    "warnLevel": "Low",
+                                    "okExitValue": 0,
+                                    "warnExitValue": 2,
+                                    "errorExitValue": 1,
+                                },
+                            },
+                        ],
+                    }
+                    (directory / "plan.json").write_text(json.dumps(plan))
+                    result = subprocess.run(
+                        [
+                            "docker",
+                            "run",
+                            "--rm",
+                            "--network",
+                            "none",
+                            "--hostname",
+                            "localhost",
+                            "--user",
+                            f"{os.getuid()}:{os.getgid()}",
+                            "-e",
+                            "HOME=/tmp",
+                            "-e",
+                            "JAVA_TOOL_OPTIONS=-Duser.home=/tmp",
+                            "-v",
+                            f"{directory}:/fixture:ro",
+                            "--entrypoint",
+                            "zap.sh",
+                            self.image,
+                            "-cmd",
+                            "-silent",
+                            "-dir",
+                            "/tmp/zap-context",
+                            "-autorun",
+                            "/fixture/plan.json",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=180,
+                    )
+                    self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                    self.assertNotIn("Script failed", result.stdout + result.stderr)
+
     def test_cookie_transport_with_real_network_sender(self) -> None:
         driver = """
 import os, pathlib, subprocess, tempfile, zipfile
