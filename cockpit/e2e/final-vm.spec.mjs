@@ -607,9 +607,12 @@ test("installed Services editor reconciles form changes and preserves rejected e
     const invalid = "schemaVersion: 3\nservices: []\n";
     await yaml.fill(invalid);
     await first.save.click();
-    await expect(first.frame.locator(".nas-editor-card .pf-v6-c-alert")).toContainText(/services.*mapping/i, {
-      timeout: 60_000,
-    });
+    await expect(first.frame.locator(".nas-editor-card .pf-v6-c-alert")).toContainText(
+      /services.*mapping/i,
+      {
+        timeout: 60_000,
+      },
+    );
     await expect(yaml).toHaveValue(invalid);
 
     await page.reload();
@@ -628,7 +631,10 @@ test("installed Services editor reconciles form changes and preserves rejected e
       await expect(cleanup.save).toBeEnabled({timeout: 60_000});
       await expect(cleanup.frame.locator(".nas-editor-card .pf-v6-c-alert")).toHaveCount(0);
     } catch (error) {
-      await testInfo.attach("editor-cleanup-error", {body: String(error), contentType: "text/plain"});
+      await testInfo.attach("editor-cleanup-error", {
+        body: String(error),
+        contentType: "text/plain",
+      });
     }
     await otherPage.close();
   }
