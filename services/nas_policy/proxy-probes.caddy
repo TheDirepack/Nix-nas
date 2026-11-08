@@ -1,10 +1,6 @@
-# Stop diagnostic proxy probes before authentication or application handlers.
-route {
-  @nas_trace method TRACE TRACK
-  respond @nas_trace 405
-  @nas_options_probe {
-    method OPTIONS
-    header Max-Forwards *
-  }
-  respond @nas_options_probe 405
+# A top-level route sorts after redir, so canonical redirects would answer
+# probes first. Matching handle blocks run in source order; keep this before them.
+@nas_probe expression `{method} == "TRACE" || {method} == "TRACK" || ({method} == "OPTIONS" && {header.Max-Forwards} != "")`
+handle @nas_probe {
+  respond 405
 }

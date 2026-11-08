@@ -44,10 +44,10 @@ var URI = Java.type("org.apache.commons.httpclient.URI");
 var ext = Java.type("org.parosproxy.paros.control.Control").getSingleton().getExtensionLoader().getExtension("ExtensionAlert");
 var msg = new Message(new URI("https://localhost/console/cockpit/socket", false));
 msg.setResponseHeader("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n");
-var alert = new Alert(RULE, RISK, 2, "Native context control");
+var alert = new Alert(__RULE__, __RISK__, 2, "Native context control");
 alert.setUri("https://localhost/console/cockpit/socket");
-alert.setEvidence(EVIDENCE);
-alert.setOtherInfo(FRAME);
+alert.setEvidence(__EVIDENCE__);
+alert.setOtherInfo(__FRAME__);
 alert.setMessage(msg);
 ext.alertFound(alert, null);
 if (ext.getAllAlerts().size() !== 1) throw new Error("Native control was not registered");
@@ -116,10 +116,10 @@ af.getRunningPlans().get(0).getProgress().addJobResultData(new Data("native-cont
             ):
                 with self.subTest(control=name):
                     setup = (
-                        seed.replace("RULE", str(rule))
-                        .replace("RISK", str(risk))
-                        .replace("EVIDENCE", json.dumps(evidence))
-                        .replace("FRAME", json.dumps(frame))
+                        seed.replace("__RULE__", str(rule))
+                        .replace("__RISK__", str(risk))
+                        .replace("__EVIDENCE__", json.dumps(evidence))
+                        .replace("__FRAME__", json.dumps(frame))
                     )
 
                     def script(action, name, inline=None):

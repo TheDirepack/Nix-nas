@@ -469,8 +469,8 @@ Proxy disclosure remains enabled: the edge rejects TRACE/TRACK and OPTIONS with
 Max-Forwards before routing, while retaining normal CORS OPTIONS. In the
 automation plan, rule 40025 also sends a plaintext request to the TLS port as a
 blind-spot probe; its 400 rejection differs from the normal HTTPS status and the
-rule reports a second, unidentifiable node. Only that exact two-unknown-node report on an HTTPS origin
-is classified. Fingerprinted nodes, silent proxy cookies, and TRACE-enabled
-findings retain their risk. Installed ZAP and browser authorization tests must
-verify the probe policy on the exact candidate head. Host source tests are not
-installed qualification.
+rule reports a second, unidentifiable node. Only that exact two-unknown-node
+report on an HTTPS origin is classified. Fingerprinted nodes, silent proxy
+cookies, and TRACE-enabled findings retain their risk. Installed ZAP and browser
+authorization tests must verify the probe policy on the exact candidate head.
+Host source tests are not installed qualification.

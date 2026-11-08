@@ -59,7 +59,8 @@ class ManagedServicesV2RealCaddyTests(unittest.TestCase):
                 + str(port)
                 + " {\n"
                 + policy
-                + '\nrespond "application" 200\n}\n'
+                + "\nhandle /identity {\n  redir * /identity/\n}\n"
+                + 'respond "application" 200\n}\n'
             )
             process = subprocess.Popen(
                 [self.caddy_bin, "run", "--config", str(config), "--adapter", "caddyfile"],
@@ -73,22 +74,28 @@ class ManagedServicesV2RealCaddyTests(unittest.TestCase):
                             break
                     except OSError:
                         time.sleep(0.02)
-                for method, headers, expected in (
-                    ("TRACE", {}, 405),
-                    ("TRACK", {}, 405),
-                    ("OPTIONS", {"Max-Forwards": "0"}, 405),
-                    ("OPTIONS", {"Max-Forwards": "7"}, 405),
-                    ("OPTIONS", {"Origin": "https://example.test", "Access-Control-Request-Method": "POST"}, 200),
-                    ("GET", {}, 200),
-                    ("POST", {}, 200),
-                    ("PROPFIND", {}, 200),
+                cors = {"Origin": "https://example.test", "Access-Control-Request-Method": "POST"}
+                for path, method, headers, expected, body in (
+                    ("/console/", "TRACE", {}, 405, b""),
+                    ("/console/", "TRACK", {}, 405, b""),
+                    ("/console/", "OPTIONS", {"Max-Forwards": "0"}, 405, b""),
+                    ("/console/", "OPTIONS", {"Max-Forwards": "7"}, 405, b""),
+                    ("/console/", "OPTIONS", cors, 200, b"application"),
+                    ("/console/", "GET", {}, 200, b"application"),
+                    ("/console/", "POST", {}, 200, b"application"),
+                    ("/console/", "PROPFIND", {}, 200, b"application"),
+                    ("/identity", "TRACE", {}, 405, b""),
+                    ("/identity", "TRACK", {}, 405, b""),
+                    ("/identity", "OPTIONS", {"Max-Forwards": "7"}, 405, b""),
+                    ("/identity", "GET", {}, 302, b""),
+                    ("/identity", "OPTIONS", cors, 302, b""),
                 ):
-                    with self.subTest(method=method, headers=headers):
+                    with self.subTest(path=path, method=method, headers=headers):
                         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
-                        connection.request(method, "/console/", headers=headers)
+                        connection.request(method, path, headers=headers)
                         response = connection.getresponse()
                         self.assertEqual(response.status, expected)
-                        self.assertEqual(response.read(), b"" if expected == 405 else b"application")
+                        self.assertEqual(response.read(), body)
                         connection.close()
             finally:
                 process.terminate()
