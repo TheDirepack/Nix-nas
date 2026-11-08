@@ -1379,7 +1379,7 @@ def service_policy_ready(services: Mapping[str, str]) -> bool:
 
 
 def share_directories_ready(accounts: Sequence[Mapping[str, Any]]) -> bool:
-    """Reject missing paths and symlinks before recording setup completion."""
+    """Reject missing paths and symlinks during setup status and resume checks."""
 
     def directory_is_safe(path: pathlib.Path) -> bool:
         if os.geteuid() == 0:
