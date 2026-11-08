@@ -16,6 +16,12 @@ test("fractional metrics are observations; genuine card numbers and unrelated al
   for (const [rule, url, evidence, frame] of [
     [110005, socket, "4111111111111111", "[WebSocket Message] 5:10!9\n[[4111111111111111]]"],
     [110005, socket, "4111111111111111", '[WebSocket Message] 5:10!9\n{"card":"4111111111111111"}'],
+    [
+      110005,
+      socket,
+      "4111111111111111",
+      "[WebSocket Message] 5:10!9\n[[4111111111111111, 1722.4111111111111111]]",
+    ],
     [110005, socket, "4112318978587", sample + " secret"],
     [110005, origin + "/public/socket", "4112318978587", sample],
     [110005, "https://other.test/console/cockpit/socket", "4112318978587", sample],
