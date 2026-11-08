@@ -956,6 +956,7 @@ def apply_accounts(plan: Mapping[str, Any], *, confirm_password_reapply: bool = 
 
 
 def _personal_share_paths(accounts: Sequence[Mapping[str, Any]]) -> Iterator[pathlib.Path]:
+    """Require explicit boolean activation; guest membership always excludes a personal share."""
     for account in accounts:
         groups = set(account.get("groups", []))
         if account.get("active") is True and GUEST_GROUP not in groups:
@@ -1378,6 +1379,8 @@ def service_policy_ready(services: Mapping[str, str]) -> bool:
 
 
 def share_directories_ready(accounts: Sequence[Mapping[str, Any]]) -> bool:
+    """Reject missing paths and symlinks before recording setup completion."""
+
     def directory_is_safe(path: pathlib.Path) -> bool:
         if os.geteuid() == 0:
             try:

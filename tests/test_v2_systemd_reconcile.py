@@ -286,8 +286,9 @@ class V2SystemdReconcileTests(unittest.TestCase):
             self.assertEqual((runtime / unit).resolve(), (old / "units" / unit).resolve())
 
     def test_restart_failure_restores_both_link_types_and_cleans_new_dropin(self):
-        for keep_sibling in (False, True):
-            with self.subTest(keep_sibling=keep_sibling), tempfile.TemporaryDirectory() as raw:
+        """Failed activation must restore links whether removed or replaced, preserving local drop-ins."""
+        for keep_sibling, replace_quadlet in ((False, False), (True, False), (False, True), (True, True)):
+            with self.subTest(case=(keep_sibling, replace_quadlet)), tempfile.TemporaryDirectory() as raw:
                 root = pathlib.Path(raw)
                 projection = root / "projection"
                 projection.mkdir()
@@ -313,7 +314,13 @@ class V2SystemdReconcileTests(unittest.TestCase):
                     sibling.write_text("[Unit]\nDescription=local\n")
                 dropin_source = projection / "50-nas-v2.conf"
                 dropin_source.write_text("[Unit]\nAfter=network.target\n")
-                self.write_manifest(manifest, source, fingerprint="changed")
+                new_quadlet = None
+                if replace_quadlet:
+                    replacement = projection / "replacement"
+                    replacement.mkdir()
+                    new_quadlet = replacement / quadlet.name
+                    new_quadlet.write_text("[Container]\nImage=replacement\n")
+                self.write_manifest(manifest, source, fingerprint="changed", quadlet_source=new_quadlet)
                 payload = json.loads(manifest.read_text())
                 payload["links"].append({"target": "copyparty.service.d/50-nas-v2.conf", "source": str(dropin_source)})
                 manifest.write_text(json.dumps(payload))

@@ -216,6 +216,7 @@ def _update_links(
     *,
     quadlet: bool = False,
 ) -> None:
+    """Use ownership-checked targets for activation, retirement, and rollback; retain nonempty drop-in dirs."""
     safe_target = _safe_quadlet_target if quadlet else _safe_target
     for relative, source in links.items():
         target, _ = safe_target(runtime_root, relative)
@@ -343,6 +344,7 @@ def reconcile(
     state_path: pathlib.Path,
     systemctl: str,
 ) -> dict[str, Any]:
+    """Apply native topology transactionally; lost transient sessions require manual recovery."""
     manifest = _read_json(manifest_path, required=True)
     previous = _read_json(state_path, required=False)
     if manifest.get("schemaVersion") != 1:
