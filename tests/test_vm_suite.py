@@ -4,6 +4,7 @@ import hashlib
 import os
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -455,6 +456,17 @@ fail() { echo "$*" >&2; exit 1; }
         self.assertIn("--secret-payload-stdin", encrypted)
         self.assertNotIn("--skip-preflight", encrypted)
         self.assertNotIn("<<EOFSETUP", encrypted)
+
+    def test_encrypted_cli_plan_matches_configured_setup_api_path(self) -> None:
+        fixture = (ROOT / "tests/nixos/encrypted.nix").read_text(encoding="utf-8")
+        configured = re.search(r'nas\.firstStart\.configFile = lib\.mkForce "([^"]+)";', fixture)
+        self.assertIsNotNone(configured)
+        assert configured is not None
+        guest = ENCRYPTED_GUEST_TEST.read_text(encoding="utf-8")
+        plan = re.search(r"^plan_path=(.+)$", guest, re.MULTILINE)
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.group(1), configured.group(1))
 
     def test_source_refresh_waits_for_boot_repository_materialization(self) -> None:
         source = QEMU.read_text(encoding="utf-8")

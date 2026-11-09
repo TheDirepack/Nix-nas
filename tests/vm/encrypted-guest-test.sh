@@ -135,7 +135,7 @@ log "Run first-time setup through the encrypted-ZFS path"
 install -d -m 0700 -o admin -g users /var/lib/nas-test/setup
 printf '%s\n' 'nasadmin-vm-password' >/var/lib/nas-test/setup/nasadmin.password
 chmod 0600 /var/lib/nas-test/setup/nasadmin.password
-plan_path=/var/lib/nas-first-start/first-run.json
+plan_path=/var/lib/nas-test/setup/encrypted-first-run.json
 [[ ! -e "$plan_path" ]] || fail "encrypted setup unexpectedly has a prepared plan"
 jq -cn --arg device "$ZFS_DEVICE" \
   '{storage:{createPool:true,devices:[$device],wipeDevices:true}}' | \
