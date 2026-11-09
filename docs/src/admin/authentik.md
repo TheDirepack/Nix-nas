@@ -23,8 +23,17 @@ Use [Accounts and access](accounts.md) for the guarded NAS account CLI and [Acco
 
 ## Service token
 
-Successful first-start setup provisions and verifies a scoped runtime service-account token, stores it in KeePassXC, and retires the bootstrap authority. Routine post-setup token replacement is not required.
+Successful first-start setup provisions the `nas-automation` service account with the `NAS automation` role, stores both its scoped API token and the embedded outpost token in KeePassXC, and retires the bootstrap authority. Routine post-setup token replacement is not required.
 
-Run `sudo nas-secrets status` to inspect the runtime token warning. If recovery from an incomplete or older setup leaves the bootstrap token in use, create a scoped service-account token in Authentik and store it with `sudo nas-secrets set-authentik-token`. Activate secrets again with `sudo nas-secrets activate`, then run `sudo nas-secrets check-authentik-token` to confirm it differs from the bootstrap credential and `sudo nas-identity-sync verify-token` to verify runtime API access before retiring any remaining bootstrap credential. Enter secrets only at the commands' prompts; do not put them in arguments or environment variables. For interrupted first-start setup, follow [First start](first-run.md) and its journal recovery procedure before resuming.
+Run `sudo nas-secrets status` to inspect the runtime token warning. For interrupted first-start setup, follow [First start](first-run.md) and its journal recovery procedure before resuming. Keep bootstrap authority available until both runtime credentials and browser access have been recovered.
+
+If the outpost token is missing, use the existing setup runtime-token handoff through an authorized recovery integration:
+
+1. Run `nas-identity-sync bootstrap-runtime-token` under the configured operator's privileged setup authority. It assigns the `NAS automation` role, provisions the API token, and retrieves the embedded outpost token. Its JSON output contains secrets: capture it in process memory, never display or log it.
+2. Pass the KeePass password, returned `token`, and returned `outpostToken` as three newline-terminated stdin lines to `nas-secrets set-authentik-runtime-stdin`. This stores both `authentik-api-token` and `authentik-outpost-token`; the API-only setter cannot repair a missing outpost credential. Deliver secrets through the trusted integration's stdin transport, never arguments, environment variables, or persistent JSON files.
+3. Activate secrets again with `sudo nas-secrets activate`. Restart `authentik-outpost.service` and verify a fresh browser sign-in through Caddy and Authentik to the protected console. A working existing session alone does not prove the outpost can restart without bootstrap credentials.
+4. Run `sudo nas-secrets check-authentik-token` to confirm the API token differs from the bootstrap credential and `sudo nas-identity-sync verify-token` to check user/group read access. That read probe does not prove account-mutation permissions; confirm the service account retains the `NAS automation` role. Only after these checks and the browser check pass may the guarded setup recovery workflow retire bootstrap authority.
+
+If the outpost credential is already intact and only the API token needs replacement, assign its service account the same `NAS automation` role and store the replacement with `sudo nas-secrets set-authentik-token`. Enter secrets only at the commands' prompts, activate secrets again, and perform the same permission and browser checks before retiring any remaining bootstrap authority.
 
 CopyParty paths, ACLs, quotas, flags, and native share links do not belong in Authentik; configure them in CopyParty.
