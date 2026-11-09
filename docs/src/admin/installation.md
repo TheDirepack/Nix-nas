@@ -154,7 +154,7 @@ Everything below happens after setup completes and the system reboots.
 
 2. **Sign in through the browser.** Use Authentik via Caddy at `https://<nas-hostname>.local/console/` with the administrator account created during setup; do not use the retired `akadmin` identity.
 
-3. **Harden the Authentik API token.** Inspect the runtime token warning and follow the Authentik token procedure if rotation is required. Bootstrap and runtime credentials have separate lifecycles; do not reuse retired bootstrap credentials.
+3. **Harden the Authentik API token.** Run `sudo nas-secrets status` to inspect the runtime token warning. If rotation is required, follow the [Authentik token procedure](authentik.md#service-token). Bootstrap and runtime credentials have separate lifecycles; do not reuse retired bootstrap credentials.
 
 4. **Enable backups deliberately.** Same-pool Restic requires `backup.allowSamePoolRepository = true` and is rollback protection only. Production readiness requires an external Restic repository or enabled ZFS replication, which the readiness assertions from Phase 1 already enforce.
 

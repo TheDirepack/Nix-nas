@@ -172,6 +172,10 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("first-start-reconcile", setup_page)
         wizard = text("setup/first-run-wizard/src/steps/ConfirmStep.jsx")
         self.assertIn("password", wizard)
+        self.assertIn("if (plan.requiresDestructiveConfirmation && !allowDestructive) {", wizard)
+        self.assertIn("if (!plan || !/^[0-9a-f]{64}$/.test(plan.planDigest || '')) {", wizard)
+        self.assertIn("planDigest: plan.planDigest,", wizard)
+        self.assertIn("allowDestructiveStorage: allowDestructive,", wizard)
 
     def test_setup_api_can_publish_expected_first_start_status(self) -> None:
         application = text("modules/nas/config/application-services.nix")

@@ -150,9 +150,10 @@ class CustomInputSurfaceFuzzTests(unittest.TestCase):
             "username": "operator",
             "name": "Operator",
             "email": "operator@example.test",
-            "password": "example",
+            "password": "long-enough-password",
         }
         payload = {"keepass": "valid-secret", "administrator": administrator}
+        first_start.parse_first_start_secrets(json.dumps(payload))
         payload[field] = value
         try:
             password, parsed_admin = first_start.parse_first_start_secrets(json.dumps(payload))
