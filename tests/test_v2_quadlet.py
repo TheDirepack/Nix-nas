@@ -152,10 +152,12 @@ class V2QuadletTests(unittest.TestCase):
                 with self.assertRaisesRegex(quadlet.QuadletProjectionError, expected):
                     self.render(effective, service)
 
-    def test_real_generator_preserves_attachment_arguments(self):
-        generator = os.environ.get("NAS_V2_QUADLET_GENERATOR_BIN") or shutil.which("podman-system-generator")
-        if not generator:
-            generator = next(
+    @staticmethod
+    def find_quadlet_generator() -> str | None:
+        return (
+            os.environ.get("NAS_V2_QUADLET_GENERATOR_BIN")
+            or shutil.which("podman-system-generator")
+            or next(
                 (
                     path
                     for path in (
@@ -166,6 +168,10 @@ class V2QuadletTests(unittest.TestCase):
                 ),
                 None,
             )
+        )
+
+    def test_real_generator_preserves_attachment_arguments(self):
+        generator = self.find_quadlet_generator()
         if generator is None:
             self.skipTest("Podman Quadlet generator not available")
         effective, service = self.compile_service(
@@ -347,21 +353,7 @@ class V2QuadletTests(unittest.TestCase):
         self.assertFalse(any(item["target"] == "nas-v2-demo.service" for item in manifest["links"]))
 
     def test_real_projection_validation_resolves_quadlet_readiness_dependencies(self):
-        generator = (
-            os.environ.get("NAS_V2_QUADLET_GENERATOR_BIN")
-            or shutil.which("podman-system-generator")
-            or next(
-                (
-                    path
-                    for path in (
-                        "/usr/lib/systemd/system-generators/podman-system-generator",
-                        "/usr/lib/podman/quadlet",
-                    )
-                    if os.access(path, os.X_OK)
-                ),
-                None,
-            )
-        )
+        generator = self.find_quadlet_generator()
         analyzer = shutil.which("systemd-analyze")
         if not generator or not analyzer:
             self.skipTest("Podman generator and systemd-analyze are required")
