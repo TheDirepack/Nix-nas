@@ -37,6 +37,8 @@ class SystemdProjectionError(RuntimeError):
 
 _SAFE_IDENTITY = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_.-]{0,63}|[0-9]{1,10})$")
 APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
+# Leave room for process startup and bounded probes within the 180s apply client.
+PERSISTENT_READINESS_TIMEOUT_MAX = 150
 _CTRL = ("\x00", "\r", "\n")
 
 
@@ -404,6 +406,7 @@ def _readiness_unit(
     source_dir: pathlib.Path,
     descriptor_path: pathlib.Path,
     systemctl_bin: str,
+    timeout_seconds: int,
 ) -> bytes:
     return (
         "\n".join(
@@ -416,6 +419,7 @@ def _readiness_unit(
                 "",
                 "[Service]",
                 "Type=oneshot",
+                f"TimeoutStartSec={timeout_seconds + 10}",
                 f"ExecStart={_exec_quote(python_bin)} {_exec_quote(str(source_dir / 'nas_v2_readiness.py'))} --config {_exec_quote(str(descriptor_path))} --systemctl {_exec_quote(systemctl_bin)}",
                 "NoNewPrivileges=yes",
                 "PrivateTmp=yes",
@@ -773,6 +777,15 @@ def generate_projection(
 
         if "readiness" in service:
             readiness = json.loads(json.dumps(service["readiness"]))
+            timeout_seconds = readiness.get("timeoutSeconds", 60)
+            if (
+                service["workload"]["kind"] == "daemon"
+                and service["workload"]["activation"] == "persistent"
+                and timeout_seconds > PERSISTENT_READINESS_TIMEOUT_MAX
+            ):
+                raise SystemdProjectionError(
+                    f"{service_id}: persistent readiness timeoutSeconds must be at most {PERSISTENT_READINESS_TIMEOUT_MAX} within the apply budget"
+                )
             for probe in readiness["probes"]:
                 if probe["type"] == "systemd" and not probe.get("unit"):
                     probe["unit"] = owner
@@ -787,6 +800,7 @@ def generate_projection(
                 source_dir=source_dir,
                 descriptor_path=dpath,
                 systemctl_bin=systemctl_bin,
+                timeout_seconds=timeout_seconds,
             )
             links[ready] = str(rpath)
             fingerprints[ready] = _fingerprint(readiness)

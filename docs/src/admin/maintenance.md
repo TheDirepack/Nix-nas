@@ -25,7 +25,11 @@ For offline checks before installation or while debugging, use `nas-v2 validate`
 ## Rejected application updates
 
 Saving an always-on application's definition in Cockpit Services runs its declared
-readiness probes after activating an affected runtime. A probe failure rejects
+readiness probes after activating an affected runtime. Persistent-daemon
+readiness budgets are limited to 150 seconds; longer budgets are rejected during
+projection validation before runtime activation. The generated gate includes
+a finite startup allowance for probe and process overhead inside the existing
+180-second controller and 300-second guarded-apply limits. A probe failure rejects
 the apply. The controller attempts to restore the previous generation's runtime
 links, previously active owners, and recorded state. It reports failed or
 uncertain recovery explicitly; a rejected update must not be treated as healthy
@@ -43,7 +47,10 @@ sudo journalctl -b -u nas-v2-ready-APP.service -u nas-managed-services-reconcile
 Check the declared endpoint, path or native-unit probe and the workload's own
 logs. Correct the application definition or its dependency, then retry through
 Services. An affected unit that is starting, stopping or reloading must settle
-before a safe snapshot can be taken. If the error reports manual recovery,
+before a safe snapshot can be taken. A changed state detected immediately before
+mutation also rejects the apply. Keep lifecycle changes on the coordinated
+Cockpit/CLI path; avoid direct concurrent `systemctl` changes during an apply.
+The final state recheck narrows the race but cannot lock arbitrary root actions. If the error reports manual recovery,
 inspect the named units before retrying. Do not clear a readiness failure just
 to make an update appear successful; earlier probe failures remain in the
 journal even when a later probe succeeds.

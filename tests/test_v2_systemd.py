@@ -258,6 +258,33 @@ class V2SystemdProjectionTests(unittest.TestCase):
         self.assertNotIn("nas-v2-demo.service", manifest["startUnits"])
         self.assertFalse(any("nas-v2-lease-" in unit or "nas-v2-idle-" in unit for unit in manifest["ownedUnits"]))
 
+    def test_persistent_readiness_respects_controller_budget(self):
+        for lifecycle_mode, timeout in (
+            ("persistent", 150),
+            ("persistent", 151),
+            ("persistent", 3600),
+            ("on-demand", 3600),
+        ):
+            with self.subTest(activation=lifecycle_mode, timeout=timeout):
+                service = {
+                    "name": "Demo",
+                    "workload": {"kind": "daemon", "activation": lifecycle_mode},
+                    "runtime": {"type": "oci", "image": "example.invalid/demo:1"},
+                    "routes": self.route(),
+                    "readiness": {"timeoutSeconds": timeout, "probes": [{"type": "tcp", "port": 8080}]},
+                }
+                if lifecycle_mode == "on-demand":
+                    service["workload"]["idleSeconds"] = 90
+                effective = self.compile({"demo": service})
+                output = pathlib.Path("/projection")
+                if lifecycle_mode == "persistent" and timeout > 150:
+                    with self.assertRaisesRegex(systemd.SystemdProjectionError, "persistent readiness.*150"):
+                        self.generate(effective, output)
+                else:
+                    files, _ = self.generate(effective, output)
+                    unit = files[output / "units" / "nas-v2-ready-demo.service"].decode()
+                    self.assertIn(f"TimeoutStartSec={timeout + 10}", unit)
+
     def test_persistent_daemon_apply_includes_declared_readiness_gate(self):
         for runtime in (
             {"type": "oci", "image": "example.invalid/demo:1"},

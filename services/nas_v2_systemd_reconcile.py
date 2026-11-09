@@ -585,6 +585,9 @@ def reconcile(
     activated_units: set[str] = set()
     attempted_readiness: set[str] = set()
     state_commit_attempted = False
+    for unit, expected in state_snapshot.items():
+        if unit_state(unit) != expected:
+            raise SystemdReconcileError(f"systemd state changed before mutation: {unit}; retry after it settles")
     try:
         for unit in sorted(units_to_stop):
             if _SESSION_TARGET.fullmatch(unit) and unit not in previous_links_raw and unit not in current_links:

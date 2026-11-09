@@ -327,6 +327,37 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                         self.assertFalse((runtime / source.name).exists())
                         self.assertTrue(all(call.args[1] == "is-active" for call in calls.call_args_list))
 
+    def test_state_change_after_snapshot_aborts_without_runtime_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            projection = root / "projection"
+            projection.mkdir()
+            source = projection / "nas-v2-demo.service"
+            source.write_text("[Service]\nExecStart=/bin/true\n")
+            manifest = projection / "manifest.json"
+            self._manifest(manifest, source)
+            states = iter(("inactive", "active"))
+
+            def systemctl(_binary, operation, *units, check=True):
+                self.assertEqual(operation, "is-active")
+                state = next(states)
+                return subprocess.CompletedProcess([], 0 if state == "active" else 3, state, "")
+
+            with (
+                mock.patch.object(reconcile, "_run_systemctl", side_effect=systemctl),
+                self.assertRaisesRegex(reconcile.SystemdReconcileError, "state changed before mutation"),
+            ):
+                reconcile.reconcile(
+                    manifest_path=manifest,
+                    projection_root=projection,
+                    systemd_runtime_dir=root / "runtime",
+                    quadlet_runtime_dir=root / "quadlets",
+                    state_path=root / "state.json",
+                    systemctl="systemctl",
+                )
+            self.assertFalse((root / "state.json").exists())
+            self.assertFalse((root / "runtime" / source.name).exists())
+
     def test_failed_first_state_publication_restores_absence(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
