@@ -24,7 +24,7 @@ Have everything on this list before starting:
 1. [Configure the host](#phase-1-configure-the-host): generate hardware configuration, edit `local.nix`.
 2. [Build and install NixOS](#phase-2-build-and-install-nixos): format the OS disk, install the `.#nas` configuration.
 3. [Prepare the first-run plan](#phase-3-prepare-the-first-run-plan): fill in accounts and the storage plan.
-4. [Complete guided setup](#phase-4-complete-guided-setup): browser wizard or CLI.
+4. [Complete guided setup](#phase-4-complete-guided-setup): browser wizard.
 5. [Verify and record](#phase-5-verify-and-record): unlock, harden tokens, write down recovery material.
 
 ## Phase 1: Configure the host
@@ -134,38 +134,13 @@ Example mirror configuration:
 
 ## Phase 4: Complete guided setup
 
-Two routes reach the same result. Run either as the configured local administrator, not as root.
+Complete setup through the browser wizard. The installed CLI performs validation and privileged execution behind it.
 
-### Route A: the browser wizard
+### Open the browser wizard
 
 Open `https://<nas-hostname>.local/setup/` and follow the first-start wizard: administrator account, storage plan and ZFS-encryption choice, and final confirmation. Encryption is recommended and starts enabled; its key is created in the new system-side KeePassXC database before ZFS is created. Configure the host locale declaratively in NixOS; the wizard does not maintain a second mutable locale setting.
 
 Authentik gates the wizard. Sign in with temporary identity `akadmin` and the private password generated on first boot. Retrieve it through the trusted console or an authorized SSH recovery session using the command in [First start](first-run.md). The Linux bootstrap login uses a separate development or release-specific password and requires a password change at first local login. Setup rebuilds Authentik and PostgreSQL on the system partition, creates your permanent Authentik and ZFS-backed Linux administrator, and removes both temporary identities.
-
-### Route B: the CLI from a recovery terminal
-
-From the local console, SSH session, or KVM terminal:
-
-```bash
-status_json="$(nas-setup prepare-first-start --config /etc/nixos/nixos-nas/first-run.json)"
-plan_digest="$(printf '%s' "$status_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["planDigest"])')"
-nas-setup first-run \
-  --config /etc/nixos/nixos-nas/first-run.json \
-  --confirm-plan-digest "$plan_digest"
-```
-
-When creating a new pool, repeat `--confirm-storage-device` once per configured disk and pass `--allow-destructive-storage`:
-
-```bash
-nas-setup first-run \
-  --config /etc/nixos/nixos-nas/first-run.json \
-  --confirm-storage-device /dev/disk/by-id/ata-EXACT_DISK_0 \
-  --confirm-storage-device /dev/disk/by-id/ata-EXACT_DISK_1 \
-  --confirm-plan-digest "$plan_digest" \
-  --allow-destructive-storage
-```
-
-The destructive flag is required even when wiping is disabled, because creating a pool writes ZFS labels. Setup prompts once for the KeePass database password, is resumable if interrupted, and never silently creates pools. The full stage order and automation options are in [First start](first-run.md).
 
 ## Phase 5: Verify and record
 
@@ -179,7 +154,7 @@ Everything below happens after setup completes and the system reboots.
 
 2. **Sign in through the browser.** Use Authentik via Caddy at `https://<nas-hostname>.local/console/` with the administrator account created during setup; do not use the retired `akadmin` identity.
 
-3. **Harden the Authentik API token.** The runtime token still equals the bootstrap token at this point. Create a narrower service-account token in Authentik and store it with `nas-secrets set-authentik-token`. Complete this before production use.
+3. **Harden the Authentik API token.** Run `sudo nas-secrets status` to inspect the runtime token warning. If rotation is required, follow the [Authentik token procedure](authentik.md#service-token). Bootstrap and runtime credentials have separate lifecycles; do not reuse retired bootstrap credentials.
 
 4. **Enable backups deliberately.** Same-pool Restic requires `backup.allowSamePoolRepository = true` and is rollback protection only. Production readiness requires an external Restic repository or enabled ZFS replication, which the readiness assertions from Phase 1 already enforce.
 

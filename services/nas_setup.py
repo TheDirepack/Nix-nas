@@ -2267,8 +2267,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     first = sub.add_parser("first-run", help="Perform idempotent first-time appliance setup")
     first.add_argument("--config", required=True, help="Setup JSON file")
-    first.add_argument(
+    password_input = first.add_mutually_exclusive_group()
+    password_input.add_argument(
         "--keepass-password-stdin", action="store_true", help="Read one KeePass password line from stdin"
+    )
+    password_input.add_argument(
+        "--secret-payload-stdin",
+        action="store_true",
+        help="Read bounded first-start KeePass/administrator JSON from trusted process stdin",
     )
     first.add_argument(
         "--create-database",
@@ -2348,6 +2354,12 @@ def main() -> int:
         elif args.command == "prepare-first-start":
             result = prepare_first_start(args.config)
         elif args.command == "first-run":
+            if args.secret_payload_stdin:
+                raw = sys.stdin.read(8193)
+                line = raw[:-1] if raw.endswith("\n") else raw
+                if len(raw.encode("utf-8")) > 8192 or "\n" in line or "\r" in line:
+                    raise SetupError("First-start secret input must be one bounded JSON line")
+                args.keepass_password_value, args.administrator = parse_first_start_secrets(line)
             result = first_run(args)
         elif args.command == "run-first-start-job":
             result = run_first_start_job(args.request_file, args.password_file)

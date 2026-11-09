@@ -109,18 +109,18 @@ Test restored keys against a clone or read-only recovery environment whenever po
 
 ## KeePassXC recovery
 
-1. Restore the KDBX and optional key file to the paths configured in `nas.secrets`.
-2. Check ownership and permissions; the database must not be writable by unrelated users.
-3. Run:
+1. Preserve the current KDBX and optional key file as private rollback material. For token-only recovery, restore only the matching `authentik-api-token` and `authentik-outpost-token` entries through the trusted stdin handoff in the [Authentik service-token recovery procedure](../src/admin/authentik.md#service-token). Preserve unrelated current ZFS keys and service secrets. Replace the entire KDBX and optional key file at the configured `nas.secrets` paths only when every affected secret has been verified against its service or encrypted dataset and the selected recovery point; matching Authentik tokens alone do not establish that.
+2. Check ownership and permissions; the database must not be writable by unrelated users. After bootstrap retirement, do not run `nas-secrets init` or restore retired bootstrap entries: initialization would create new bootstrap credentials rather than recover the retired authority.
+3. For **every** restored API token, synchronize the existing boot-side API-token file using the linked procedure's root-only stdin handoff **before activation or reboot**, even when no bootstrap-token warning is present. A scoped token can still differ from the boot-side key. If synchronization fails, stop and repair the handoff before continuing.
+4. After both credential stores agree, run:
 
    ```bash
-   sudo nas-secrets init
    sudo nas-secrets status
    sudo nas-secrets activate
    sudo nas-secrets check-authentik-token
    ```
 
-`init` creates only missing entries. It does not replace existing secrets. If the runtime Authentik token still equals the bootstrap token, Cockpit and `nas-secrets` show a warning; replace it with a scoped read-only token and reactivate.
+Complete the linked procedure's role checks, runtime read probe, outpost restart and fresh browser sign-in. A missing bootstrap-token warning alone does not prove the token has the required permissions or the outpost can restart. Interrupted first-start recovery must retain its existing journal and authority checks; do not initialize replacement bootstrap credentials to bypass them.
 
 ## Authentik PostgreSQL and media restore
 

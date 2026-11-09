@@ -56,6 +56,32 @@ class ContractTests(unittest.TestCase):
         documentation = text("modules/nas/internal/documentation-tools.nix")
         self.assertIn("passthru.cockpitPath = [ plugin ];", documentation)
 
+    def test_token_recovery_links_resolve_in_installed_manual(self):
+        tools = text("modules/nas/internal/documentation-tools.nix")
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            shutil.copytree(ROOT / "docs/src", work / "src")
+            recovery = work / "src/reference/project-RECOVERY.md"
+            shutil.copyfile(ROOT / "docs/operator/recovery.md", recovery)
+            rewrites = [line.strip() for line in tools.splitlines() if line.strip().startswith("sed -i ")]
+            subprocess.run(
+                ["bash", "-eu", "-c", "\n".join(rewrites)],
+                env={**os.environ, "work": str(work)},
+                check=True,
+            )
+            for source, label, heading in (
+                (work / "src/admin/authentik.md", "KeePassXC recovery procedure", "## KeePassXC recovery"),
+                (recovery, "Authentik service-token recovery procedure", "## Service token"),
+            ):
+                match = re.search(r"\[" + re.escape(label) + r"\]\(([^)]+)\)", source.read_text())
+                assert match is not None
+                target, anchor = match.group(1).split("#")
+                destination = (source.parent / target).resolve()
+                self.assertTrue(destination.is_relative_to(work / "src"))
+                self.assertTrue(destination.is_file(), destination)
+                self.assertIn(heading, destination.read_text())
+                self.assertEqual(anchor, heading.removeprefix("## ").lower().replace(" ", "-"))
+
     def test_packaging_concerns_are_split_without_duplicate_exports(self):
         accounts = text("modules/nas/internal/account-tools.nix")
         documentation = text("modules/nas/internal/documentation-tools.nix")

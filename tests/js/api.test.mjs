@@ -9,7 +9,6 @@ import {
   replaceManagedServicesDocument,
   replaceManagedServicesJsonDocument,
   setManagedServiceMode,
-  startFirstRun,
 } from "../../cockpit/src/api.js";
 
 test("api uses only the fixed privileged Cockpit backend", async () => {
@@ -173,21 +172,6 @@ const jsonRequests = [
       replaceManagedServicesJsonDocument({schemaVersion: 3, services: {}}, "b".repeat(64), spawn),
   ],
   ["service mode", (spawn) => setManagedServiceMode("grafana", "on-demand", spawn)],
-  [
-    "first start",
-    (spawn) =>
-      startFirstRun(
-        "correct horse battery staple",
-        {
-          username: "nasadmin",
-          name: "Admin",
-          email: "admin@example.test",
-          password: "long-enough-password",
-        },
-        {planDigest: "c".repeat(64)},
-        spawn,
-      ),
-  ],
 ];
 
 for (const [name, request] of jsonRequests) {
@@ -233,88 +217,6 @@ test("JSON transport still rejects an unavailable Cockpit process API before spa
   assert.throws(() => api(["overview"], null), /Cockpit process API is unavailable/);
 });
 
-test("first-start sends password and safety choices only in a JSON stdin request", async () => {
-  const calls = [];
-  const spawn = (command, options) => {
-    const process = Promise.resolve('{"schemaVersion":1,"jobId":"abc","status":"submitted"}');
-    process.input = (value) => calls.push(["input", value]);
-    calls.push(["spawn", command, options]);
-    return process;
-  };
-  const result = await startFirstRun(
-    "correct horse battery staple",
-    {
-      username: "nasadmin",
-      name: "NAS Administrator",
-      email: "admin@example.test",
-      password: "new local password",
-    },
-    {
-      allowDestructiveStorage: true,
-      planDigest: "a".repeat(64),
-      confirmPasswordReapply: true,
-      devices: ["/dev/disk/by-id/disk-one"],
-    },
-    spawn,
-  );
-  assert.equal(result.status, "submitted");
-  assert.deepEqual(calls[0], [
-    "spawn",
-    ["nas-cockpit-api", "first-start"],
-    {superuser: "require", err: "message"},
-  ]);
-  const request = JSON.parse(calls[1][1]);
-  assert.deepEqual(request, {
-    password: "correct horse battery staple",
-    administrator: {
-      username: "nasadmin",
-      name: "NAS Administrator",
-      email: "admin@example.test",
-      password: "new local password",
-    },
-    planDigest: "a".repeat(64),
-    devices: ["/dev/disk/by-id/disk-one"],
-    allowDestructiveStorage: true,
-    confirmPasswordReapply: true,
-  });
-  assert.equal(calls[0][1].includes("correct horse battery staple"), false);
-});
-
-test("first-start rejects invalid administrator recovery details before spawning", () => {
-  const spawn = () => assert.fail("invalid administrator details reached the privileged process");
-  const options = {planDigest: "a".repeat(64)};
-  assert.throws(
-    () =>
-      startFirstRun(
-        "correct horse battery staple",
-        {
-          username: "nasadmin",
-          name: "NAS Administrator",
-          email: "invalid",
-          password: "long-enough-password",
-        },
-        options,
-        spawn,
-      ),
-    /email is invalid/i,
-  );
-  assert.throws(
-    () =>
-      startFirstRun(
-        "correct horse battery staple",
-        {
-          username: "nasadmin",
-          name: "NAS Administrator",
-          email: "admin@example.test",
-          password: "short",
-        },
-        options,
-        spawn,
-      ),
-    /at least 12/i,
-  );
-});
-
 test("unlock sends the password only over stdin", () => {
   const calls = [];
   const process = {
@@ -337,16 +239,6 @@ test("secret transports reject empty and multiline passwords before spawning", (
   const fail = () => assert.fail("spawn should not run");
   assert.throws(() => activateSecrets("", fail), /Enter/);
   assert.throws(() => activateSecrets("bad\nvalue", fail), /single line/);
-  assert.throws(
-    () =>
-      startFirstRun(
-        "bad\rvalue",
-        {username: "nasadmin", name: "Admin", email: "admin@example.test", password: "password"},
-        {planDigest: "a".repeat(64)},
-        fail,
-      ),
-    /single line/,
-  );
 });
 
 test("secret transports preserve hostile single-line values only on stdin", async () => {
@@ -357,24 +249,12 @@ test("secret transports preserve hostile single-line values only on stdin", asyn
     return process;
   };
   const password = "'\"\\$`;&|<> password";
-  await startFirstRun(
-    password,
-    {username: "nasadmin", name: "Admin", email: "admin@example.test", password},
-    {planDigest: "b".repeat(64)},
-    spawn,
-  );
   activateSecrets(password, spawn);
   assert.deepEqual(
     inputs.map(({command}) => command),
-    [
-      ["nas-cockpit-api", "first-start"],
-      ["nas-secrets", "activate-stdin"],
-    ],
+    [["nas-secrets", "activate-stdin"]],
   );
-  const request = JSON.parse(inputs[0].value);
-  assert.equal(request.password, password);
-  assert.equal(request.planDigest, "b".repeat(64));
-  assert.equal(inputs[1].value, `${password}\n`);
+  assert.equal(inputs[0].value, `${password}\n`);
   assert.equal(
     inputs.some(({command}) => [].concat(command).some((arg) => arg.includes(password))),
     false,
