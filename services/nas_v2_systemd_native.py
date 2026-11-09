@@ -25,6 +25,7 @@ from nas_v2_activation import (
     socket_path,
     socket_unit,
 )
+from nas_v2_apply_budget import document_budget
 from nas_v2_compose_import import ComposeImportError, import_compose
 from nas_v2_libvirt import LibvirtProjectionError, render_domain_xml, validate_domain_xml
 from nas_v2_quadlet import QuadletProjectionError, render_quadlet, validate_quadlets
@@ -37,7 +38,7 @@ class SystemdProjectionError(RuntimeError):
 
 _SAFE_IDENTITY = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_.-]{0,63}|[0-9]{1,10})$")
 APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
-# Leave room for startup and probes within the 180s per-unit systemctl client.
+# Individual probes stay bounded; activation budgets also cover dependencies.
 PERSISTENT_READINESS_TIMEOUT_MAX = 150
 _CTRL = ("\x00", "\r", "\n")
 
@@ -877,6 +878,7 @@ def generate_projection(
 
     manifest = {
         "schemaVersion": 1,
+        "activationTimeoutSeconds": document_budget(projection_effective)["commandSeconds"],
         "links": [{"target": target, "source": source} for target, source in sorted(links.items())],
         "quadletLinks": [{"target": target, "source": source} for target, source in sorted(quadlet_links.items())],
         "ownedUnits": sorted(owned_units),

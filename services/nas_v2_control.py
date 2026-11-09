@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from nas_common import parse_systemd_show, run_command
+from nas_v2_apply_budget import client_timeout
 from nas_v2_editor import (
     ManagedServicesEditorError,
     read_document,
@@ -204,7 +205,7 @@ def _read_json_document(source: str) -> dict[str, Any]:
 def _reconcile() -> None:
     # The oneshot unit records the attempted Git revision, arms rollback,
     # applies/verifies runtime projections, then advances refs/nas/applied.
-    _systemctl("start", RECONCILE_UNIT, timeout_seconds=330)
+    _systemctl("start", RECONCILE_UNIT, timeout_seconds=client_timeout())
 
 
 def _attach_status(result: dict[str, Any]) -> dict[str, Any]:

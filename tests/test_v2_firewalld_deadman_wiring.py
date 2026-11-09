@@ -18,8 +18,10 @@ class V2TransactionWiringTests(unittest.TestCase):
 
         self.assertIn("nas_guarded_apply.py", pre_start)
         self.assertIn("systemd-run", pre_start)
-        self.assertIn("guardTimeoutSeconds = 300;", managed)
-        self.assertIn("--timeout ${toString guardTimeoutSeconds}", pre_start)
+        self.assertIn("nas_v2_apply_budget.py", pre_start)
+        self.assertIn(".transactionSeconds", pre_start)
+        self.assertIn('--timeout "$guard_timeout"', pre_start)
+        self.assertLess(pre_start.index("nas_v2_apply_budget.py"), pre_start.index("nas_guarded_apply.py"))
         self.assertIn("${guardUnitShell}", pre_start)
         self.assertIn("bootstrap", pre_start)
         self.assertNotIn(" record", pre_start)

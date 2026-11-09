@@ -275,14 +275,16 @@ def _parse_links(
     return links, affected_units, hashes, drift
 
 
-def _run_systemctl(systemctl: str, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+def _run_systemctl(
+    systemctl: str, *args: str, check: bool = True, timeout_seconds: int = _SYSTEMCTL_TIMEOUT_SECONDS
+) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
             [systemctl, *args],
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
-            timeout=_SYSTEMCTL_TIMEOUT_SECONDS,
+            timeout=timeout_seconds,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -360,6 +362,13 @@ def reconcile(
     previous, previous_bytes = _read_json(state_path, required=False)
     if manifest.get("schemaVersion") != 1:
         raise SystemdReconcileError("unsupported systemd projection manifest version")
+    activation_timeout = manifest.get("activationTimeoutSeconds", _SYSTEMCTL_TIMEOUT_SECONDS)
+    if not isinstance(activation_timeout, int) or isinstance(activation_timeout, bool) or activation_timeout < 180:
+        raise SystemdReconcileError("invalid activationTimeoutSeconds")
+    previous_timeout = previous.get("activationTimeoutSeconds", _SYSTEMCTL_TIMEOUT_SECONDS)
+    if not isinstance(previous_timeout, int) or isinstance(previous_timeout, bool) or previous_timeout < 180:
+        raise SystemdReconcileError("invalid previous activationTimeoutSeconds")
+    activation_timeout = max(activation_timeout, previous_timeout)
 
     links, affected_units, current_hashes, link_drift = _parse_links(
         manifest,
@@ -580,7 +589,7 @@ def reconcile(
                 errors.append(f"cannot safely start {unit} without restored links")
                 continue
             try:
-                _run_systemctl(systemctl, "start" if was_active else "stop", unit)
+                _run_systemctl(systemctl, "start" if was_active else "stop", unit, timeout_seconds=activation_timeout)
             except SystemdReconcileError as error:
                 errors.append(str(error))
         return errors
@@ -626,15 +635,15 @@ def reconcile(
                 continue
             activated_units.add(unit)
             if unit in start:
-                _run_systemctl(systemctl, "restart", unit)
+                _run_systemctl(systemctl, "restart", unit, timeout_seconds=activation_timeout)
                 restarted.add(unit)
             else:
-                _run_systemctl(systemctl, "try-restart", unit)
+                _run_systemctl(systemctl, "try-restart", unit, timeout_seconds=activation_timeout)
 
         units_to_start = (start - previous_start) - restarted - readiness
         for unit in sorted(units_to_start):
             activated_units.add(unit)
-            _run_systemctl(systemctl, "start", unit)
+            _run_systemctl(systemctl, "start", unit, timeout_seconds=activation_timeout)
 
         for owner in sorted(set(readiness_owners.values()) - activated_units):
             before = observed_readiness[owner]
@@ -661,11 +670,12 @@ def reconcile(
                 readiness_to_run.add(gate)
         if readiness_to_run:
             attempted_readiness.update(readiness_to_run)
-            _run_systemctl(systemctl, "restart", *sorted(readiness_to_run))
+            _run_systemctl(systemctl, "restart", *sorted(readiness_to_run), timeout_seconds=activation_timeout)
             restarted.update(readiness_to_run)
 
         state = {
             "schemaVersion": 1,
+            "activationTimeoutSeconds": manifest.get("activationTimeoutSeconds", _SYSTEMCTL_TIMEOUT_SECONDS),
             "links": current_links,
             "linkHashes": current_hashes,
             "quadletLinks": current_quadlet_links,
@@ -699,7 +709,7 @@ def reconcile(
             for unit in sorted(activated_units):
                 if active_snapshot.get(unit) is True and unit not in disrupted_sessions:
                     try:
-                        _run_systemctl(systemctl, "restart", unit)
+                        _run_systemctl(systemctl, "restart", unit, timeout_seconds=activation_timeout)
                     except SystemdReconcileError as restart_exc:
                         rollback_errors.append(str(restart_exc))
         rollback_errors.extend(rollback_active_state(links_restored=links_restored))

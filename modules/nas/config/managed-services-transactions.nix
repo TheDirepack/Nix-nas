@@ -12,7 +12,7 @@ let
   systemdProjectionPath = "/run/nas-control/systemd";
   systemdManifestPath = "${systemdProjectionPath}/manifest.json";
   systemdStatePath = "/run/nas-control/systemd-reconciled.json";
-  guardTimeoutSeconds = 300;
+  budgetFile = "/run/nas-control/apply-budget.json";
   guardStateDir = "/run/nas-control/rollback-guard";
   guardCurrentFile = "${guardStateDir}/current-guard-unit";
   firewalldProjectionPath = "/run/nas-control/firewalld";
@@ -144,6 +144,7 @@ in
     # opt the production entry point into that history transaction.
     systemd.services.nas-managed-services-reconcile.environment.NAS_V2_HISTORY_REPOSITORY = historyRepoPath;
     systemd.services.nas-managed-services-reconcile.environment.NAS_V2_GIT_BIN = "${pkgs.git}/bin/git";
+    systemd.services.nas-managed-services-reconcile.environment.NAS_V2_APPLY_BUDGET = budgetFile;
 
     # Convert edge-triggered services.yaml notifications into a level-triggered
     # pending marker. systemd.path rechecks PathExists when the oneshot exits,
@@ -189,13 +190,17 @@ in
       ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} bootstrap
       ${guardUnitShell}
       ${pkgs.coreutils}/bin/mkdir -p ${lib.escapeShellArg guardStateDir}
+      ${v2Python}/bin/python ${v2Source}/nas_v2_apply_budget.py \
+        --desired ${lib.escapeShellArg desiredPath} \
+        --state ${lib.escapeShellArg systemdStatePath} > ${lib.escapeShellArg budgetFile}
+      guard_timeout="$(${pkgs.jq}/bin/jq -er '.transactionSeconds' ${lib.escapeShellArg budgetFile})"
       ${pkgs.coreutils}/bin/printf '%s' "$guard_unit" > ${lib.escapeShellArg guardCurrentFile}
       ${v2Python}/bin/python ${v2Source}/nas_guarded_apply.py \
         --unit "$guard_unit" \
         --systemctl ${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"} \
         --state-dir ${lib.escapeShellArg guardStateDir} \
         arm \
-        --timeout ${toString guardTimeoutSeconds} \
+        --timeout "$guard_timeout" \
         --systemd-run ${lib.escapeShellArg "${pkgs.systemd}/bin/systemd-run"} \
         -- ${rollbackToApplied}
     '';

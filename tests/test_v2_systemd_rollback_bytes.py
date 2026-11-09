@@ -117,6 +117,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                         json.dumps(
                             {
                                 "schemaVersion": 1,
+                                "activationTimeoutSeconds": 900,
                                 "links": [{"target": ready, "source": str(gate)}],
                                 "quadletLinks": [{"target": source.name, "source": str(source)}],
                                 "ownedUnits": [owner, ready],
@@ -148,7 +149,9 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 running = {"version": None, "allow_candidate": False, "fail_restore": False, "gate_state": "inactive"}
                 calls = []
 
-                def systemctl(_binary, operation, *units, check=True):
+                def systemctl(_binary, operation, *units, check=True, timeout_seconds=180):
+                    if operation in {"start", "restart", "try-restart"}:
+                        self.assertGreaterEqual(timeout_seconds, 900)
                     calls.append((operation, *units))
                     code, output = 0, ""
                     if operation == "is-active":
@@ -324,7 +327,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 state = root / "state.json"
                 runtime = root / "runtime"
 
-                def systemctl(_binary, operation, *units, check=True):
+                def systemctl(_binary, operation, *units, check=True, timeout_seconds=180):
                     return subprocess.CompletedProcess(
                         [], code if operation == "is-active" else 0, output if operation == "is-active" else "", ""
                     )
@@ -368,7 +371,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
             self._manifest(manifest, source)
             states = iter(("inactive", "active"))
 
-            def systemctl(_binary, operation, *units, check=True):
+            def systemctl(_binary, operation, *units, check=True, timeout_seconds=180):
                 self.assertEqual(operation, "is-active")
                 state = next(states)
                 return subprocess.CompletedProcess([], 0 if state == "active" else 3, state, "")
@@ -400,7 +403,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
             state = root / "state.json"
             active = set()
 
-            def systemctl(_binary, operation, *units, check=True):
+            def systemctl(_binary, operation, *units, check=True, timeout_seconds=180):
                 if operation in {"start", "restart"}:
                     active.add(units[0])
                 elif operation == "stop":

@@ -29,9 +29,14 @@ readiness probes after activating an affected runtime. Persistent-daemon
 readiness budgets are limited to 150 seconds; longer budgets are rejected during
 projection validation before runtime activation. The generated gate includes
 a finite startup allowance for probe and process overhead. Affected gates run
-together in one systemd job within the 180-second per-unit controller limit.
-The guarded apply retains its 300-second limit; the CLI waits up to 330 seconds
-so that it can report the guard's result. A probe failure rejects
+together in one systemd job. Before arming rollback, the command derives a finite
+budget from the desired dependency graph, declared readiness deadlines and prior
+owned units. It includes allowances for ordered dependency startup, sequential
+owner activation, compensation and other projections. The CLI and Cockpit wait
+beyond that same transaction budget so they can report its result. Large service
+graphs can therefore take longer before the rollback guard fires. A desired edit
+after budgeting rejects the transaction before compilation and runtime mutation;
+retry the edit after the current operation finishes. A probe failure rejects
 the apply. The controller attempts to restore the previous generation's runtime
 links, previously active owners, and recorded state. It reports failed or
 uncertain recovery explicitly; a rejected update must not be treated as healthy

@@ -322,6 +322,11 @@ def _compile_document_with_platform(
 def _compile_paths_inner(paths: ApplyPaths) -> tuple[dict[str, Any], dict[str, Any]]:
     schema = load_schema(paths.schema)
     desired_bytes = paths.desired.read_bytes()
+    budget_file = os.environ.get("NAS_V2_APPLY_BUDGET")
+    if budget_file:
+        budget = json.loads(pathlib.Path(budget_file).read_text())
+        if budget.get("desiredSha256") != hashlib.sha256(desired_bytes).hexdigest():
+            raise SystemdProjectionError("desired state changed after apply budgeting; retry reconciliation")
     effective = _compile_document_with_platform(
         parse_yaml_text(desired_bytes.decode("utf-8"), source=str(paths.desired)),
         schema,

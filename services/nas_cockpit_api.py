@@ -29,6 +29,7 @@ import syslog
 from typing import Any, cast
 
 from nas_common import CommandResult, parse_systemd_show, run_command
+from nas_v2_apply_budget import client_timeout as managed_apply_timeout
 from nas_operation_lock import (
     OperationBusyError,
     acquire_operation,
@@ -618,7 +619,7 @@ def set_managed_service(service_id: str, mode: str) -> dict[str, Any]:
             env = dict(os.environ)
             env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
             command = ["nas-managed-services-control", "set", service_id, mode]
-            result = run(command, check=False, timeout_seconds=180, env=env)
+            result = run(command, check=False, timeout_seconds=managed_apply_timeout() + 30, env=env)
     except OperationBusyError as exc:
         raise ApiError(str(exc)) from exc
     if result.returncode != 0:
