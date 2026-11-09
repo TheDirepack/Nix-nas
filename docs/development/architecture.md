@@ -30,6 +30,18 @@ Telegraf ---> VictoriaMetrics ---> vmalert ---> Alertmanager ---> alertmanager-n
 
 The arrows describe authority or controlled data flow, not unrestricted write access.
 
+The browser is the primary operator interface and a thin client of the installed
+CLI commands. Commands own authorization, input validation, locks, planning,
+execution, rollback and status interpretation. Browser validation and disabled
+controls are presentation aids only. A direct CLI invocation must enforce the
+same constraints as a browser request. Test policy and failure handling at that
+command boundary; use browser tests for transport, interaction and rendering.
+
+The overview renders one CLI snapshot. It does not query systemd separately or
+reinterpret process activity as application health. A running process has unknown
+application health until an appropriate health observation establishes it. Failed
+probes remain unavailable rather than becoming empty successful results.
+
 ## Sources of truth
 
 | Concern | Authority |

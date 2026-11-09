@@ -283,7 +283,8 @@ class Ws07EffectiveStateTests(unittest.TestCase):
                 self.assertTrue(demo["effective"])
                 self.assertTrue(demo["available"])
                 self.assertFalse(demo["running"])
-                self.assertEqual(demo["healthState"], "inactive")
+                self.assertEqual(demo["healthState"], "unknown")
+                self.assertEqual(demo["stateLabel"], "Stopped")
                 # Now active
             with (
                 mock.patch.object(control, "desired_status", return_value=status),
@@ -299,7 +300,8 @@ class Ws07EffectiveStateTests(unittest.TestCase):
                 result2 = control.status()
                 demo2 = next(r for r in result2["services"] if r["id"] == "demo")
                 self.assertTrue(demo2["running"])
-                self.assertEqual(demo2["healthState"], "healthy")
+                self.assertEqual(demo2["healthState"], "unknown")
+                self.assertEqual(demo2["stateLabel"], "Running")
 
     def test_valid_effective_continues_to_report_accurate_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

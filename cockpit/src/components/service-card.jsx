@@ -25,7 +25,7 @@ export function ServiceCard({service, onMode, disabled}) {
       </CardHeader>
       <CardBody>
         <div className="nas-card-row">
-          <StatusLabel ok={service.healthy === true || service.effectiveMode === "on-demand"}>
+          <StatusLabel ok={service.statusLevel === "ok"}>
             {managedServiceUnitState(service)}
           </StatusLabel>
           <Label>{MODE_LABELS[service.requestedMode] || service.requestedMode || "unknown"}</Label>
