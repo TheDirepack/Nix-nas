@@ -20,13 +20,20 @@ class FirstStartReadinessTests(unittest.TestCase):
         self.state = self.root / "state.json"
         self.journal = self.root / "journal.json"
 
-    def validate(self, path):
+    def validate(self, path, *, owner: int | None = None):
         source = (ROOT / "modules/nas/config/install-readiness.nix").read_text()
         function = source.split("    check_file() {", 1)[1].split("    check_file ${", 1)[0]
         block = source.split("${lib.optionalString cfg.firstStart.enable ''", 1)[1].split("''}", 1)[0]
         script = "set -euo pipefail\ncheck_file() {" + function + block
+        stat_command = shlex.quote(shutil.which("stat") or "stat")
+        if owner is not None:
+            script = (
+                f"readiness_stat() {{ if [[ \"$2\" == %u ]]; then printf '%s\\n' {owner}; "
+                f'else {stat_command} "$@"; fi; }}\n' + script
+            )
+            stat_command = "readiness_stat"
         for before, after in (
-            ("${pkgs.coreutils}/bin/stat", shlex.quote(shutil.which("stat") or "stat")),
+            ("${pkgs.coreutils}/bin/stat", stat_command),
             ("${lib.escapeShellArg cfg.firstStart.configFile}", shlex.quote(str(path))),
             ("/var/lib/nas-first-start/first-run.json", str(self.default)),
             ("/var/lib/nas-setup/state.json", str(self.state)),
@@ -66,3 +73,20 @@ class FirstStartReadinessTests(unittest.TestCase):
         self.default.write_text("{}")
         self.default.chmod(0o600)
         self.assertEqual(self.validate(self.default).returncode, 0)
+
+    def test_plan_mode_policy_independent_of_owner(self):
+        self.default.write_text("{}")
+        for mode, accepted in ((0o666, False), (0o600, True)):
+            with self.subTest(mode=oct(mode)):
+                self.default.chmod(mode)
+                result = self.validate(self.default, owner=0)
+                self.assertEqual(result.returncode == 0, accepted, result.stderr)
+                if not accepted:
+                    self.assertIn("must be root-owned and not group/other writable", result.stderr)
+
+    def test_private_plan_with_nonroot_owner_is_rejected(self):
+        self.default.write_text("{}")
+        self.default.chmod(0o600)
+        result = self.validate(self.default, owner=1000)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be root-owned and not group/other writable", result.stderr)
