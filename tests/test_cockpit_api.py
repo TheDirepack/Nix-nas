@@ -32,6 +32,28 @@ SPEC.loader.exec_module(api)
 
 
 class CockpitApiTests(unittest.TestCase):
+    def test_overview_preserves_unknown_failed_unit_and_pool_probes(self):
+        for code, output, expected in ((1, "", None), (0, "DEGRADED", False), (0, "all pools are healthy", True)):
+            with (
+                self.subTest(code=code, output=output),
+                mock.patch.object(api, "managed_services_status", return_value={"services": []}),
+                mock.patch.object(api, "shared_operation_state", return_value={}),
+                mock.patch.object(api, "setup_status", return_value={}),
+                mock.patch.object(api, "update_status", return_value={}),
+                mock.patch.object(api, "service_states", return_value={}),
+                mock.patch.object(api, "portal_entries", return_value=[]),
+                mock.patch.object(api, "read_optional_text", return_value=None),
+                mock.patch.object(api, "run", return_value=api.CommandResult(code, output, "")),
+            ):
+                value = api.overview()
+            self.assertIs(value["zfs"]["healthy"], expected)
+            if code:
+                self.assertIsNone(value["failedUnits"])
+                self.assertEqual(value["failedUnitsStatus"]["state"], "unknown")
+            else:
+                self.assertIsInstance(value["failedUnits"], list)
+            self.assertTrue(value["failedUnitsStatus"]["checkedAt"])
+
     def completed(self, *, returncode: int = 0, stdout: str = "", stderr: str = ""):
         return mock.Mock(returncode=returncode, stdout=stdout, stderr=stderr)
 

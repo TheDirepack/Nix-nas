@@ -16,6 +16,7 @@ import pathlib
 import pwd
 import re
 import secrets
+from datetime import datetime, timezone
 import socket
 import socketserver
 import struct
@@ -676,6 +677,10 @@ def overview() -> dict[str, Any]:
     zpool = results["zpool"]
     zfs = results["zfs"]
     failed = results["failed"]
+    checked_at = datetime.now(timezone.utc).isoformat()
+    failed_known = isinstance(failed, CommandResult) and failed.returncode == 0
+    pool_known = isinstance(zpool, CommandResult) and zpool.returncode == 0
+    pool_healthy = pool_known and zpool.stdout.strip() in {"all pools are healthy", f"pool '{ZFS_POOL}' is healthy"}
     return {
         "host": socket.gethostname(),
         "protectedReady": pathlib.Path("/run/nas-secrets/ready").exists(),
@@ -686,11 +691,14 @@ def overview() -> dict[str, Any]:
         "operations": operation_state(managed),
         "services": results["services"],
         "zfs": {
-            "healthy": isinstance(zpool, CommandResult) and zpool.returncode == 0,
+            "healthy": pool_healthy if pool_known else None,
+            "stateLabel": "Healthy" if pool_healthy else "Attention required" if pool_known else "Status unavailable",
+            "checkedAt": checked_at,
             "summary": (zpool.stdout or zpool.stderr).strip() if isinstance(zpool, CommandResult) else "unavailable",
             "dataset": (zfs.stdout or zfs.stderr).strip() if isinstance(zfs, CommandResult) else "unavailable",
         },
-        "failedUnits": failed.stdout.strip().splitlines() if isinstance(failed, CommandResult) else [],
+        "failedUnits": failed.stdout.strip().splitlines() if failed_known else None,
+        "failedUnitsStatus": {"state": "known" if failed_known else "unknown", "checkedAt": checked_at},
         "links": static_links(),
         "managedServiceLinks": portal_entries(),
     }

@@ -406,7 +406,7 @@ class CockpitApiDriftTests(unittest.TestCase):
 
     def test_overview_aggregates_v2_services_and_probe_failures(self) -> None:
         managed = {"services": [{"id": "demo", "units": [{"unit": "demo.service"}, {"bad": True}]}]}
-        healthy = CommandResult(0, "healthy", "")
+        healthy = CommandResult(0, "all pools are healthy", "")
         with (
             mock.patch.object(api, "managed_services_status", return_value=managed),
             mock.patch.object(api, "setup_status", return_value={"status": "ready"}),

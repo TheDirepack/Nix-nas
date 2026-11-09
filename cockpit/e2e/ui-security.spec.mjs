@@ -303,6 +303,17 @@ test("renders hostile backend text as text, never executable markup", async ({pa
   expect(pageErrors).toEqual([]);
 });
 
+test("unavailable CLI probes never render an empty successful health result", async ({page}) => {
+  const data = overview();
+  data.failedUnits = null;
+  data.zfs = {healthy: null, stateLabel: "Status unavailable"};
+  await installCockpitMock(page, {payload: data});
+  await page.goto("/index.html");
+  await expect(page.getByText("Failed-unit status unavailable. Refresh to retry.")).toBeVisible();
+  await expect(page.getByText("No failed units reported.")).toHaveCount(0);
+  await expect(page.getByText("Status unavailable", {exact: true})).toBeVisible();
+});
+
 for (const [name, payload] of hostileDisplayCorpus) {
   test(`overview, managed-service label, and source branch stay inert: ${name}`, async ({page}) => {
     const pageErrors = [];

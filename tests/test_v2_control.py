@@ -49,10 +49,90 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
             result = control.status()
         row = result["services"][0]
         self.assertTrue(row["running"])
-        self.assertTrue(row["healthy"])
+        self.assertIsNone(row["healthy"])
+        self.assertEqual(row["stateLabel"], "Running")
+        self.assertEqual(row["healthState"], "unknown")
         self.assertEqual(row["units"][0]["memoryBytes"], 4096)
         self.assertNotIn("features", result)
         self.assertEqual(result["controller"], "managed-services-v2")
+
+    def test_cli_status_distinguishes_failed_unknown_sleeping_and_scheduled_owners(self):
+        for state, mode, kind, role, expected in (
+            ({}, "always", "daemon", "owner", "Status unavailable"),
+            ({"ActiveState": "failed"}, "always", "daemon", "owner", "Failed"),
+            ({"ActiveState": "inactive"}, "on-demand", "daemon", "owner", "Sleeping"),
+            ({"ActiveState": "active"}, "always", "job", "schedule", "Scheduled"),
+        ):
+            row = {
+                "id": "demo",
+                "effective": True,
+                "effectiveMode": mode,
+                "workloadKind": kind,
+                "units": [{"unit": "demo.service", "role": role}],
+            }
+            with (
+                self.subTest(expected=expected),
+                mock.patch.object(control, "desired_status", return_value={"services": [row]}),
+                mock.patch.object(control, "_unit_snapshot", return_value={"demo.service": state}),
+            ):
+                result = control.status()["services"][0]
+            self.assertEqual(result["stateLabel"], expected)
+            self.assertIsNone(result["healthy"])
+            if role == "schedule":
+                self.assertFalse(result["running"], "an armed timer is not a running application")
+
+    def test_status_does_not_report_unavailable_or_transitional_units_as_idle(self):
+        for mode in ("always", "on-demand"):
+            for load, active, expected in (
+                ("not-found", "inactive", "Status unavailable"),
+                ("error", "inactive", "Status unavailable"),
+                ("bad-setting", "active", "Status unavailable"),
+                ("loaded", "activating", "Starting"),
+                ("loaded", "deactivating", "Stopping"),
+                ("loaded", "reloading", "Reloading"),
+                ("loaded", "maintenance", "Status unavailable"),
+            ):
+                with self.subTest(mode=mode, load=load, active=active):
+                    row = {
+                        "id": "demo",
+                        "effective": True,
+                        "effectiveMode": mode,
+                        "units": [{"unit": "demo.service", "role": "owner"}],
+                    }
+                    snapshot = {"demo.service": {"LoadState": load, "ActiveState": active}}
+                    with (
+                        mock.patch.object(control, "desired_status", return_value={"services": [row]}),
+                        mock.patch.object(control, "_unit_snapshot", return_value=snapshot),
+                    ):
+                        result = control.status()["services"][0]
+                    self.assertEqual(result["stateLabel"], expected)
+                    self.assertEqual(result["statusLevel"], "warning")
+                    self.assertIsNone(result["healthy"])
+                    self.assertEqual(result["units"][0]["loadState"], load)
+                    self.assertFalse(result["running"])
+
+    def test_masked_units_distinguish_blocked_wake_from_running_and_off(self):
+        for mode, active, label, level, running in (
+            ("on-demand", "inactive", "Status unavailable", "warning", False),
+            ("on-demand", "active", "Running", "ok", True),
+            ("off", "inactive", "Stopped", "warning", False),
+        ):
+            with self.subTest(mode=mode, active=active):
+                row = {
+                    "id": "demo",
+                    "effectiveMode": mode,
+                    "units": [{"unit": "demo.service", "role": "owner"}],
+                }
+                snapshot = {"demo.service": {"LoadState": "masked", "ActiveState": active}}
+                with (
+                    mock.patch.object(control, "desired_status", return_value={"services": [row]}),
+                    mock.patch.object(control, "_unit_snapshot", return_value=snapshot),
+                ):
+                    result = control.status()["services"][0]
+                self.assertEqual(result["stateLabel"], label)
+                self.assertEqual(result["statusLevel"], level)
+                self.assertEqual(result["running"], running)
+                self.assertIsNone(result["healthy"])
 
     def test_set_mode_reconciles_after_atomic_editor_update(self):
         with tempfile.TemporaryDirectory() as tmp:
