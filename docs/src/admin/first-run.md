@@ -10,7 +10,7 @@ The service does not silently create a pool, read a KeePassXC password, or make
 identity changes. It prepares the resumable workflow and shows one of these
 states in `nas-setup status`:
 
-- `configuration-missing`: create the configured JSON file;
+- `configuration-missing`: create the storage plan in the wizard or supply a reviewed JSON file;
 - `configuration-invalid`: correct the reported schema or policy error;
 - `state-invalid`: repair or recover the setup journal/state file;
 - `ready`: review the exact non-secret storage, account, feature plan, and plan
@@ -27,14 +27,20 @@ The defaults are:
 
 ```nix
 nas.firstStart.enable = true;
-nas.firstStart.configFile = "/etc/nixos/nixos-nas/first-run.json";
+nas.firstStart.configFile = "/var/lib/nas-first-start/first-run.json";
 ```
+
+To retain a plan previously stored at `/etc/nixos/nixos-nas/first-run.json`,
+set `nas.firstStart.configFile` to that path explicitly before upgrading.
+Existing plans are never imported or overwritten automatically.
+
+Installation readiness permits the default plan to be absent before setup starts,
+so the wizard can create it. An explicit custom path must already contain a
+root-owned plan. After setup starts, the original plan remains required for recovery.
 
 `nas-setup` performs the actual appliance workflow by calling the existing
 component authorities in their required order. It does not replace NixOS,
 KeePassXC, Authentik, CopyParty, or ZFS.
-
-## Prepare the configuration
 
 ## First-boot Authentik access
 
@@ -87,7 +93,14 @@ on the administrator account, storage plan, and final confirmation. Host locale
 remains declarative NixOS configuration rather than a second mutable setup
 authority.
 
-Copy `setup/first-run.example.json` and edit it outside the Nix store. The file
+On a fresh appliance, select data disks and a pool layout in the wizard and
+choose **Review storage plan**. The CLI validates device use and creates the
+missing root-owned plan without formatting disks. It refuses to replace an
+existing plan or one whose setup has started. The destructive confirmation
+remains a separate step.
+
+For advanced preconfigured installations, copy `setup/first-run.example.json`
+and edit it outside the Nix store. The file
 may define storage creation, Authentik accounts, reserved NAS groups, and initial
 feature modes.
 
@@ -115,7 +128,7 @@ default. Password-file paths must be absolute.
 Validate the file before making changes:
 
 ```bash
-nas-setup validate-config /etc/nixos/nixos-nas/first-run.json
+nas-setup validate-config /var/lib/nas-first-start/first-run.json
 ```
 
 ## Complete first start
@@ -207,7 +220,7 @@ Review the prepared plan from the recovery plane as the configured local
 administrator, not as root:
 
 ```bash
-nas-setup prepare-first-start --config /etc/nixos/nixos-nas/first-run.json
+nas-setup prepare-first-start --config /var/lib/nas-first-start/first-run.json
 nas-setup status
 ```
 
@@ -224,13 +237,6 @@ preserve the current Authentik password.
 Before setup completes, Caddy serves the static `/setup` guidance page and the
 Authentik gate protects every management route. The setup wizard itself is
 reachable only after signing in with the bootstrap Authentik identity.
-
-During first start, Authentik creates its temporary `akadmin` bootstrap identity
-using the credential for the exact source artifact: `nas-admin-first-boot` for
-the development tree, or the five-word password published with a manually published
-tagged release. Setup creates and verifies the chosen `nas_admin` administrator,
-then retires that bootstrap identity. After protected services are ready, use
-Authentik through Caddy for all browser access.
 
 The Storage step links to Cockpit Storage for disk partitioning or pool import,
 and to the Cockpit terminal for advanced ZFS work. Return to the wizard and

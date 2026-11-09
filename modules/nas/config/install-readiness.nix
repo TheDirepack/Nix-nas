@@ -108,7 +108,14 @@ let
       check_file ${lib.escapeShellArg cfg.secrets.keepassKeyFile} "KeePassXC key file" private
     ''}
     ${lib.optionalString cfg.firstStart.enable ''
-      check_file ${lib.escapeShellArg cfg.firstStart.configFile} "first-start configuration" root-config
+      first_start_config=${lib.escapeShellArg cfg.firstStart.configFile}
+      # Only the fresh wizard-owned default may be absent. Existing plans and
+      # interrupted setup retain the same required-file and ownership policy.
+      if [[ "$first_start_config" != /var/lib/nas-first-start/first-run.json ||
+            -e "$first_start_config" || -L "$first_start_config" ||
+            -e /var/lib/nas-setup/state.json || -e /var/lib/nas-setup/first-run-journal.json ]]; then
+        check_file "$first_start_config" "first-start configuration" root-config
+      fi
     ''}
     ${lib.optionalString cfg.backup.enable ''
       check_file ${lib.escapeShellArg cfg.backup.passwordFile} "Restic password file" private

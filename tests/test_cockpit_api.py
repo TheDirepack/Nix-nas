@@ -544,6 +544,30 @@ class SetupApiTransportTests(unittest.TestCase):
 
 
 class SetupApiCapabilityTests(unittest.TestCase):
+    def test_plan_creation_transport_uses_fixed_cli_path_and_stdin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, socket_path = self.live_server(directory)
+            request = {"storage": {"createPool": True, "devices": ["/dev/vdb"]}}
+            with mock.patch.object(api, "run", return_value=api.CommandResult(0, '{"status":"ready"}', "")) as run:
+                status, result = self.exchange(socket_path, "POST", "/setup/api/first-start/plan", body=request)
+            self.assertIn(b"200", status)
+            self.assertEqual(result, {"status": "ready"})
+            run.assert_called_once_with(
+                [api._setup_entry(), "create-first-start-plan", "--config", api.FIRST_RUN_CONFIG],
+                check=False,
+                timeout_seconds=60,
+                input_text=json.dumps(request),
+            )
+
+    def test_disk_discovery_transport_uses_cli(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, socket_path = self.live_server(directory)
+            with mock.patch.object(api, "run", return_value=api.CommandResult(0, '{"devices":[]}', "")) as run:
+                status, result = self.exchange(socket_path, "GET", "/setup/api/storage-options")
+            self.assertIn(b"200", status)
+            self.assertEqual(result, {"devices": []})
+            run.assert_called_once_with([api._setup_entry(), "storage-options"], check=False, timeout_seconds=60)
+
     """A05/A13: header capability lifecycle, resume, and reboot authorization."""
 
     def setUp(self) -> None:
@@ -1059,6 +1083,34 @@ class SetupApiCapabilityTests(unittest.TestCase):
             submit.assert_called_once_with({})
             self.assertEqual(response["jobId"], "b" * 24)
             self.assertEqual(api.read_active_setup_job(), "b" * 24)
+
+    def test_first_run_route_rejects_stale_digest_before_reservation(self) -> None:
+        request = {
+            "password": "database-password",
+            "planDigest": "0" * 64,
+            "devices": ["/dev/vdb"],
+            "allowDestructiveStorage": True,
+            "encryptStorage": True,
+            "administrator": {
+                "username": "nasadmin",
+                "name": "NAS Administrator",
+                "email": "admin@example.test",
+                "password": "administrator-password",
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            _, socket_path = self.live_server(directory)
+            with (
+                mock.patch.object(api, "first_start_status", return_value={"status": "ready", "planDigest": "a" * 64}),
+                mock.patch.object(api, "reserve_operation") as reserve,
+                mock.patch.object(api, "_write_private_new") as write,
+            ):
+                status, response = self.exchange(socket_path, "POST", "/setup/api/first-run", body=request)
+            self.assertIn(b"400", status)
+            self.assertIn("plan is stale", response["error"])
+            reserve.assert_not_called()
+            write.assert_not_called()
+            self.assertIsNone(api.read_active_setup_job())
 
     def test_unavailable_worker_state_never_overwrites_tracked_job(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -112,8 +112,8 @@ test("setup keeps only actionable administrator, storage, and confirmation steps
     "an unapplied locale step must not remain as dead UI",
   );
   assert.match(storage, /configuration-missing/);
-  assert.match(storage, /Storage plan not created yet/);
-  assert.match(storage, /variant="info"/);
+  assert.match(storage, /StoragePlanForm/);
+  assert.match(await wizard("src/steps/StoragePlanForm.jsx"), /Review storage plan/);
   assert.match(storage, /wizard-encrypt-storage/);
   assert.match(storage, /Encrypt the ZFS data partition/);
   const confirm = await wizard("src/steps/ConfirmStep.jsx");

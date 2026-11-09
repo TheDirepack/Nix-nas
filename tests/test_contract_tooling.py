@@ -555,7 +555,9 @@ class ContractTests(unittest.TestCase):
         self.assertIn("first-run-wizard.py", guest)
         self.assertIn("run_as_nasadmin nas-setup account disable", guest)
         self.assertIn("alice-updated-password", guest)
-        self.assertIn("first-start setup API rejects a stale plan digest", encrypted_guest)
+        self.assertIn("CLI setup accepted a stale plan digest", encrypted_guest)
+        self.assertIn("rejected CLI setup created secrets", encrypted_guest)
+        self.assertIn("rejected CLI setup created storage", encrypted_guest)
         self.assertIn("[First start](admin/first-run.md)", summary)
         self.assertTrue((ROOT / "setup" / "first-run.example.json").exists())
 
