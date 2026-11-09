@@ -43,8 +43,8 @@
       };
       configFile = lib.mkOption {
         type = lib.types.str;
-        default = "/etc/nixos/nixos-nas/first-run.json";
-        description = "Root-owned first-run JSON consumed by the automatic first-start service and Cockpit setup workflow.";
+        default = "/var/lib/nas-first-start/first-run.json";
+        description = "Root-owned first-run JSON consumed by setup. The wizard can create a missing plan at the default state path; custom paths can supply a reviewed plan in advance.";
       };
     };
     trustedInterfaces = lib.mkOption {

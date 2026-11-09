@@ -45,7 +45,7 @@ ZFS_DATASET = os.environ.get("NAS_ZFS_DATASET", "tank/nas")
 ZFS_ROOT = pathlib.Path(os.environ.get("NAS_ZFS_ROOT", "/tank"))
 CONFIG_DIR = pathlib.Path(os.environ.get("NAS_CONFIG_DIR", "/etc/nixos/nixos-nas"))
 PORTAL_MODEL = pathlib.Path(os.environ.get("NAS_V2_PORTAL", "/run/nas-control/portal.json"))
-FIRST_RUN_CONFIG = os.environ.get("NAS_FIRST_RUN_CONFIG", "/etc/nixos/nixos-nas/first-run.json")
+FIRST_RUN_CONFIG = os.environ.get("NAS_FIRST_RUN_CONFIG", "/var/lib/nas-first-start/first-run.json")
 MAX_PASSWORD_LENGTH = 4096
 MAX_STRING_LIST_ITEMS = 256
 MAX_STRING_LIST_ITEM_LENGTH = 256
@@ -121,8 +121,13 @@ def run(
     return result
 
 
-def _json_command(command: list[str], *, optional: bool = False, timeout_seconds: int = 30) -> dict[str, Any]:
-    result = run(command, check=False, timeout_seconds=timeout_seconds)
+def _json_command(
+    command: list[str], *, optional: bool = False, timeout_seconds: int = 30, input_text: str | None = None
+) -> dict[str, Any]:
+    if input_text is None:
+        result = run(command, check=False, timeout_seconds=timeout_seconds)
+    else:
+        result = run(command, check=False, timeout_seconds=timeout_seconds, input_text=input_text)
     if result.returncode != 0:
         error = operation_error(command, result)
         if optional:
@@ -1155,6 +1160,8 @@ def reboot_after_first_start(request: dict[str, Any]) -> dict[str, bool]:
 SETUP_API_ROUTES = frozenset(
     {
         "/setup/api/first-start",
+        "/setup/api/storage-options",
+        "/setup/api/first-start/plan",
         "/setup/api/first-start/job",
         "/setup/api/first-start/resume",
         "/setup/api/first-run",
@@ -1345,6 +1352,9 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
             if self.path == "/setup/api/first-start":
                 self._send_json(200, first_start_status())
                 return
+            if self.path == "/setup/api/storage-options":
+                self._send_json(200, _json_command([_setup_entry(), "storage-options"], timeout_seconds=60))
+                return
             if self.path == "/setup/api/first-start/job":
                 self._send_json(200, first_start_job_status(self._authorized_job()))
                 return
@@ -1363,6 +1373,14 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
 
     def _handle_post(self, request: dict[str, Any]) -> None:
         """Route a setup API POST to the first-run, resume, or reboot handler."""
+        if self.path == "/setup/api/first-start/plan":
+            result = _json_command(
+                [_setup_entry(), "create-first-start-plan", "--config", FIRST_RUN_CONFIG],
+                timeout_seconds=60,
+                input_text=json.dumps(request),
+            )
+            self._send_json(200, result)
+            return
         if self.path == "/setup/api/first-run":
             active_job = read_active_setup_job()
             if active_job is not None:

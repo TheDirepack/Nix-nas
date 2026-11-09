@@ -3,12 +3,7 @@
 let
   timeoutBudget = builtins.fromJSON (builtins.readFile ../vm/timeout-budget.json);
   outerKillAfter = timeoutBudget.timeouts.killAfter;
-in
-
-pkgs.testers.runNixOSTest {
-  name = "nixos-nas-encrypted-zfs";
-
-  nodes.machine = { lib, ... }: {
+  encryptedNode = { lib, ... }: {
     imports = [
       copyparty.nixosModules.default
       self.nixosModules.core
@@ -17,9 +12,7 @@ pkgs.testers.runNixOSTest {
     ];
 
     nas.zfsEncryption.enable = lib.mkForce true;
-    # The shared VM fixture points the setup API at the full-stack first-run
-    # document. This leg writes a distinct encrypted-storage plan, so keep the
-    # API's review/submission contract aligned with the config under test.
+    # Both entrypoints must review and execute the same custom encrypted plan.
     nas.firstStart.configFile = lib.mkForce "/var/lib/nas-test/setup/encrypted-first-run.json";
     nas.trustedInterfaces = lib.mkForce [ "eth1" ];
     nas.testing.readOnlyPackageSet = true;
@@ -37,10 +30,24 @@ pkgs.testers.runNixOSTest {
       qemu.options = [ "-device" "virtio-rng-pci" ];
     };
   };
+in
+
+pkgs.testers.runNixOSTest {
+  name = "nixos-nas-encrypted-zfs";
+
+  nodes = {
+    machine = encryptedNode;
+    api = encryptedNode;
+  };
 
   testScript = ''
     machine.wait_for_unit("multi-user.target")
     machine.succeed("test $(systemctl show -p Result --value nas-vm-test-repository.service) = success")
     machine.succeed("timeout --signal=TERM --kill-after=${toString outerKillAfter}s ${toString timeoutBudget.timeouts.encryptedGuest}s nas-vm-encrypted-guest-test /dev/vdb")
+    # Keep the two fresh encrypted guests within one VM's memory budget.
+    machine.shutdown()
+    api.wait_for_unit("multi-user.target")
+    api.succeed("test $(systemctl show -p Result --value nas-vm-test-repository.service) = success")
+    api.succeed("timeout --signal=TERM --kill-after=${toString outerKillAfter}s ${toString timeoutBudget.timeouts.encryptedGuest}s nas-vm-encrypted-guest-test /dev/vdb api")
   '';
 }

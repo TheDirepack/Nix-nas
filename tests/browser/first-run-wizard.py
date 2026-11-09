@@ -222,6 +222,21 @@ def fill_wizard(
     send("#wizard-keepass-password-confirm", keepass_password)
     click_button("Next")
 
+    if args.create_plan:
+        container = wait.until(lambda current: first(current, ["#wizard-data-disks"]))
+        selected = []
+        for checkbox in container.find_elements(By.CSS_SELECTOR, 'input[type="checkbox"]'):
+            label = driver.find_element(By.CSS_SELECTOR, f'label[for="{checkbox.get_attribute("id")}"]')
+            path = label.text.split()[0]
+            if path in args.device:
+                if not checkbox.is_enabled():
+                    raise RuntimeError(f"Requested data disk is unavailable: {path}")
+                checkbox.click()
+                selected.append(path)
+        if sorted(selected) != sorted(args.device):
+            raise RuntimeError("The browser did not discover every requested data disk")
+        click_button("Review storage plan")
+
     devices = wait.until(lambda current: first(current, ["#wizard-plan-devices"]))
     for device in args.device:
         if device not in devices.text:
@@ -285,6 +300,9 @@ def main() -> int:
     parser.add_argument("--admin-email", required=True)
     parser.add_argument("--admin-password-file", required=True, help="File with the administrator password")
     parser.add_argument("--device", action="append", default=[], help="Storage device to confirm; repeatable")
+    parser.add_argument(
+        "--create-plan", action="store_true", help="Require discovery and creation of a fresh plan through the GUI"
+    )
     parser.add_argument("--encrypt-storage", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--job-timeout-seconds", type=int, default=1200)
     parser.add_argument("--result-file", help="Write the final job document JSON here")

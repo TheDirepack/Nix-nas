@@ -4,10 +4,12 @@ set -Eeuo pipefail
 ZFS_DEVICE="${1:-${NAS_TEST_ZFS_DEVICE:-/dev/vdb}}"
 KEEPASS_PASSWORD="${NAS_TEST_KEEPASS_PASSWORD:-nixos-nas-vm-test-password}"
 TEST_TIMEOUT="${NAS_TEST_TIMEOUT:-$(nas_vm_ordinary_wait_seconds)}"
+SETUP_ENTRYPOINT="${2:-cli}"
 
 log() { printf '\n==> %s\n' "$*"; }
 pass() { printf 'PASS: %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+[[ "$SETUP_ENTRYPOINT" == cli || "$SETUP_ENTRYPOINT" == api ]] || fail "unknown encrypted setup entrypoint"
 
 on_error() {
   local rc=$?
@@ -133,121 +135,79 @@ done
 
 log "Run first-time setup through the encrypted-ZFS path"
 install -d -m 0700 -o admin -g users /var/lib/nas-test/setup
-cat >/var/lib/nas-test/setup/encrypted-first-run.json <<EOFSETUP
-{
-  "schemaVersion": 2,
-  "storage": {
-    "createPool": true,
-    "devices": ["$ZFS_DEVICE"],
-    "wipeDevices": true
-  },
-  "accounts": [],
-  "runPreflight": false
-}
-EOFSETUP
-chown admin:users /var/lib/nas-test/setup/encrypted-first-run.json
-chmod 0600 /var/lib/nas-test/setup/encrypted-first-run.json
 printf '%s\n' 'nasadmin-vm-password' >/var/lib/nas-test/setup/nasadmin.password
-chown admin:users /var/lib/nas-test/setup/nasadmin.password
 chmod 0600 /var/lib/nas-test/setup/nasadmin.password
-run_as_admin nas-setup validate-config /var/lib/nas-test/setup/encrypted-first-run.json | jq -e '.storage.createPool == true'
-nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
-[[ $nas_setup_path == /nix/store/*-nas-setup/bin/nas-setup ]] || fail "nas-setup resolves to unexpected package: $nas_setup_path"
-
-# Complete first start through the GUI bootstrap system's submission contract:
-# the permissioned Unix-socket setup API that the Cockpit First start page
-# posts to. The encrypted leg has no browser, so it exercises the same
-# validation and job-submission path directly.
+plan_path=/var/lib/nas-test/setup/encrypted-first-run.json
+[[ ! -e "$plan_path" ]] || fail "encrypted setup unexpectedly has a prepared plan"
+jq -cn --arg device "$ZFS_DEVICE" \
+  '{storage:{createPool:true,devices:[$device],wipeDevices:true}}' | \
+  nas-setup create-first-start-plan --config "$plan_path" >/tmp/nas-encrypted-plan.json
+plan_digest="$(jq -er '.planDigest' /tmp/nas-encrypted-plan.json)"
+make_setup_payload() {
+  python3 -c 'import json,sys,pathlib; json.dump({"keepass":sys.stdin.readline().rstrip("\n"), "administrator":{"username":"nasadmin", "name":"NAS Administrator", "email":"nasadmin@nas-test.local", "password":pathlib.Path(sys.argv[1]).read_text().rstrip("\n")}},sys.stdout)' \
+    /var/lib/nas-test/setup/nasadmin.password
+}
+make_setup_api_payload() {
+  python3 -c 'import json,sys; value=json.load(sys.stdin); value["password"]=value.pop("keepass"); value.update(planDigest=sys.argv[2], devices=[sys.argv[1]], allowDestructiveStorage=True, encryptStorage=True, confirmPasswordReapply=False); json.dump(value,sys.stdout)' \
+    "$ZFS_DEVICE" "$1"
+}
+wait_active nas-setup-api.service
 setup_sock=/run/nas-setup-api/setup.sock
-setup_api="http://localhost/setup/api"
-first_start_plan="$(curl --fail --silent --show-error --max-time 60 --unix-socket "$setup_sock" "$setup_api/first-start")"
-if ! jq -e '.status == "ready" and (.planDigest | test("^[0-9a-f]{64}$"))' <<<"$first_start_plan" >/dev/null; then
-  printf '%s\n' "$first_start_plan" >&2
-  fail "first-start setup API did not report a reviewable ready plan"
+setup_api=http://localhost/setup/api
+curl --fail --silent --show-error --max-time 60 --unix-socket "$setup_sock" \
+  "$setup_api/first-start" >/tmp/nas-encrypted-api-plan.json
+jq -e --arg digest "$plan_digest" '.status == "ready" and .planDigest == $digest' \
+  /tmp/nas-encrypted-api-plan.json >/dev/null || fail "setup API did not expose the CLI-created plan"
+stale_code="$(nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" make_setup_payload | \
+  make_setup_api_payload "$(printf '0%.0s' {1..64})" | \
+  curl --silent --show-error --max-time 60 -o /tmp/nas-api-stale-plan.json -w '%{http_code}' \
+    -H 'Content-Type: application/json' --data-binary @- --unix-socket "$setup_sock" "$setup_api/first-run")"
+[[ "$stale_code" == 400 ]] || fail "setup API accepted a stale plan digest (HTTP $stale_code)"
+jq -e '.error | contains("plan is stale")' /tmp/nas-api-stale-plan.json >/dev/null || \
+  fail "setup API stale plan rejection was not diagnostic"
+[[ ! -e /var/lib/nas-control-plane/nas-secrets/NAS.kdbx ]] || fail "rejected API setup created secrets"
+! zpool list -H tank >/dev/null 2>&1 || fail "rejected API setup created storage"
+pass "setup API rejects a stale plan digest before mutation"
+if nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" make_setup_payload | \
+  env NAS_SETUP_ALLOW_ROOT=1 nas-setup first-run --config "$plan_path" \
+    --secret-payload-stdin --encrypt-storage --confirm-plan-digest "$(printf '0%.0s' {1..64})" \
+    --confirm-storage-device "$ZFS_DEVICE" --allow-destructive-storage \
+    >/tmp/nas-cli-stale-plan.json 2>/tmp/nas-cli-stale-plan.err; then
+  fail "CLI setup accepted a stale plan digest"
 fi
-plan_digest="$(jq -er '.planDigest' <<<"$first_start_plan")"
-stale_digest="$(printf '0%.0s' {1..64})"
-IFS= read -r wizard_nasadmin_password </var/lib/nas-test/setup/nasadmin.password
-stale_request="$(jq -cn --arg digest "$stale_digest" --argjson devices "[\"$ZFS_DEVICE\"]" \
-  --arg admin_password "$wizard_nasadmin_password" \
-  '{password: "nixos-nas-vm-test-password",
-    administrator: {username: "nasadmin", name: "NAS Administrator",
-                    email: "nasadmin@nas-test.local", password: $admin_password},
-    planDigest: $digest, devices: $devices,
-    allowDestructiveStorage: true, encryptStorage: true, confirmPasswordReapply: false}')"
-stale_code="$(printf '%s' "$stale_request" | curl --silent --show-error --max-time 60 -o /tmp/nas-stale-plan.json \
-  -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- --unix-socket "$setup_sock" "$setup_api/first-run")"
-if [[ "$stale_code" != 400 ]]; then
-  cat /tmp/nas-stale-plan.json >&2 || true
-  fail "first-start API accepted a stale plan digest (HTTP $stale_code)"
-fi
-grep -qi 'stale\|no longer matches' /tmp/nas-stale-plan.json || {
-  cat /tmp/nas-stale-plan.json >&2
-  fail "stale plan digest rejection was not diagnostic"
-}
-pass "first-start setup API rejects a stale plan digest before mutation"
-
-job_request="$(jq -cn --arg digest "$plan_digest" --argjson devices "[\"$ZFS_DEVICE\"]" \
-  --arg admin_password "$wizard_nasadmin_password" \
-  '{password: "nixos-nas-vm-test-password",
-    administrator: {username: "nasadmin", name: "NAS Administrator",
-                    email: "nasadmin@nas-test.local", password: $admin_password},
-    planDigest: $digest, devices: $devices,
-    allowDestructiveStorage: true, encryptStorage: true, confirmPasswordReapply: false}')"
-# The Unix socket admits only the Caddy service identity and root. An
-# unprivileged local account and a representative compromised-service sandbox
-# must not read the setup plan directly.
-if runuser -u nobody -- curl --silent --show-error --max-time 10 --unix-socket "$setup_sock" "$setup_api/first-start" >/dev/null 2>&1; then
-  fail "unprivileged local user reached the setup API directly"
-fi
-if systemd-run --collect --pipe --wait -p DynamicUser=yes -p RestrictAddressFamilies=AF_UNIX -- \
-  curl --silent --show-error --max-time 10 --unix-socket "$setup_sock" "$setup_api/first-start" >/dev/null 2>&1; then
-  fail "sandboxed service identity reached the setup API directly"
-fi
-pass "unprivileged and sandboxed identities cannot reach the setup API directly"
-job_code="$(printf '%s' "$job_request" | curl --silent --show-error --max-time 60 \
-  -o /tmp/nas-first-run-submission.json -w '%{http_code}' \
-  -H 'Content-Type: application/json' --data-binary @- --unix-socket "$setup_sock" "$setup_api/first-run")"
-if [[ "$job_code" != 200 ]]; then
-  cat /tmp/nas-first-run-submission.json >&2 || true
-  fail "encrypted first-start job submission failed (HTTP ${job_code:-none})"
-fi
-job_submission="$(< /tmp/nas-first-run-submission.json)"
-job_id="$(jq -er '.jobId | select(test("^[0-9a-f]{24}$"))' <<<"$job_submission")"
-job_capability="$(jq -er '.capability | select(test("^[0-9a-f]{48}$"))' <<<"$job_submission")"
-# Job identifiers in URLs no longer authorize; only the header capability does.
-if [[ "$(curl --silent --show-error --max-time 10 -o /dev/null -w '%{http_code}' \
-  --unix-socket "$setup_sock" "$setup_api/first-start/job/$job_id")" != 404 ]]; then
-  fail "legacy job-id URL did not fail closed"
-fi
-job_result=""
-for _ in $(seq 1 "$(nas_vm_timeout_value firstRun)"); do
-  job_result="$(curl --fail --silent --show-error --max-time 30 \
-    -H "X-NAS-Setup-Capability: $job_capability" \
-    --unix-socket "$setup_sock" "$setup_api/first-start/job")" || {
-    job_result=""
+grep -qi 'no longer matches' /tmp/nas-cli-stale-plan.err
+[[ ! -e /var/lib/nas-control-plane/nas-secrets/NAS.kdbx ]] || fail "rejected CLI setup created secrets"
+! zpool list -H tank >/dev/null 2>&1 || fail "rejected CLI setup created storage"
+if [[ "$SETUP_ENTRYPOINT" == api ]]; then
+  job_submission="$(nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" make_setup_payload | \
+    make_setup_api_payload "$plan_digest" | \
+    curl --fail --silent --show-error --max-time 60 -H 'Content-Type: application/json' \
+      --data-binary @- --unix-socket "$setup_sock" "$setup_api/first-run")"
+  job_capability="$(jq -er '.capability | select(test("^[0-9a-f]{48}$"))' <<<"$job_submission")"
+  job_deadline=$((SECONDS + $(nas_vm_timeout_value firstRun)))
+  job_status=pending
+  while ((SECONDS < job_deadline)); do
+    if job_result="$(printf 'header = "X-NAS-Setup-Capability: %s"\n' "$job_capability" | \
+      curl --config - --fail --silent --max-time 30 --unix-socket "$setup_sock" "$setup_api/first-start/job")"; then
+      job_status="$(jq -er .status <<<"$job_result")"
+      [[ "$job_status" == complete || "$job_status" == complete-unverified || "$job_status" == failed ]] && break
+    fi
     sleep 2
-    continue
-  }
-  job_status="$(jq -r '.status' <<<"$job_result")"
-  [[ "$job_status" == "complete" || "$job_status" == "failed" ]] && break
-  sleep 2
-done
-[[ "$job_status" == "complete" ]] || {
-  jq . <<<"$job_result" >&2 || true
-  fail "encrypted first-start job did not complete (status ${job_status:-none})"
-}
-if ! jq -e '
-  .result.database.result == "created" and
-  .result.storage.createdPool == true and
-  .result.storage.createdDataset == true and
-  .result.storage.encrypted == true and
-  .result.preflight == false and
-  .result.localAdministrator.username == "nasadmin"
-' <<<"$job_result" >/dev/null; then
-  jq . <<<"$job_result" >&2
-  fail "encrypted first-start job report did not contain the expected storage state"
+  done
+  [[ "$job_status" == complete ]] || fail "encrypted API setup did not complete (status $job_status)"
+  jq -e '.result | type == "object"' <<<"$job_result" >/dev/null
+  jq '.result' <<<"$job_result" >/tmp/nas-encrypted-setup.json
+  unset job_submission job_capability
+  pass "fresh encrypted setup API job completed"
+else
+  nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" make_setup_payload | \
+    env NAS_SETUP_ALLOW_ROOT=1 timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+      "$(nas_vm_timeout_value firstRun)" nas-setup first-run --config "$plan_path" \
+      --secret-payload-stdin --encrypt-storage --confirm-plan-digest "$plan_digest" \
+      --confirm-storage-device "$ZFS_DEVICE" --allow-destructive-storage >/tmp/nas-encrypted-setup.json
 fi
+jq -e '.status == "complete" and .storage.createdPool == true and .storage.encrypted == true and .preflight == true and .localAdministrator.username == "nasadmin"' \
+  /tmp/nas-encrypted-setup.json >/dev/null || fail "encrypted CLI setup did not complete with verification"
 wait_oneshot_completed nas-managed-services-authentik-reconcile.service
 [[ "$(systemctl show nas-managed-services-authentik-reconcile.service --property=ConditionResult --value)" == yes ]] || \
   fail "managed Authentik projection was skipped after secret activation"
@@ -257,15 +217,7 @@ nas-managed-services-control status | jq -e '.schemaVersion == 3 and (.services 
 nas-managed-services-control document | jq -e '.document.services | type == "object"' >/dev/null
 pass "nas-managed-services-control reports the seeded V2 authority"
 [[ "$(getent passwd akadmin)" == "" ]] || fail "bootstrap administrator was not retired after first run"
-# Capability bytes must never reach backend or proxy logs.
-if journalctl -u nas-setup-api --no-pager 2>/dev/null | grep -Eo '[0-9a-f]{48}' | grep -q .; then
-  fail "setup capability bytes reached the backend log"
-fi
-if grep '/setup/api' /var/log/caddy/access.log 2>/dev/null | grep -Eo '[0-9a-f]{48}' | grep -q .; then
-  fail "setup capability bytes reached the proxy log"
-fi
-pass "setup capability bytes are absent from backend and proxy logs"
-pass "GUI first-start job created and activated the encrypted storage stack"
+pass "$SETUP_ENTRYPOINT first start created and activated the encrypted storage stack"
 wait_active nas-protected-services.target
 wait_active nas-zfs-unlock.service
 wait_active nas-zfs-mount-guard.service

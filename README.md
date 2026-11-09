@@ -26,7 +26,7 @@ You should be comfortable with Linux administration; NixOS basics help but are e
 
 1. Prepare the host configuration (`hardware-configuration.nix`, `local.nix`).
 2. Build and install NixOS from the flake target `.#nas`.
-3. Prepare the first-run plan (accounts, storage plan, service modes).
+3. Open the setup wizard and select the data disks and pool layout.
 4. Complete the browser setup wizard. Its CLI backend owns validation and privileged execution.
 5. Verify the result and record your offline recovery material.
 

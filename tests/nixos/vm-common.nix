@@ -168,9 +168,6 @@ in
     # browser-facing public host, including the HTTPS port, or the bootstrap
     # portal provider ends up with an external host the fixtures reject.
     identity.publicHost = lib.mkForce "nas-test.local:8443";
-    # The guest suite creates its first-run plan here; keep the installed
-    # Cockpit status source aligned with the plan used by the test.
-    firstStart.configFile = "/var/lib/nas-test/setup/first-run.json";
     zfsImportAtBoot = lib.mkForce false;
     zfsEncryption.acknowledgeUnencrypted = lib.mkForce true;
     autoUpdate.enable = lib.mkForce false;

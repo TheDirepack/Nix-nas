@@ -428,11 +428,6 @@ systemctl start nas-managed-services-authentik-reconcile.service
   fail "managed Authentik projection executed before unlock"
 [[ "$(systemctl show nas-managed-services-authentik-reconcile.service --property=ActiveState --value)" == inactive ]] || \
   fail "managed Authentik projection is not inactive while locked"
-# The outpost caches provider configuration at startup and property-mapping
-# changes do not reliably trigger a refresh; restart it once the bootstrap
-# and reconcile transactions have settled so its cached config is final.
-systemctl restart nas-authentik-proxy-outpost.service
-wait_active nas-authentik-proxy-outpost.service
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
 # nas-bootstrap-administrator expires the bootstrap password (chage -d 0), so
 # the first login must complete the forced change before the command runs.
@@ -553,12 +548,9 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 [[ -b "$ZFS_DEVICE" ]] || fail "ZFS test disk did not appear: $ZFS_DEVICE"
-bootstrap_keepass_password='discarded-bootstrap-keepass-password'
 keepass_database='/var/lib/nas-control-plane/nas-secrets/NAS.kdbx'
-install -d -m 0700 -o akadmin -g users "$(dirname "$keepass_database")"
-printf '%s\n%s\n' "$bootstrap_keepass_password" "$bootstrap_keepass_password" |
-  runuser -u akadmin -- env HOME=/home/akadmin keepassxc-cli db-create --quiet --set-password "$keepass_database"
-[[ -f "$keepass_database" ]] || fail "bootstrap KeePass replacement fixture was not created"
+[[ ! -e "$keepass_database" ]] || fail "fresh setup unexpectedly has a KeePass database"
+[[ ! -e /var/lib/nas-first-start/first-run.json ]] || fail "fresh setup unexpectedly has a prepared plan"
 install -d -m 0700 -o akadmin -g users /var/lib/nas-test/setup
 printf '%s\n' 'alice-vm-password' >/var/lib/nas-test/setup/alice.password
 printf '%s\n' 'operator-vm-password' >/var/lib/nas-test/setup/operator.password
@@ -566,65 +558,9 @@ printf '%s\n' 'baseline-vm-password' >/var/lib/nas-test/setup/baseline.password
 printf '%s\n' 'nasadmin-vm-password' >/var/lib/nas-test/setup/nasadmin.password
 chown akadmin:users /var/lib/nas-test/setup/*.password
 chmod 0600 /var/lib/nas-test/setup/*.password
-cat >/var/lib/nas-test/setup/first-run.json <<EOFSETUP
-{
-  "schemaVersion": 2,
-  "storage": {
-    "createPool": true,
-    "devices": ["$ZFS_DEVICE"],
-    "wipeDevices": true
-  },
-  "accounts": [
-    {
-      "username": "operator",
-      "name": "Second NAS Administrator",
-      "email": "operator@nas.local",
-      "groups": ["nas_admin"],
-      "passwordFile": "/var/lib/nas-test/setup/operator.password"
-    },
-    {
-      "username": "alice",
-      "name": "Alice Example",
-      "email": "alice@nas.local",
-      "groups": ["nas_users"],
-      "passwordFile": "/var/lib/nas-test/setup/alice.password"
-    },
-    {
-      "username": "baseline",
-      "name": "Baseline User",
-      "email": "baseline@nas.local",
-      "groups": ["nas_users"],
-      "passwordFile": "/var/lib/nas-test/setup/baseline.password"
-    },
-    {
-      "username": "guest",
-      "name": "Guest User",
-      "email": "guest@nas.local",
-      "groups": ["nas_guests"]
-    }
-  ],
-  "runPreflight": true
-}
-EOFSETUP
-chown akadmin:users /var/lib/nas-test/setup/first-run.json
-chmod 0600 /var/lib/nas-test/setup/first-run.json
-run_as_admin nas-setup validate-config /var/lib/nas-test/setup/first-run.json | jq -e '.accounts | length == 4'
 nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
 [[ $nas_setup_path == /nix/store/*-nas-setup/bin/nas-setup ]] || fail "nas-setup resolves to unexpected package: $nas_setup_path"
 
-# Complete first start through the GUI bootstrap system: the Cockpit First
-# start page behind the Authentik gate, submitting through the permissioned
-# Unix-socket setup API contract. The pre-bootstrap Linux administrator
-# (akadmin, documented in nas-bootstrap-administrator.service) provisions
-# browser access while the appliance is still locked.
-setup_sock=/run/nas-setup-api/setup.sock
-setup_api="http://localhost/setup/api"
-first_start_plan="$(curl --fail --silent --show-error --max-time 60 --unix-socket "$setup_sock" "$setup_api/first-start")"
-if ! jq -e '.status == "ready" and (.planDigest | test("^[0-9a-f]{64}$"))' <<<"$first_start_plan" >/dev/null; then
-  printf '%s\n' "$first_start_plan" >&2
-  fail "first-start setup API did not report a reviewable ready plan"
-fi
-stale_digest="$(printf '0%.0s' {1..64})"
 wizard_secret_dir="$(mktemp -d /run/nas-wizard-test.XXXXXX)"
 cleanup_wizard_secrets() {
   [[ -n "${wizard_secret_dir:-}" ]] || return 0
@@ -636,45 +572,20 @@ printf '%s\n' "$bootstrap_authentik_password" >"$wizard_secret_dir/akadmin"
 printf '%s\n' "$KEEPASS_PASSWORD" >"$wizard_secret_dir/keepass"
 cp /var/lib/nas-test/setup/nasadmin.password "$wizard_secret_dir/nasadmin"
 chmod 0600 "$wizard_secret_dir/akadmin" "$wizard_secret_dir/keepass" "$wizard_secret_dir/nasadmin"
-IFS= read -r wizard_nasadmin_password <"$wizard_secret_dir/nasadmin"
-wizard_admin="$(jq -cn --arg password "$wizard_nasadmin_password" \
-  '{username: "nasadmin", name: "NAS Administrator", email: "nasadmin@nas-test.local", password: $password}')"
-IFS= read -r wizard_keepass_password <"$wizard_secret_dir/keepass"
-stale_request="$(jq -cn --arg digest "$stale_digest" --argjson devices "[\"$ZFS_DEVICE\"]" --argjson administrator "$wizard_admin" \
-  --arg keepass "$wizard_keepass_password" \
-  '{password: $keepass, administrator: $administrator, planDigest: $digest, devices: $devices,
-    allowDestructiveStorage: true, confirmPasswordReapply: false}')"
-stale_code="$(printf '%s' "$stale_request" | curl --silent --show-error --max-time 60 -o /tmp/nas-stale-plan.json \
-  -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- --unix-socket "$setup_sock" "$setup_api/first-run")"
-if [[ "$stale_code" != 400 ]]; then
-  cat /tmp/nas-stale-plan.json >&2 || true
-  fail "first-start API accepted a stale plan digest (HTTP $stale_code)"
-fi
-if ! grep -qi 'stale\|no longer matches' /tmp/nas-stale-plan.json; then
-  cat /tmp/nas-stale-plan.json >&2
-  fail "stale plan digest rejection was not diagnostic"
-fi
-pass "first-start setup API rejects a stale plan digest before mutation"
-
-# The Unix socket admits only the Caddy service identity and root. An
-# unprivileged local account and a representative compromised-service sandbox
-# must not read the setup plan directly.
-if runuser -u nobody -- curl --silent --show-error --max-time 10 --unix-socket "$setup_sock" "$setup_api/first-start" >/dev/null 2>&1; then
+setup_sock=/run/nas-setup-api/setup.sock
+setup_api=http://localhost/setup/api
+if runuser -u nobody -- curl --silent --show-error --max-time 10 \
+  --unix-socket "$setup_sock" "$setup_api/first-start" >/dev/null 2>&1; then
   fail "unprivileged local user reached the setup API directly"
 fi
 if systemd-run --collect --pipe --wait -p DynamicUser=yes -p RestrictAddressFamilies=AF_UNIX -- \
   curl --silent --show-error --max-time 10 --unix-socket "$setup_sock" "$setup_api/first-start" >/dev/null 2>&1; then
   fail "sandboxed service identity reached the setup API directly"
 fi
-pass "unprivileged and sandboxed identities cannot reach the setup API directly"
-
-# Job identifiers in URLs no longer authorize; only the header capability does.
-if [[ "$(curl --silent --show-error --max-time 10 -o /dev/null -w '%{http_code}' \
-  --unix-socket "$setup_sock" "$setup_api/first-start/job/aaaaaaaaaaaaaaaaaaaaaaaa")" != 404 ]]; then
+[[ "$(curl --silent --show-error --max-time 10 -o /dev/null -w '%{http_code}' \
+  --unix-socket "$setup_sock" "$setup_api/first-start/job/aaaaaaaaaaaaaaaaaaaaaaaa")" == 404 ]] || \
   fail "legacy job-id URL did not fail closed"
-fi
-pass "legacy job-id URLs fail closed"
-
+pass "setup API rejects local unprivileged peers and legacy job-id URLs"
 timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
   "$(nas_vm_timeout_value firstRun)" \
   python3 /var/lib/nas-test/repo/tests/browser/first-run-wizard.py \
@@ -686,6 +597,7 @@ timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" 
   --admin-email 'nasadmin@nas-test.local' \
   --admin-password-file "$wizard_secret_dir/nasadmin" \
   --no-encrypt-storage \
+  --create-plan \
   --device "$ZFS_DEVICE" \
   --job-timeout-seconds "$(nas_vm_timeout_value firstRun)" \
   --result-file /tmp/nas-first-run-job.json
@@ -693,11 +605,11 @@ cleanup_wizard_secrets
 wizard_secret_dir=""
 if ! jq -e '
   .status == "complete" and
+  .result.preflight == true and
   .result.storage.createdPool == true and
   .result.storage.createdDataset == true and
   .result.storage.encrypted == false and
-  (.result.accounts.created | sort) == ["alice", "baseline", "guest", "nasadmin", "operator"] and
-  (.result.identity.administrators | index("operator")) != null and
+  (.result.accounts.created | sort) == ["nasadmin"] and
   (.result.identity.administrators | index("nasadmin")) != null and
   .result.localAdministrator.username == "nasadmin"
 ' /tmp/nas-first-run-job.json >/dev/null; then
@@ -775,11 +687,6 @@ if ((administrator_login_status != 0)); then
   fail "the wizard-created administrator did not authenticate the permanent Linux account (status $administrator_login_status)"
 fi
 pass "the wizard-created administrator password authenticates the permanent Linux account"
-if printf '%s\n' "$bootstrap_keepass_password" |
-  runuser -u nasadmin -- env HOME=/tank/homes/nasadmin keepassxc-cli db-info --quiet "$keepass_database" \
-    >/dev/null 2>&1; then
-  fail "the discarded bootstrap KeePass password still unlocks the setup database"
-fi
 printf '%s\n' "$KEEPASS_PASSWORD" |
   runuser -u nasadmin -- env HOME=/tank/homes/nasadmin keepassxc-cli db-info --quiet "$keepass_database" \
     >/dev/null
@@ -790,17 +697,21 @@ for required_keepass_entry in authentik-secret-key authentik-api-token state-bun
   grep -Fxq "$required_keepass_entry" <<<"$keepass_listing" || \
     fail "fresh KeePass database is missing $required_keepass_entry"
 done
-pass "setup replaced the bootstrap KeePass database and populated the fresh database"
+pass "setup created and populated the fresh KeePass database"
 pass "GUI first start created the expected storage, accounts, and administrator"
-# This is a test-only static plan created by the disposable administrator.
-# Transfer it to the permanent administrator before verifying the idempotent
-# status path; browser-submitted production secrets are already deleted.
-# Run the status check as root so privileged authority checks (share
-# directories, runtime secrets) do not depend on a cached sudo timestamp.
+# Exercise ordinary CLI account management after the GUI-created administrator is ready.
+for account in operator alice baseline; do
+  role=nas_users
+  [[ "$account" != operator ]] || role=nas_admin
+  run_as_admin nas-setup account apply --username "$account" --name "$account" \
+    --email "$account@nas.local" --group "$role" --password-stdin \
+    <"/var/lib/nas-test/setup/$account.password" >/dev/null
+done
+run_as_admin nas-setup account apply --username guest --group nas_guests >/dev/null
 chown -R nasadmin:users /var/lib/nas-test/setup
-nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json \
+nas-setup prepare-first-start --config /var/lib/nas-first-start/first-run.json \
   >/tmp/nas-first-start-status.json
-if ! jq -e '.status == "complete" and .configPath == "/var/lib/nas-test/setup/first-run.json"' \
+if ! jq -e '.status == "complete" and .configPath == "/var/lib/nas-first-start/first-run.json"' \
   /tmp/nas-first-start-status.json >/dev/null; then
   printf '%s\n' '--- first-start status ---' >&2
   jq . /tmp/nas-first-start-status.json >&2 || cat /tmp/nas-first-start-status.json >&2

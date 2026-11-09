@@ -23,7 +23,7 @@ Have everything on this list before starting:
 
 1. [Configure the host](#phase-1-configure-the-host): generate hardware configuration, edit `local.nix`.
 2. [Build and install NixOS](#phase-2-build-and-install-nixos): format the OS disk, install the `.#nas` configuration.
-3. [Prepare the first-run plan](#phase-3-prepare-the-first-run-plan): fill in accounts and the storage plan.
+3. [Prepare the first-run plan](#phase-3-prepare-the-first-run-plan): select data disks in the wizard.
 4. [Complete guided setup](#phase-4-complete-guided-setup): browser wizard.
 5. [Verify and record](#phase-5-verify-and-record): unlock, harden tokens, write down recovery material.
 
@@ -82,34 +82,19 @@ The data pool itself is **not** created during installation. It is created durin
 
 ## Phase 3: Prepare the first-run plan
 
-Use the local console, SSH with the key you provisioned, or hardware KVM. The *first-run plan* is a JSON file describing the initial accounts, storage, and feature modes.
+For a fresh appliance, the browser wizard creates the plan. No JSON file or
+password file is required in advance. Sign in with the private bootstrap
+Authentik credential described in [First start](first-run.md), enter your
+administrator details, select the data disks and pool layout, and choose
+**Review storage plan**. Mounted, swap-backed and read-only disks are unavailable.
+Review the exact devices, then explicitly confirm erasure before **Run setup**.
+Creating or reviewing a plan never formats disks.
 
-1. Copy `setup/first-run.example.json` to the configured first-run path. The shipped default is `/etc/nixos/nixos-nas/first-run.json` (the `nas.firstStart.configFile` option). Edit the copy outside the Nix store: accounts, storage plan, and feature modes.
-
-2. Passwords never go into the JSON. Each account references a private password file instead:
-
-   ```bash
-   install -m 0600 /dev/null /run/keys/nas-alice-password
-   read -r -s -p 'Alice password: ' password
-   printf '%s\n' "$password" > /run/keys/nas-alice-password
-   unset password
-   ```
-
-   Setup rejects password files readable by group or other users, rejects symlinks, and opens each file exactly once.
-
-3. Validate the plan before making changes:
-
-   ```bash
-   nas-setup validate-config /etc/nixos/nixos-nas/first-run.json
-   ```
-
-4. Publish and review the ready state:
-
-   ```bash
-   nas-setup prepare-first-start --config /etc/nixos/nixos-nas/first-run.json
-   ```
-
-   Review the published `ready` state: the exact pool name, devices, topology, and plan digest. Setup never acts on a plan you have not seen in this form.
+The default root-owned plan lives at `/var/lib/nas-first-start/first-run.json`.
+Advanced installations can override `nas.firstStart.configFile` and provide a
+reviewed file based on `setup/first-run.example.json`; the wizard never overwrites
+an existing plan. Secrets remain separate stdin/browser input. Additional users
+can be created after setup through Authentik or the authorized account CLI.
 
 ### Choosing the storage plan
 

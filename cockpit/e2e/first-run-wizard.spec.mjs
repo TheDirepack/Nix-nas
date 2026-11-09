@@ -58,6 +58,105 @@ async function goToConfirmation(page) {
   await expect(page.getByText("Finishing setup applies the reviewed plan")).toBeVisible();
 }
 
+test("sets up a fresh appliance from disk discovery without a prepared JSON file", async ({
+  page,
+}) => {
+  let current = {status: "configuration-missing"};
+  const created = [];
+  const submissions = [];
+  await mockSetupApi(page, async ({request, pathname}) => {
+    if (request.method() === "GET" && pathname.endsWith("/first-start")) return current;
+    if (pathname.endsWith("/storage-options"))
+      return {
+        poolPresent: false,
+        devices: [
+          {path: "/dev/vda", type: "disk", available: false, model: "Boot disk", size: 64000},
+          {
+            path: "/dev/disk/by-id/data-one",
+            type: "disk",
+            available: true,
+            model: "Data disk",
+            size: 32000,
+          },
+        ],
+      };
+    if (pathname.endsWith("/first-start/plan")) {
+      created.push(request.postDataJSON());
+      current = {...plan, storage: {...plan.storage, devices: ["/dev/disk/by-id/data-one"]}};
+      return current;
+    }
+    if (pathname.endsWith("/first-run")) {
+      submissions.push(request.postDataJSON());
+      return {jobId: "b".repeat(24), status: "complete", capability: "d".repeat(48)};
+    }
+    return {statusCode: 404, body: {error: "Not found"}};
+  });
+  await openWizard(page);
+  await fillAdministrator(page);
+  await page.getByRole("button", {name: "Next"}).click();
+  await expect(page.getByRole("heading", {name: "Create the storage plan"})).toBeVisible();
+  await expect(page.getByLabel("/dev/vda", {exact: false})).toBeDisabled();
+  await expect(page.getByRole("button", {name: "Review storage plan"})).toBeDisabled();
+  await page.getByLabel("/dev/disk/by-id/data-one", {exact: false}).check();
+  await page.getByRole("button", {name: "Review storage plan"}).click();
+  await expect
+    .poll(() => created)
+    .toEqual([
+      {
+        storage: {
+          createPool: true,
+          devices: ["/dev/disk/by-id/data-one"],
+          topology: "single",
+          wipeDevices: true,
+        },
+      },
+    ]);
+  expect(submissions).toHaveLength(0);
+  await expect(page.getByText("/dev/disk/by-id/data-one", {exact: true})).toBeVisible();
+  await expect(page.getByLabel("I understand the listed devices will be wiped")).not.toBeChecked();
+  await page.getByLabel("I understand the listed devices will be wiped").check();
+  await page.getByRole("button", {name: "Next"}).click();
+  await page.getByRole("button", {name: "Run setup"}).click();
+  await expect(
+    page.getByRole("heading", {name: "Success alert: Setup completed", exact: true}),
+  ).toBeVisible();
+  expect(submissions).toHaveLength(1);
+  expect(submissions[0].planDigest).toBe(current.planDigest);
+  expect(submissions[0].devices).toEqual(current.storage.devices);
+});
+
+test("plan creation failures preserve input and cannot enable setup", async ({page}) => {
+  let attempts = 0;
+  await mockSetupApi(page, async ({pathname}) => {
+    if (pathname.endsWith("/first-start")) return {status: "configuration-missing"};
+    if (pathname.endsWith("/storage-options"))
+      return {poolPresent: false, devices: [{path: "/dev/vdb", type: "disk", available: true}]};
+    if (pathname.endsWith("/first-start/plan")) {
+      attempts += 1;
+      return {statusCode: 400, body: {error: "Configured storage device is in use"}};
+    }
+    return {statusCode: 404, body: {error: "Not found"}};
+  });
+  await openWizard(page);
+  await fillAdministrator(page);
+  await page.getByRole("button", {name: "Next"}).click();
+  await page.getByLabel("/dev/vdb", {exact: false}).check();
+  await page.getByRole("button", {name: "Review storage plan"}).click();
+  await expect(page.getByText("Configured storage device is in use", {exact: false})).toBeVisible();
+  await expect(page.getByLabel("/dev/vdb", {exact: false})).toBeChecked();
+  await page.getByLabel("/dev/vdb", {exact: false}).uncheck();
+  await expect(page.getByText("Configured storage device is in use", {exact: false})).toBeHidden();
+  await expect(page.getByRole("button", {name: "Review storage plan"})).toBeDisabled();
+  await page.getByLabel("/dev/vdb", {exact: false}).check();
+  await page.getByRole("button", {name: "Review storage plan"}).click();
+  await expect(page.getByText("Configured storage device is in use", {exact: false})).toBeVisible();
+  await page.getByLabel("Pool layout").selectOption("mirror");
+  await expect(page.getByText("Configured storage device is in use", {exact: false})).toBeHidden();
+  await page.getByRole("button", {name: "Next"}).click();
+  await expect(page.getByRole("button", {name: "Run setup"})).toBeDisabled();
+  expect(attempts).toBe(2);
+});
+
 test("completes every first-start control through reboot", async ({page}) => {
   const submissions = [];
   const capability = "d".repeat(48);

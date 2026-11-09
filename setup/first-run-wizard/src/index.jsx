@@ -115,6 +115,10 @@ const App = () => {
               onAllowDestructive={setAllowDestructive}
               encryptStorage={encryptStorage}
               onEncryptStorage={setEncryptStorage}
+              onCreated={(value) => {
+                setAllowDestructive(false);
+                setPlan(value);
+              }}
               onRefresh={() => {
                 // A refreshed plan can list different devices, so any prior
                 // destructive confirmation no longer applies to it.
