@@ -1100,7 +1100,7 @@ def read_secret(path: str) -> str:
 def verify_oci_route_account(origin: str, username: str, password: str, allowed: bool) -> None:
     driver = browser()
     try:
-        login(driver, origin, username, password)
+        login(driver, origin, username, password, "/vm-oci-probe/")
         result = authenticated_https_request(driver, origin, "/vm-oci-probe/", "GET")
         if allowed:
             if result["status"] != 200 or result["body"].strip() != "nas-v2-oci-v2":

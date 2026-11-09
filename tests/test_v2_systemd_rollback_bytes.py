@@ -100,6 +100,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                                 "ownedUnits": [owner, ready],
                                 "startUnits": [owner, ready],
                                 "readinessUnits": [ready],
+                                "readinessOwners": {ready: owner},
                                 "stopUnits": [],
                                 "fingerprints": {owner: version, ready: "unchanged-probe"},
                             }

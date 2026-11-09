@@ -284,6 +284,16 @@ class V2SystemdProjectionTests(unittest.TestCase):
                         manifest["readinessUnits"],
                         ["nas-v2-ready-demo.service"] if enabled and lifecycle_mode == "persistent" else [],
                     )
+                    self.assertEqual(
+                        manifest["readinessOwners"],
+                        {
+                            "nas-v2-ready-demo.service": "nas-v2-demo.service"
+                            if runtime["type"] == "oci"
+                            else "demo.service"
+                        }
+                        if enabled and lifecycle_mode == "persistent"
+                        else {},
+                    )
 
     def test_ready_dependency_uses_transient_gate(self):
         effective = self.compile(

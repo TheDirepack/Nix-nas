@@ -708,7 +708,7 @@ def generate_projection(
     links: dict[str, str] = {}
     quadlet_links: dict[str, str] = {}
     start_units: set[str] = set()
-    readiness_units: set[str] = set()
+    readiness_owners: dict[str, str] = {}
     owned_units: set[str] = set()
     stop_units: set[str] = set()
     fingerprints: dict[str, str] = {}
@@ -829,7 +829,7 @@ def generate_projection(
                 if "readiness" in service:
                     ready = f"nas-v2-ready-{service_id}.service"
                     start_units.add(ready)
-                    readiness_units.add(ready)
+                    readiness_owners[ready] = owner
 
         fp: dict[str, Any] = {
             "runtime": runtime,
@@ -854,7 +854,8 @@ def generate_projection(
         "quadletLinks": [{"target": target, "source": source} for target, source in sorted(quadlet_links.items())],
         "ownedUnits": sorted(owned_units),
         "startUnits": sorted(start_units),
-        "readinessUnits": sorted(readiness_units),
+        "readinessUnits": sorted(readiness_owners),
+        "readinessOwners": readiness_owners,
         "stopUnits": sorted(stop_units),
         "fingerprints": fingerprints,
     }

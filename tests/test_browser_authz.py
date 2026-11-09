@@ -108,7 +108,7 @@ class BrowserAuthzInputTests(unittest.TestCase):
             with (
                 self.subTest(allowed=allowed, status=status, body=body),
                 mock.patch.object(self.authz, "browser") as browser,
-                mock.patch.object(self.authz, "login"),
+                mock.patch.object(self.authz, "login") as login,
                 mock.patch.object(self.authz, "close_browser") as close,
                 mock.patch.object(
                     self.authz, "authenticated_https_request", return_value={"status": status, "body": body}
@@ -119,6 +119,9 @@ class BrowserAuthzInputTests(unittest.TestCase):
                 else:
                     with self.assertRaises(RuntimeError):
                         self.authz.verify_oci_route_account("https://nas-test.local", "baseline", "password", allowed)
+                login.assert_called_once_with(
+                    browser.return_value, "https://nas-test.local", "baseline", "password", "/vm-oci-probe/"
+                )
                 close.assert_called_once_with(browser.return_value)
 
     def test_dynamic_oci_grant_is_revoked_even_if_granted_request_fails(self):

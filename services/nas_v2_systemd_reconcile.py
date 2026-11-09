@@ -373,10 +373,18 @@ def reconcile(
         raise SystemdReconcileError("startUnits and stopUnits must be owned units")
     if not readiness <= start:
         raise SystemdReconcileError("readinessUnits must be started owned units")
+    readiness_owners = manifest.get("readinessOwners", {})
+    if (
+        not isinstance(readiness_owners, dict)
+        or set(readiness_owners) != readiness
+        or not all(isinstance(owner, str) and owner in start - readiness for owner in readiness_owners.values())
+    ):
+        raise SystemdReconcileError("readinessOwners must map each gate to a started owner")
 
     previous_owned = _string_set("ownedUnits", previous) if previous else set()
     previous_start = _string_set("startUnits", previous) if previous else set()
     previous_readiness = _string_set("readinessUnits", previous) if previous else set()
+    previous_readiness_owners = previous.get("readinessOwners", {}) if previous else {}
     previous_stop = _string_set("stopUnits", previous) if previous else set()
     previous_links_raw = previous.get("links", {}) if previous else {}
     previous_quadlet_links_raw = previous.get("quadletLinks", {}) if previous else {}
@@ -391,6 +399,7 @@ def reconcile(
             previous_hashes,
             previous_quadlet_hashes,
             previous_fingerprints,
+            previous_readiness_owners,
         )
     ):
         raise SystemdReconcileError("previous systemd reconcile state is malformed")
@@ -422,7 +431,11 @@ def reconcile(
         or quadlet_drift
     )
     lifecycle_changed = (
-        owned != previous_owned or start != previous_start or stop != previous_stop or readiness != previous_readiness
+        owned != previous_owned
+        or start != previous_start
+        or stop != previous_stop
+        or readiness != previous_readiness
+        or readiness_owners != previous_readiness_owners
     )
     fingerprint_changed = fingerprints != previous_fingerprints
     if previous and not topology_changed and not lifecycle_changed and not fingerprint_changed:
@@ -556,9 +569,17 @@ def reconcile(
             _run_systemctl(systemctl, "start", unit)
             activated_units.add(unit)
 
-        # A probe definition may be unchanged while its candidate runtime changes.
-        # Run persistent gates after owner activation and before recording success.
-        for unit in sorted(readiness):
+        # Unchanged probes still gate an activated owner, but unrelated applies
+        # must not be rejected by a workload they did not change or activate.
+        readiness_to_run = {
+            unit
+            for unit in readiness
+            if unit not in previous_readiness
+            or fingerprints.get(unit) != previous_fingerprints.get(unit)
+            or readiness_owners[unit] != previous_readiness_owners.get(unit)
+            or readiness_owners[unit] in activated_units
+        }
+        for unit in sorted(readiness_to_run):
             try:
                 _run_systemctl(systemctl, "restart", unit)
             except SystemdReconcileError:
@@ -575,6 +596,7 @@ def reconcile(
             "ownedUnits": sorted(owned),
             "startUnits": sorted(start),
             "readinessUnits": sorted(readiness),
+            "readinessOwners": readiness_owners,
             "stopUnits": sorted(stop),
             "fingerprints": fingerprints,
         }

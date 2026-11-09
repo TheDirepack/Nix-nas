@@ -487,6 +487,7 @@ class V2SystemdReconcileTests(unittest.TestCase):
             value["ownedUnits"].append(ready)
             value["startUnits"].append(ready)
             value["readinessUnits"] = [ready]
+            value["readinessOwners"] = {ready: owner}
             value["fingerprints"][ready] = "unchanged-probe"
             manifest.write_text(json.dumps(value))
             runtime = root / "systemd"
@@ -507,6 +508,25 @@ class V2SystemdReconcileTests(unittest.TestCase):
             with self.assertRaisesRegex(reconcile.SystemdReconcileError, "readinessUnits"):
                 self.run_reconcile(**kwargs)
             self.assertEqual(log.read_text(), "")
+            for invalid in (None, {}, {ready: "not-started.service"}, {ready: ready}):
+                manifest.write_text(json.dumps({**value, "readinessOwners": invalid}))
+                with self.assertRaisesRegex(reconcile.SystemdReconcileError, "readinessOwners"):
+                    self.run_reconcile(**kwargs)
+                self.assertEqual(log.read_text(), "")
+            other = "nas-v2-other.service"
+            other_source = projection / other
+            other_source.write_text("[Service]\nExecStart=/bin/true\n")
+            value["links"].append({"target": other, "source": str(other_source)})
+            value["ownedUnits"].append(other)
+            value["startUnits"].append(other)
+            value["fingerprints"][other] = "unrelated-runtime"
+            manifest.write_text(json.dumps(value))
+            self.make_systemctl(root, fail_on={"restart " + ready})
+            self.run_reconcile(**kwargs)
+            self.assertNotIn("restart " + ready, log.read_text())
+            self.assertIn("restart " + other, log.read_text())
+            previous = state.read_bytes()
+            log.write_text("")
             value["fingerprints"][owner] = "unhealthy-runtime"
             manifest.write_text(json.dumps(value))
             self.make_systemctl(root, fail_on={"restart " + ready})
@@ -521,6 +541,15 @@ class V2SystemdReconcileTests(unittest.TestCase):
             self.assertEqual(json.loads(state.read_text())["fingerprints"][owner], "unhealthy-runtime")
             commands = log.read_text()
             self.assertLess(commands.index("restart " + owner), commands.index("restart " + ready))
+            previous = state.read_bytes()
+            value["fingerprints"][ready] = "changed-probe"
+            manifest.write_text(json.dumps(value))
+            self.make_systemctl(root, fail_on={"restart " + ready})
+            log.write_text("")
+            with self.assertRaisesRegex(reconcile.SystemdReconcileError, ready):
+                self.run_reconcile(**kwargs)
+            self.assertEqual(state.read_bytes(), previous)
+            self.assertNotIn("restart " + owner, log.read_text())
 
     def test_identical_second_reconcile_is_a_true_noop(self):
         with tempfile.TemporaryDirectory() as tmp:

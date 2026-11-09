@@ -503,7 +503,8 @@ readiness:
 Dependencies use readiness data; there are no application-specific health callbacks.
 
 Persistent daemon applies run declared readiness gates after owner activation and
-before committing runtime state. A failed gate rejects the candidate. On-demand
+before committing runtime state when their owner is activated or their probe changes.
+An unrelated apply does not rerun an unchanged workload’s gate. A failed gate rejects the candidate. On-demand
 readiness remains part of the native wake path.
 
 Where possible, readiness should be compiled into native systemd gating/oneshot checks rather than requiring a permanent V2 process.
