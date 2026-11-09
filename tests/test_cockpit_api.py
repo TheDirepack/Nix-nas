@@ -1084,6 +1084,34 @@ class SetupApiCapabilityTests(unittest.TestCase):
             self.assertEqual(response["jobId"], "b" * 24)
             self.assertEqual(api.read_active_setup_job(), "b" * 24)
 
+    def test_first_run_route_rejects_stale_digest_before_reservation(self) -> None:
+        request = {
+            "password": "database-password",
+            "planDigest": "0" * 64,
+            "devices": ["/dev/vdb"],
+            "allowDestructiveStorage": True,
+            "encryptStorage": True,
+            "administrator": {
+                "username": "nasadmin",
+                "name": "NAS Administrator",
+                "email": "admin@example.test",
+                "password": "administrator-password",
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            _, socket_path = self.live_server(directory)
+            with (
+                mock.patch.object(api, "first_start_status", return_value={"status": "ready", "planDigest": "a" * 64}),
+                mock.patch.object(api, "reserve_operation") as reserve,
+                mock.patch.object(api, "_write_private_new") as write,
+            ):
+                status, response = self.exchange(socket_path, "POST", "/setup/api/first-run", body=request)
+            self.assertIn(b"400", status)
+            self.assertIn("plan is stale", response["error"])
+            reserve.assert_not_called()
+            write.assert_not_called()
+            self.assertIsNone(api.read_active_setup_job())
+
     def test_unavailable_worker_state_never_overwrites_tracked_job(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             _, socket_path = self.live_server(directory)

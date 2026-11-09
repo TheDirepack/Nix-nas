@@ -135,7 +135,7 @@ log "Run first-time setup through the encrypted-ZFS path"
 install -d -m 0700 -o admin -g users /var/lib/nas-test/setup
 printf '%s\n' 'nasadmin-vm-password' >/var/lib/nas-test/setup/nasadmin.password
 chmod 0600 /var/lib/nas-test/setup/nasadmin.password
-plan_path=/var/lib/nas-test/setup/encrypted-first-run.json
+plan_path=/var/lib/nas-first-start/first-run.json
 [[ ! -e "$plan_path" ]] || fail "encrypted setup unexpectedly has a prepared plan"
 jq -cn --arg device "$ZFS_DEVICE" \
   '{storage:{createPool:true,devices:[$device],wipeDevices:true}}' | \
@@ -145,6 +145,24 @@ make_setup_payload() {
   python3 -c 'import json,sys,pathlib; json.dump({"keepass":sys.stdin.readline().rstrip("\n"), "administrator":{"username":"nasadmin", "name":"NAS Administrator", "email":"nasadmin@nas-test.local", "password":pathlib.Path(sys.argv[1]).read_text().rstrip("\n")}},sys.stdout)' \
     /var/lib/nas-test/setup/nasadmin.password
 }
+wait_active nas-setup-api.service
+setup_sock=/run/nas-setup-api/setup.sock
+setup_api=http://localhost/setup/api
+curl --fail --silent --show-error --max-time 60 --unix-socket "$setup_sock" \
+  "$setup_api/first-start" >/tmp/nas-encrypted-api-plan.json
+jq -e --arg digest "$plan_digest" '.status == "ready" and .planDigest == $digest' \
+  /tmp/nas-encrypted-api-plan.json >/dev/null || fail "setup API did not expose the CLI-created plan"
+stale_code="$(nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" make_setup_payload | \
+  python3 -c 'import json,sys; value=json.load(sys.stdin); value["password"]=value.pop("keepass"); value.update(planDigest="0"*64, devices=[sys.argv[1]], allowDestructiveStorage=True, encryptStorage=True, confirmPasswordReapply=False); json.dump(value,sys.stdout)' \
+    "$ZFS_DEVICE" | \
+  curl --silent --show-error --max-time 60 -o /tmp/nas-api-stale-plan.json -w '%{http_code}' \
+    -H 'Content-Type: application/json' --data-binary @- --unix-socket "$setup_sock" "$setup_api/first-run")"
+[[ "$stale_code" == 400 ]] || fail "setup API accepted a stale plan digest (HTTP $stale_code)"
+jq -e '.error | contains("plan is stale")' /tmp/nas-api-stale-plan.json >/dev/null || \
+  fail "setup API stale plan rejection was not diagnostic"
+[[ ! -e /var/lib/nas-control-plane/nas-secrets/NAS.kdbx ]] || fail "rejected API setup created secrets"
+! zpool list -H tank >/dev/null 2>&1 || fail "rejected API setup created storage"
+pass "setup API rejects a stale plan digest before mutation"
 if nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" make_setup_payload | \
   env NAS_SETUP_ALLOW_ROOT=1 nas-setup first-run --config "$plan_path" \
     --secret-payload-stdin --encrypt-storage --confirm-plan-digest "$(printf '0%.0s' {1..64})" \
