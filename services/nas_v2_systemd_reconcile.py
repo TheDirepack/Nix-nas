@@ -525,7 +525,7 @@ def reconcile(
         raise SystemdReconcileError(f"unable to snapshot stable systemd state: {', '.join(unstable_units)}")
     active_snapshot = {unit: state in _UNIT_QUERY_STATES[0] for unit, state in state_snapshot.items()}
     observed_readiness = dict(state_snapshot)
-    for unit in (set(readiness_owners) | set(readiness_owners.values())) - set(observed_readiness):
+    for unit in sorted((set(readiness_owners) | set(readiness_owners.values())) - set(observed_readiness)):
         observed_readiness[unit] = unit_state(unit)
     # An interrupted or partially recorded apply can leave a target active with
     # no installed link. Stop it before installing the changed descriptor.
@@ -636,7 +636,7 @@ def reconcile(
             activated_units.add(unit)
             _run_systemctl(systemctl, "start", unit)
 
-        for owner in set(readiness_owners.values()) - activated_units:
+        for owner in sorted(set(readiness_owners.values()) - activated_units):
             before = observed_readiness[owner]
             if before not in {"inactive", "failed", "unknown"}:
                 continue
