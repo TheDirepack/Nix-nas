@@ -878,7 +878,7 @@ def generate_projection(
 
     manifest = {
         "schemaVersion": 1,
-        "activationTimeoutSeconds": document_budget(projection_effective)["commandSeconds"],
+        "activationTimeoutSeconds": document_budget(effective)["commandSeconds"],
         "links": [{"target": target, "source": source} for target, source in sorted(links.items())],
         "quadletLinks": [{"target": target, "source": source} for target, source in sorted(quadlet_links.items())],
         "ownedUnits": sorted(owned_units),
