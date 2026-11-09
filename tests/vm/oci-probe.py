@@ -118,6 +118,7 @@ def create() -> None:
         desired.setdefault(section, {}).update(fixture[section])
     ownership = str(uuid.uuid4())
     created = False
+    published = False
     try:
         command(
             "zfs",
@@ -136,6 +137,7 @@ def create() -> None:
             value["revision"],
             input_text=json.dumps(desired),
         )
+        published = True
         command(
             "podman", "exec", CONTAINER, "sh", "-c", "umask 077; printf '%s\n' nas-v2-persistent-data > /data/sentinel"
         )
@@ -153,7 +155,15 @@ def create() -> None:
                     require(observed == ownership, "cannot confirm ownership of partially created fixture dataset")
                     created = True
             if created:
-                remove_declarations(fixture)
+                if published:
+                    remove_declarations(fixture)
+                else:
+                    current = document()["document"]
+                    require(
+                        SERVICE not in current.get("services", {})
+                        and RESOURCE not in current.get("storageResources", {}),
+                        "failed document update left declarations with unconfirmed ownership",
+                    )
                 command("zfs", "destroy", "-r", "tank/nas/vm-oci-persist")
                 BASELINE.unlink(missing_ok=True)
         except Exception as cleanup_error:

@@ -22,7 +22,8 @@ class V2SystemdDisableReconcileTests(unittest.TestCase):
         log = root / "systemctl.log"
         script = root / "systemctl"
         script.write_text(
-            '#!/bin/sh\nprintf "%s\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\nexit 0\n',
+            '#!/bin/sh\nprintf "%s\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\n'
+            'if [ "$1" = is-active ]; then printf "inactive\\n"; exit 3; fi\nexit 0\n',
             encoding="utf-8",
         )
         script.chmod(script.stat().st_mode | stat.S_IXUSR)

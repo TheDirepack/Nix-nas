@@ -613,6 +613,7 @@ class V2SystemdFaultInjectionTests(unittest.TestCase):
         body = '#!/bin/sh\nprintf "%s\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\n'
         for frag in fail_on:
             body += f'if echo "$*" | grep -q "{frag}"; then exit 1; fi\n'
+        body += 'if [ "$1" = is-active ]; then printf "inactive\\n"; exit 3; fi\n'
         body += "exit 0\n"
         script.write_text(body, encoding="utf-8")
         script.chmod(script.stat().st_mode | stat.S_IXUSR)
@@ -969,7 +970,10 @@ class V2ReleaseManifestIdempotenceTests(unittest.TestCase):
             quad.mkdir()
             log = root / "log"
             script = root / "systemctl"
-            script.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\nexit 0\n', encoding="utf-8")
+            script.write_text(
+                '#!/bin/sh\nprintf "%s\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\nif [ "$1" = is-active ]; then printf "inactive\\n"; exit 3; fi\nexit 0\n',
+                encoding="utf-8",
+            )
             script.chmod(script.stat().st_mode | stat.S_IXUSR)
             state = root / "state.json"
             with mock.patch.dict(os.environ, {"NAS_V2_SYSTEMCTL_LOG": str(log)}):

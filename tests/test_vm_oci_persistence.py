@@ -202,6 +202,7 @@ class OciPersistenceTests(unittest.TestCase):
             "zfs-unowned",
             "zfs-inspection",
             "replace",
+            "concurrent",
             "sentinel",
             "snapshot",
             "record",
@@ -243,7 +244,9 @@ class OciPersistenceTests(unittest.TestCase):
                         desired = json.loads(input_text)
                         if probe.SERVICE in desired["services"]:
                             live["document"] = desired
-                            if failure == "replace":
+                            if failure in {"replace", "concurrent"}:
+                                if failure == "concurrent":
+                                    live["document"]["services"]["concurrent"] = {"enabled": True}
                                 raise RuntimeError("fixture failure")
                         elif failure == "cleanup":
                             raise RuntimeError("cleanup failure")
@@ -281,7 +284,11 @@ class OciPersistenceTests(unittest.TestCase):
                     self.assertNotIn("manual recovery", str(caught.exception))
                 elif failure in {"zfs-unowned", "zfs-inspection"}:
                     self.assertIn("manual recovery", str(caught.exception))
-                if failure == "cleanup":
+                if failure in {"cleanup", "replace", "concurrent"}:
+                    self.assertIn("manual recovery", str(caught.exception))
+                    self.assertIn(probe.SERVICE, live["document"]["services"])
+                    if failure == "concurrent":
+                        self.assertIn("concurrent", live["document"]["services"])
                     self.assertTrue(probe.DATA.parent.exists())
                     self.assertFalse(destroyed)
                 else:

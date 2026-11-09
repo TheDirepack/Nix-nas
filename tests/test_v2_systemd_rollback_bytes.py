@@ -75,6 +75,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 "restart",
                 "readiness",
                 "readiness-existing-failure",
+                "query",
                 "reset",
                 "commit",
                 "publish",
@@ -134,6 +135,8 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                         active = units[0] == owner and running["version"] is not None
                         output = ("active" if active else "inactive") if units[0] == owner else running["gate_state"]
                         code = 0 if output == "active" else 3
+                        if failure_stage == "query" and running.get("query_failure") and units[0] == owner:
+                            code, output = 1, ""
                     elif operation in {"restart", "start", "try-restart"} and units[0] == owner:
                         desired = (quadlet / "nas-v2-demo.container").read_text().split("Image=", 1)[1].strip()
                         if running["fail_restore"] and desired == "healthy":
@@ -145,6 +148,8 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     elif operation == "restart" and units[0] == ready:
                         code = int(running["version"] == "candidate" and not running["allow_candidate"])
                         running["gate_state"] = "failed" if code else "inactive"
+                        if code and failure_stage == "query":
+                            running["query_failure"] = True
                     elif operation == "reset-failed" and units[0] == ready:
                         if failure_stage == "reset":
                             code = 1
@@ -181,7 +186,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     projection.symlink_to(manifests["candidate"].parent)
                     message = (
                         "manual recovery required"
-                        if fail_restore or failure_stage in {"durability", "reset"}
+                        if fail_restore or failure_stage in {"durability", "reset", "query"}
                         else (
                             "No space left"
                             if failure_stage in {"commit", "publish", "durability"}
@@ -217,7 +222,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     self.assertEqual((quadlet / "nas-v2-demo.container").resolve(), sources["healthy"])
                     for version, source in sources.items():
                         self.assertEqual(source.read_text(), f"[Container]\nImage={version}\n")
-                    if fail_restore or failure_stage in {"durability", "reset"}:
+                    if fail_restore or failure_stage in {"durability", "reset", "query"}:
                         continue
                     self.assertEqual(running["version"], "healthy" if initially_active else None)
                     self.assertEqual(
@@ -235,6 +240,55 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     failure_stage = "retry"
                     apply(manifests["candidate"])
                     self.assertEqual(running["version"], "candidate")
+
+    def test_unit_queries_require_recognized_states_and_exit_statuses(self) -> None:
+        for code, output, accepted in (
+            (1, "", False),
+            (3, "", False),
+            (0, "", False),
+            (1, "inactive", False),
+            (3, "garbled", False),
+            (0, "active", True),
+            (3, "inactive", True),
+            (3, "failed", True),
+            (4, "unknown", True),
+        ):
+            with self.subTest(code=code, output=output), tempfile.TemporaryDirectory() as raw:
+                root = pathlib.Path(raw)
+                projection = root / "projection"
+                projection.mkdir()
+                source = projection / "nas-v2-demo.service"
+                source.write_text("[Service]\nExecStart=/bin/true\n")
+                manifest = projection / "manifest.json"
+                self._manifest(manifest, source)
+                state = root / "state.json"
+                runtime = root / "runtime"
+
+                def systemctl(_binary, operation, *units, check=True):
+                    return subprocess.CompletedProcess(
+                        [], code if operation == "is-active" else 0, output if operation == "is-active" else "", ""
+                    )
+
+                def apply() -> dict[str, object]:
+                    return reconcile.reconcile(
+                        manifest_path=manifest,
+                        projection_root=projection,
+                        systemd_runtime_dir=runtime,
+                        quadlet_runtime_dir=root / "quadlets",
+                        state_path=state,
+                        systemctl="systemctl",
+                    )
+
+                with mock.patch.object(reconcile, "_run_systemctl", side_effect=systemctl) as calls:
+                    if accepted:
+                        apply()
+                        self.assertTrue(state.exists())
+                    else:
+                        with self.assertRaisesRegex(reconcile.SystemdReconcileError, "snapshot"):
+                            apply()
+                        self.assertFalse(state.exists())
+                        self.assertFalse((runtime / source.name).exists())
+                        self.assertTrue(all(call.args[1] == "is-active" for call in calls.call_args_list))
 
     def test_failed_first_state_publication_restores_absence(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -254,7 +308,9 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 elif operation == "stop":
                     active.discard(units[0])
                 output = "active" if units and units[0] in active else "inactive"
-                return subprocess.CompletedProcess([], 0, output, "")
+                return subprocess.CompletedProcess(
+                    [], 3 if operation == "is-active" and output != "active" else 0, output, ""
+                )
 
             sync = reconcile._fsync_directory
             with (

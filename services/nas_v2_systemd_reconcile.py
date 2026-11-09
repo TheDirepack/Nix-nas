@@ -36,6 +36,11 @@ _QUADLET_DIRECT_NETWORK = re.compile(r"^nas-v2-net-([a-z][a-z0-9-]{0,63})\.netwo
 _QUADLET_SESSION_NETWORK = re.compile(r"^nas-v2-snet-([a-z][a-z0-9-]{0,63})\.network$")
 _QUADLET = re.compile(r"^nas-v2-[A-Za-z0-9_.@:-]+\.(?:container|pod|network|volume|kube|image|build)$")
 _SYSTEMCTL_TIMEOUT_SECONDS = 180
+_UNIT_QUERY_STATES = {
+    0: frozenset({"active", "reloading", "refreshing"}),
+    3: frozenset({"inactive", "failed", "activating", "deactivating", "maintenance"}),
+    4: frozenset({"unknown", "inactive"}),
+}
 # systemctl stop exits non-zero for units the manager cannot resolve; those
 # units cannot be running, so the reconcile's stop intent is already satisfied.
 _ALREADY_STOPPED_STATUSES = ("not found", "could not be found", "not loaded", "masked")
@@ -476,15 +481,19 @@ def reconcile(
             result = _run_systemctl(systemctl, "is-active", unit, check=False)
         except SystemdReconcileError:
             return None
-        return result.stdout.strip()
+        state = result.stdout.strip()
+        return state if state in _UNIT_QUERY_STATES.get(result.returncode, ()) else None
 
     def is_active(unit: str) -> bool | None:
         state = unit_state(unit)
-        return None if state is None else state == "active"
+        return None if state is None else state in _UNIT_QUERY_STATES[0]
 
     all_units = previous_owned | owned | previous_start | start | stop | units_to_stop | changed_units
     state_snapshot = {unit: unit_state(unit) for unit in sorted(all_units)}
-    active_snapshot = {unit: None if state is None else state == "active" for unit, state in state_snapshot.items()}
+    unknown_units = [unit for unit, state in state_snapshot.items() if state is None]
+    if unknown_units:
+        raise SystemdReconcileError(f"unable to snapshot systemd state: {', '.join(unknown_units)}")
+    active_snapshot = {unit: state in _UNIT_QUERY_STATES[0] for unit, state in state_snapshot.items()}
     # An interrupted or partially recorded apply can leave a target active with
     # no installed link. Stop it before installing the changed descriptor.
     active_unlinked_sessions = {

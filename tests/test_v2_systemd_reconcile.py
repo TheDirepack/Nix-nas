@@ -233,7 +233,7 @@ class V2SystemdReconcileTests(unittest.TestCase):
                 'printf "%s\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\n'
                 'case "$1" in\n'
                 "  is-active)\n"
-                '    if [ -e "$NAS_V2_ACTIVE_MARKER" ]; then printf "active\\n"; else printf "inactive\\n"; fi ;;\n'
+                '    if [ -e "$NAS_V2_ACTIVE_MARKER" ]; then printf "active\\n"; else printf "inactive\\n"; exit 3; fi ;;\n'
                 '  stop) rm -f -- "$NAS_V2_ACTIVE_MARKER" ;;\n'
                 '  start) : > "$NAS_V2_ACTIVE_MARKER" ;;\n'
                 "esac\n"
@@ -381,6 +381,7 @@ class V2SystemdReconcileTests(unittest.TestCase):
         body = '#!/bin/sh\nprintf "%s\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\n'
         for frag in fail_on:
             body += f'if echo "$*" | grep -q "{frag}"; then exit 1; fi\n'
+        body += 'if [ "$1" = is-active ]; then printf "inactive\\n"; exit 3; fi\n'
         body += "exit 0\n"
         script.write_text(body, encoding="utf-8")
         script.chmod(script.stat().st_mode | stat.S_IXUSR)
@@ -993,6 +994,7 @@ class V2SystemdReconcileTests(unittest.TestCase):
                 stop_status = root / "systemctl-unresolved"
                 stop_status.write_text(
                     "#!/bin/sh\n"
+                    'if [ "$1" = is-active ]; then printf "unknown\\n"; exit 4; fi\n'
                     'if [ "$1" = "stop" ]; then\n'
                     f"  printf '%s\\n' '{detail}' >&2\n"
                     "  exit 5\n"
