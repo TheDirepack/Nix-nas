@@ -131,15 +131,18 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                         raise reconcile.SystemdReconcileError(f"systemctl {operation} {' '.join(units)} failed")
                     return subprocess.CompletedProcess([], code, output, "")
 
-                kwargs = dict(
-                    projection_root=projection,
-                    systemd_runtime_dir=runtime,
-                    quadlet_runtime_dir=quadlet,
-                    state_path=state,
-                    systemctl="systemctl",
-                )
+                def apply(manifest: pathlib.Path) -> dict[str, object]:
+                    return reconcile.reconcile(
+                        manifest_path=manifest,
+                        projection_root=projection,
+                        systemd_runtime_dir=runtime,
+                        quadlet_runtime_dir=quadlet,
+                        state_path=state,
+                        systemctl="systemctl",
+                    )
+
                 with mock.patch.object(reconcile, "_run_systemctl", side_effect=systemctl):
-                    reconcile.reconcile(manifest_path=manifests["healthy"], **kwargs)
+                    apply(manifests["healthy"])
                     previous_state = state.read_bytes()
                     running["version"] = "healthy" if initially_active else None
                     running["fail_restore"] = fail_restore
@@ -147,7 +150,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     projection.symlink_to(manifests["candidate"].parent)
                     message = "manual recovery required" if fail_restore else ready
                     with self.assertRaisesRegex(reconcile.SystemdReconcileError, message):
-                        reconcile.reconcile(manifest_path=manifests["candidate"], **kwargs)
+                        apply(manifests["candidate"])
                     self.assertEqual(state.read_bytes(), previous_state)
                     self.assertEqual((quadlet / "nas-v2-demo.container").resolve(), sources["healthy"])
                     for version, source in sources.items():
@@ -158,13 +161,13 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     projection.unlink()
                     projection.symlink_to(manifests["healthy"].parent)
                     calls.clear()
-                    self.assertTrue(reconcile.reconcile(manifest_path=manifests["healthy"], **kwargs)["noop"])
+                    self.assertTrue(apply(manifests["healthy"])["noop"])
                     self.assertEqual(calls, [])
                     self.assertEqual(running["version"], "healthy" if initially_active else None)
                     projection.unlink()
                     projection.symlink_to(manifests["candidate"].parent)
                     running["allow_candidate"] = True
-                    reconcile.reconcile(manifest_path=manifests["candidate"], **kwargs)
+                    apply(manifests["candidate"])
                     self.assertEqual(running["version"], "candidate")
 
     def test_restart_failure_restores_runtime_link_without_mutating_generations(self) -> None:
