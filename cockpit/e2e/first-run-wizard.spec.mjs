@@ -99,16 +99,18 @@ test("sets up a fresh appliance from disk discovery without a prepared JSON file
   await expect(page.getByRole("button", {name: "Review storage plan"})).toBeDisabled();
   await page.getByLabel("/dev/disk/by-id/data-one", {exact: false}).check();
   await page.getByRole("button", {name: "Review storage plan"}).click();
-  expect(created).toEqual([
-    {
-      storage: {
-        createPool: true,
-        devices: ["/dev/disk/by-id/data-one"],
-        topology: "single",
-        wipeDevices: true,
+  await expect
+    .poll(() => created)
+    .toEqual([
+      {
+        storage: {
+          createPool: true,
+          devices: ["/dev/disk/by-id/data-one"],
+          topology: "single",
+          wipeDevices: true,
+        },
       },
-    },
-  ]);
+    ]);
   expect(submissions).toHaveLength(0);
   await expect(page.getByText("/dev/disk/by-id/data-one", {exact: true})).toBeVisible();
   await expect(page.getByLabel("I understand the listed devices will be wiped")).not.toBeChecked();
@@ -142,9 +144,17 @@ test("plan creation failures preserve input and cannot enable setup", async ({pa
   await page.getByRole("button", {name: "Review storage plan"}).click();
   await expect(page.getByText("Configured storage device is in use", {exact: false})).toBeVisible();
   await expect(page.getByLabel("/dev/vdb", {exact: false})).toBeChecked();
+  await page.getByLabel("/dev/vdb", {exact: false}).uncheck();
+  await expect(page.getByText("Configured storage device is in use", {exact: false})).toBeHidden();
+  await expect(page.getByRole("button", {name: "Review storage plan"})).toBeDisabled();
+  await page.getByLabel("/dev/vdb", {exact: false}).check();
+  await page.getByRole("button", {name: "Review storage plan"}).click();
+  await expect(page.getByText("Configured storage device is in use", {exact: false})).toBeVisible();
+  await page.getByLabel("Pool layout").selectOption("mirror");
+  await expect(page.getByText("Configured storage device is in use", {exact: false})).toBeHidden();
   await page.getByRole("button", {name: "Next"}).click();
   await expect(page.getByRole("button", {name: "Run setup"})).toBeDisabled();
-  expect(attempts).toBe(1);
+  expect(attempts).toBe(2);
 });
 
 test("completes every first-start control through reboot", async ({page}) => {

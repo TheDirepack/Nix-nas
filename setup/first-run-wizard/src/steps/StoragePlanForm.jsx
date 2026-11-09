@@ -53,12 +53,18 @@ const StoragePlanForm = ({ onCreated, onRefresh }) => {
             <Checkbox key={device.path} id={`wizard-disk-${index}`}
               label={`${device.path}${device.model ? ` — ${device.model}` : ''}${device.serial ? ` (${device.serial})` : ''}${device.size ? ` — ${device.size} bytes` : ''}${device.available ? '' : ' — unavailable (in use or read-only)'}`}
               isDisabled={!device.available || busy} isChecked={devices.includes(device.path)}
-              onChange={(_event, checked) => setDevices((current) => checked
-                ? [...current, device.path] : current.filter((path) => path !== device.path))} />)}
+              onChange={(_event, checked) => {
+                setError('');
+                setDevices((current) => checked
+                  ? [...current, device.path] : current.filter((path) => path !== device.path));
+              }} />)}
         </div>
       </FormGroup>
       <FormGroup label="Pool layout" fieldId="wizard-pool-topology">
-        <select id="wizard-pool-topology" value={topology} disabled={busy} onChange={(event) => setTopology(event.target.value)}>
+        <select id="wizard-pool-topology" value={topology} disabled={busy} onChange={(event) => {
+          setError('');
+          setTopology(event.target.value);
+        }}>
           <option value="single">Single disk</option>
           <option value="mirror">Mirror (at least 2 disks)</option>
           <option value="raidz1">RAIDZ1 (at least 3 disks)</option>

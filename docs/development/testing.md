@@ -487,8 +487,8 @@ create-first-start-plan` and completes `first-run --secret-payload-stdin` throug
 the existing authorized-root integration, with preflight enabled. Both retain
 locked-boot, storage, identity, secret and service assertions.
 
-Run the wizard interaction tests with `npm --prefix cockpit exec -- playwright
-test first-run-wizard.spec.mjs --config e2e/playwright.config.mjs`. These use
+Run the wizard interaction tests with `npm --prefix cockpit run test:browser --
+first-run-wizard.spec.mjs`. These use
 controlled API responses; only a successful native/installer run establishes
 actual Authentik, systemd and ZFS setup. For hardware acceptance, use the
 installation walkthrough unchanged: do not pre-create the default plan, insert

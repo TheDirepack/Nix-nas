@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import pathlib
 import shlex
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -25,7 +26,7 @@ class FirstStartReadinessTests(unittest.TestCase):
         block = source.split("${lib.optionalString cfg.firstStart.enable ''", 1)[1].split("''}", 1)[0]
         script = "set -euo pipefail\ncheck_file() {" + function + block
         for before, after in (
-            ("${pkgs.coreutils}/bin/stat", "/usr/bin/stat"),
+            ("${pkgs.coreutils}/bin/stat", shlex.quote(shutil.which("stat") or "stat")),
             ("${lib.escapeShellArg cfg.firstStart.configFile}", shlex.quote(str(path))),
             ("/var/lib/nas-first-start/first-run.json", str(self.default)),
             ("/var/lib/nas-setup/state.json", str(self.state)),
@@ -50,7 +51,9 @@ class FirstStartReadinessTests(unittest.TestCase):
     def test_existing_plan_keeps_file_policy(self):
         self.default.write_text("{}")
         self.default.chmod(0o666)
-        self.assertNotEqual(self.validate(self.default).returncode, 0)
+        result = self.validate(self.default)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be root-owned and not group/other writable", result.stderr)
         self.default.unlink()
         self.default.symlink_to(self.root / "missing")
         self.assertNotEqual(self.validate(self.default).returncode, 0)
