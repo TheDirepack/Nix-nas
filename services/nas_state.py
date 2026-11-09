@@ -110,67 +110,6 @@ class PathPolicy:
     sensitive: bool
 
 
-def default_authorities() -> tuple[Authority, ...]:
-    """Fallback registry for direct development use; Nix installs a profile-aware registry."""
-
-    return (
-        Authority("first-run", os.environ.get("NAS_SETUP_STATE_ROOT", "/var/lib/nas-setup"), optional=True),
-        Authority("firewall", os.environ.get("NAS_FIREWALL_STATE_ROOT", "/var/lib/nas-firewall"), optional=True),
-        Authority(
-            "networkmanager",
-            os.environ.get("NAS_NETWORKMANAGER_STATE_ROOT", "/etc/NetworkManager/system-connections"),
-            sensitive=True,
-            optional=True,
-        ),
-        Authority(
-            "copyparty",
-            os.environ.get("NAS_COPYPARTY_STATE_ROOT", "/var/lib/copyparty"),
-            sensitive=True,
-        ),
-        Authority(
-            "syncthing",
-            os.environ.get("NAS_SYNCTHING_STATE_ROOT", "/var/lib/syncthing/.config/syncthing"),
-            sensitive=True,
-            optional=True,
-        ),
-        Authority(
-            "identity-sync",
-            os.environ.get("NAS_IDENTITY_SYNC_STATE_ROOT", "/var/lib/nas-identity-sync"),
-            sensitive=True,
-        ),
-        Authority(
-            "scheduler",
-            os.environ.get("NAS_SCHEDULER_STATE_ROOT", "/var/lib/cockpit-scheduler"),
-            optional=True,
-        ),
-        Authority(
-            "caddy",
-            os.environ.get("NAS_CADDY_STATE_ROOT", "/var/lib/caddy"),
-            sensitive=True,
-        ),
-        Authority(
-            "authentik-media",
-            os.environ.get("NAS_AUTHENTIK_STATE_ROOT", "/var/lib/authentik/data"),
-            sensitive=True,
-        ),
-        Authority(
-            "keepass",
-            os.environ.get("NAS_KEEPASS_DATABASE", "/var/lib/nas-control-plane/nas-secrets/NAS.kdbx"),
-            sensitive=True,
-        ),
-        Authority("authentik-database", "postgresql://authentik", kind="database", sensitive=True),
-        Authority(
-            "managed-services",
-            os.environ.get("NAS_MANAGED_SERVICES_STATE_PATH", "/var/lib/nas-control/services.yaml"),
-        ),
-        Authority(
-            "managed-apps",
-            os.environ.get("NAS_MANAGED_APPS_STATE_ROOT", "/var/lib/nas-control/apps"),
-            optional=True,
-        ),
-    )
-
-
 def _load_registry_value() -> Any:
     registry_file = os.environ.get("NAS_STATE_REGISTRY_FILE")
     raw = os.environ.get("NAS_STATE_REGISTRY_JSON")
@@ -190,9 +129,7 @@ def _load_registry_value() -> Any:
 def authorities() -> tuple[Authority, ...]:
     value = _load_registry_value()
     if value is None:
-        if os.environ.get("NAS_STATE_REGISTRY_REQUIRED") == "1":
-            raise StateError("Generated state registry is required in installed/production execution")
-        result = list(default_authorities())
+        raise StateError("Generated state registry is required; direct integrations must supply an explicit registry")
     else:
         if not isinstance(value, list):
             raise StateError("State registry must be an array")
@@ -1664,6 +1601,54 @@ def rollback_inventory() -> dict[str, Any]:
     }
 
 
+def require_network_restore_acknowledgement(staging: pathlib.Path, manifest: dict[str, Any], allowed: bool) -> bool:
+    """Require acknowledgement for changed or unreadable network authorities."""
+    registry = {item.name: item for item in authorities()}
+    if not any(name in registry for name in ("networkmanager", "firewall")):
+        return False
+    for entry in canonical_apply_entries(manifest):
+        authority = registry[entry["name"]]
+        if authority.name not in {"networkmanager", "firewall"}:
+            continue
+        source = pathlib.Path(authority.source)
+        comparison_error: OSError | None = None
+        try:
+            if entry["status"] == "absent":
+                changed = lstat_type(source) != 0
+            elif entry["status"] == "captured":
+                payload = staging.joinpath(*safe_member_name(entry["payload"]).parts)
+                changed = not restored_content_matches(source, payload)
+            else:
+                continue
+        except OSError as exc:
+            changed = True
+            comparison_error = exc
+        if changed:
+            if allowed:
+                return True
+            raise StateError(
+                "Network configuration restore can disconnect administration; use --allow-network-disconnect only with working out-of-band recovery"
+                + (f" ({authority.name}: {comparison_error})" if comparison_error else "")
+            ) from comparison_error
+
+    return False
+
+
+def restore_manifest_for_network_policy(manifest: dict[str, Any], network_change: bool) -> dict[str, Any]:
+    """Freeze excluded network authorities across apply, verification and compensation."""
+    if network_change:
+        return manifest
+    # Preserve unchanged network files through forward apply and compensation;
+    # a later external network edit must not be overwritten without acknowledgement.
+    return {
+        **manifest,
+        "entries": [
+            {**entry, "status": "skipped"} if entry["name"] in {"networkmanager", "firewall"} else entry
+            for entry in manifest["entries"]
+        ],
+    }
+
+
 def restore_bundle(
     bundle: pathlib.Path,
     *,
@@ -1671,6 +1656,7 @@ def restore_bundle(
     allow_partial: bool,
     include_sensitive: bool,
     restore_absence: bool = False,
+    allow_network_disconnect: bool = False,
 ) -> dict[str, Any]:
     require_root()
     secure_rollback_root()
@@ -1703,9 +1689,16 @@ def restore_bundle(
                 and not include_sensitive
             ):
                 raise StateError("Sensitive bundle restore requires --include-sensitive")
+            network_change = require_network_restore_acknowledgement(staging, manifest, allow_network_disconnect)
+            apply_manifest = restore_manifest_for_network_policy(manifest, network_change)
             prune_rollbacks()
             rollback = DEFAULT_ROLLBACK_ROOT / f"rollback-{int(time.time())}-{secrets.token_hex(4)}.tar.gz"
-            unit_snapshot = capture_unit_state(restore_units())
+            selected_units = [
+                unit
+                for unit in restore_units()
+                if network_change or unit not in {"NetworkManager.service", "firewalld.service"}
+            ]
+            unit_snapshot = capture_unit_state(selected_units)
         except Exception as early_error:
             restore_journal_update("failed", primaryError=str(early_error), completedAt=int(time.time()))
             raise
@@ -1714,7 +1707,7 @@ def restore_bundle(
         try:
             registry = {item.name: item for item in authorities()}
             drift = False
-            for entry in canonical_apply_entries(manifest):
+            for entry in canonical_apply_entries(apply_manifest):
                 authority = registry[entry["name"]]
                 if entry["status"] == "captured":
                     if authority.kind == "database":
@@ -1756,7 +1749,7 @@ def restore_bundle(
             restore_journal_update("rollback-captured", rollbackBundle=str(rollback))
             # Reject absence conflicts while the runtime is untouched: stopping
             # a unit with CleanupOnExit=yes already changes the live system.
-            preflight_restore_absence(manifest, restore_absence=restore_absence)
+            preflight_restore_absence(apply_manifest, restore_absence=restore_absence)
             stop_active_units(unit_snapshot)
             restore_journal_update("quiesced", unitSnapshot=unit_snapshot)
             state_mutated = True
@@ -1764,11 +1757,11 @@ def restore_bundle(
             # need PostgreSQL running again before the payload is applied.
             if any(entry["status"] == "captured" and entry["kind"] == "database" for entry in manifest["entries"]):
                 run_systemctl("start", "postgresql.service")
-            apply_extracted(staging, manifest, restore_absence=restore_absence)
+            apply_extracted(staging, apply_manifest, restore_absence=restore_absence)
             restore_journal_update("state-applied")
             # Verification runs before runtime consumers restart: a writer that
             # touches a restored file first would make the commit look drifted.
-            verify_restored_state(staging, manifest)
+            verify_restored_state(staging, apply_manifest)
             reapply_runtime_consumers(unit_snapshot)
             restore_journal_update("committed", completedAt=int(time.time()))
         except Exception as original:
@@ -1791,7 +1784,7 @@ def restore_bundle(
             try:
                 # Runtime consumers restart only after verification; re-quiesce
                 # them so rollback data cannot be overwritten mid-apply.
-                stop_active_units(capture_unit_state(restore_units()))
+                stop_active_units(capture_unit_state(tuple(unit_snapshot)))
                 with state_temporary_directory("nas-state-rollback.") as rollback_temp:
                     rollback_staging = pathlib.Path(rollback_temp)
                     extract_bundle(rollback, rollback_staging)
@@ -1804,7 +1797,11 @@ def restore_bundle(
                         for entry in rollback_manifest["entries"]
                     ):
                         run_systemctl("start", "postgresql.service")
-                    apply_extracted(rollback_staging, rollback_manifest, restore_absence=True)
+                    apply_extracted(
+                        rollback_staging,
+                        restore_manifest_for_network_policy(rollback_manifest, network_change),
+                        restore_absence=True,
+                    )
                 reapply_runtime_consumers(unit_snapshot)
                 restore_journal_update("failed-rolled-back", completedAt=int(time.time()))
             except Exception as rollback_error:
@@ -1856,6 +1853,11 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Remove managed state that is intentionally absent from the bundle",
     )
+    restore.add_argument(
+        "--allow-network-disconnect",
+        action="store_true",
+        help="Acknowledge network restore disconnection risk; requires working out-of-band recovery",
+    )
     subparsers.add_parser("authorities", help="List registered state authorities")
     subparsers.add_parser("rollbacks", help="List retained automatic rollback bundles")
     subparsers.add_parser("prune-rollbacks", help="Prune expired rollback bundles")
@@ -1892,6 +1894,7 @@ def main() -> None:
                 allow_partial=args.allow_partial,
                 include_sensitive=args.include_sensitive,
                 restore_absence=args.restore_absence,
+                allow_network_disconnect=args.allow_network_disconnect,
             )
             token = os.environ.get(COORDINATION_TOKEN_ENV)
             if token:

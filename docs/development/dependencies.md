@@ -1,5 +1,23 @@
 # Dependency policy
 
+## Patch retirement
+
+Every retained patch needs its repaired boundary, focused regression and removal
+condition documented here. Review these conditions on every pinned input update:
+
+- Authentik CSP, accessibility, known-device-cookie and blueprint-failure patches:
+  remove each only when the pinned upstream supplies its behavior and the existing
+  native plus installed browser/blueprint regressions pass without the patch.
+- Cockpit D-Bus readiness/cache and framing/error-page CSP patches: retire each
+  after the pinned upstream fixes the protected behavior and the existing native
+  fixtures and installed login/error/framing tests pass unpatched.
+- ZAP cookie-probe repair: remove only when the pinned scanner preserves deliberate
+  cookie mutations on the wire while retaining the authenticated scan user and
+  the vulnerable-session positive control still triggers rule 90027.
+
+Prefer upstream fixes when qualified. An absent upstream resolution is an open
+maintenance obligation, not permission to suppress the corresponding regression.
+
 ## Release inventory
 
 Release automation publishes `dependencies-nas-ci-ready.json` and

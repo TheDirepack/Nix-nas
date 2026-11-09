@@ -18,6 +18,12 @@ The `installation/` directory contains a destructive fresh-install Disko example
 
 ## First response
 
+Network-affecting `nas-state restore` rejects changed NetworkManager/firewall
+configuration unless `--allow-network-disconnect` is explicitly supplied. Confirm
+a working local console, hardware KVM, or another recovery path independent of
+the network and firewall being restored before supplying it. The flag acknowledges
+the risk; it does not arm a timed connectivity rollback.
+
 1. Stop writes if the failure may involve storage corruption:
 
    ```bash

@@ -6,6 +6,12 @@ The manual-release workflow described in [`automated-releases.md`](automated-rel
 
 No checklist item may be satisfied with evidence from a different commit. If code, configuration, generated frontend bytes, lockfiles, or release tooling changes, rerun the affected qualification gates.
 
+Apply the [first appliance release scope](release-scope.md) to the designation.
+Retain a boot-device replacement drill with an intact data pool and restored
+identity/secrets/application artifacts, plus independent backup restoration.
+Record measured host resources separately from build/browser qualification tools.
+Review the dependency patch removal conditions before freezing the release.
+
 ## 1. Freeze the source and frontend artifact
 
 - Record the qualifying commit and `flake.lock` digest.

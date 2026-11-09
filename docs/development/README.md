@@ -16,6 +16,7 @@ This directory documents how the appliance is built and validated. It is intenti
 - [Dependency policy](dependencies.md) — immutable-input and upstream-update constraints.
 - [Manually triggered source releases](automated-releases.md) — explicit operator dispatch, exact-main-CI qualification, release-only version stamping, Diceware bootstrap credentials, and safe reruns.
 - [Release qualification checklist](release-checklist.md) — evidence required before an install-ready designation.
+- [First release scope](release-scope.md) — GUI-first appliance acceptance and explicit qualification boundaries.
 - [Design system](../../.interface-design/system.md) — Cockpit UI direction, PatternFly authority, and component rules.
 
 Historical context lives in [decision history](history.md). Release-specific implementation records are evidence, not design documents.
