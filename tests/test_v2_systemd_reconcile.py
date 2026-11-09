@@ -527,8 +527,23 @@ class V2SystemdReconcileTests(unittest.TestCase):
             value["startUnits"].append(other)
             value["fingerprints"][other] = "unrelated-runtime"
             manifest.write_text(json.dumps(value))
-            self.make_systemctl(root, fail_on={"restart " + ready})
+            log.write_text("")
+            manifest.write_text(json.dumps({**value, "readinessOwners": {ready: other}}))
+            with self.assertRaisesRegex(reconcile.SystemdReconcileError, "readinessOwners.*declared"):
+                self.run_reconcile(**kwargs)
+            self.assertEqual(log.read_text(), "")
+            manifest.write_text(json.dumps(value))
+            ctl, _ = self.make_systemctl(root, fail_on={"restart " + ready})
+            ctl.write_text(
+                ctl.read_text()
+                .replace(
+                    "exit 0\n",
+                    f'if [ "$1" = is-active ] && [ "$2" = {owner} ]; then printf "activating\\n"; exit 3; fi\nexit 0\n',
+                )
+                .replace('if [ "$1" = is-active ];', f'if [ "$1" = is-active ] && [ "$2" != {owner} ];')
+            )
             self.run_reconcile(**kwargs)
+            self.assertNotIn("is-active " + owner, log.read_text())
             self.assertNotIn("restart " + ready, log.read_text())
             self.assertIn("restart " + other, log.read_text())
             previous = state.read_bytes()

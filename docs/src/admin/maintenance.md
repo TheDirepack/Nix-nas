@@ -22,6 +22,32 @@ For direct diagnosis, use the generated command reference and systemd journal ra
 
 For offline checks before installation or while debugging, use `nas-v2 validate`, `nas-v2 effective`, and `nas-v2 plan` with `--spec`, `--schema`, and `--platform` overrides as needed. `nas-v2 apply` delegates to the same finite reconciliation entry point used by systemd.
 
+## Rejected application updates
+
+Saving an always-on application's definition in Cockpit Services runs its declared
+readiness probes after activating an affected runtime. A probe failure rejects
+the apply. The controller attempts to restore the previous generation's runtime
+links, previously active owners, and recorded state. It reports failed or
+uncertain recovery explicitly; a rejected update must not be treated as healthy
+merely because the previous definition is visible again. Transient sessions
+that were terminated may need operator recovery.
+
+Use the Services error and read-only status and journal information to identify
+the failed gate. Replace `APP` with the service identifier:
+
+```bash
+sudo nas-managed-services-control status
+sudo journalctl -b -u nas-v2-ready-APP.service -u nas-managed-services-reconcile.service
+```
+
+Check the declared endpoint, path or native-unit probe and the workload's own
+logs. Correct the application definition or its dependency, then retry through
+Services. An affected unit that is starting, stopping or reloading must settle
+before a safe snapshot can be taken. If the error reports manual recovery,
+inspect the named units before retrying. Do not clear a readiness failure just
+to make an update appear successful; earlier probe failures remain in the
+journal even when a later probe succeeds.
+
 ## Replication drill cleanup
 
 `./scripts/live-validation.sh syncoid` creates a disposable child dataset under `NAS_SYNCOID_SOURCE` and claims `<NAS_SYNCOID_TARGET>/nas-live-<timestamp>` on the receiving host. A successful drill destroys the source child and its snapshot, the clone, the replicated `@validation` snapshot, the replica, and the claim, all non-recursively. No replicated target dataset remains after a successful drill.

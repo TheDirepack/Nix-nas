@@ -74,6 +74,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
             for stage in (
                 "restart",
                 "readiness",
+                "probe-only",
                 "readiness-existing-failure",
                 "query",
                 "reset",
@@ -83,11 +84,13 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 "durability",
             )
             for active, restore in ((True, False), (False, False), (True, True), (False, True))
+            if stage != "probe-only" or (not active and not restore)
         ):
             with (
                 self.subTest(stage=failure_stage, active=initially_active, fail_restore=fail_restore),
                 tempfile.TemporaryDirectory() as raw,
             ):
+                probe_only = failure_stage == "probe-only"
                 root = pathlib.Path(raw)
                 control = root / "control"
                 runtime = root / "units"
@@ -125,6 +128,12 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     )
                     manifests[version] = manifest
                     sources[version] = source
+                if probe_only:
+                    sources["candidate"].write_bytes(sources["healthy"].read_bytes())
+                    candidate = json.loads(manifests["candidate"].read_text())
+                    candidate["fingerprints"][owner] = "healthy"
+                    candidate["fingerprints"][ready] = "changed-probe"
+                    manifests["candidate"].write_text(json.dumps(candidate))
                 projection.symlink_to(manifests["healthy"].parent)
                 running = {"version": None, "allow_candidate": False, "fail_restore": False, "gate_state": "inactive"}
                 calls = []
@@ -147,7 +156,15 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                             if desired == "candidate" and failure_stage == "restart":
                                 code = 1
                     elif operation == "restart" and units[0] == ready:
-                        code = int(running["version"] == "candidate" and not running["allow_candidate"])
+                        if probe_only and running["version"] is None:
+                            running["version"] = "healthy"
+                        code = int(
+                            (
+                                running["version"] == "candidate"
+                                or (probe_only and running.get("candidate_attempt", False))
+                            )
+                            and not running["allow_candidate"]
+                        )
                         running["gate_state"] = "failed" if code else "inactive"
                         if code and failure_stage == "query":
                             running["query_failure"] = True
@@ -181,6 +198,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     state.write_bytes(previous_state)
                     running["version"] = "healthy" if initially_active else None
                     running["fail_restore"] = fail_restore
+                    running["candidate_attempt"] = True
                     running["gate_state"] = (
                         "failed"
                         if failure_stage in {"readiness-existing-failure", "commit-existing-failure"}
@@ -234,7 +252,9 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     self.assertEqual(state.read_bytes(), previous_state)
                     self.assertEqual((quadlet / "nas-v2-demo.container").resolve(), sources["healthy"])
                     for version, source in sources.items():
-                        self.assertEqual(source.read_text(), f"[Container]\nImage={version}\n")
+                        self.assertEqual(
+                            source.read_text(), f"[Container]\nImage={'healthy' if probe_only else version}\n"
+                        )
                     if fail_restore or failure_stage in {"durability", "reset", "query"}:
                         continue
                     self.assertEqual(running["version"], "healthy" if initially_active else None)
@@ -252,7 +272,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     running["allow_candidate"] = True
                     failure_stage = "retry"
                     apply(manifests["candidate"])
-                    self.assertEqual(running["version"], "candidate")
+                    self.assertEqual(running["version"], "healthy" if probe_only else "candidate")
 
     def test_unit_queries_require_recognized_states_and_exit_statuses(self) -> None:
         for code, output, accepted in (
@@ -263,6 +283,8 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
             (3, "garbled", False),
             (3, "activating", False),
             (3, "deactivating", False),
+            (0, "reloading", False),
+            (0, "refreshing", False),
             (0, "active", True),
             (3, "inactive", True),
             (3, "failed", True),

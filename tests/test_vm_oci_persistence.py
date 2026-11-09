@@ -83,6 +83,7 @@ class OciPersistenceTests(unittest.TestCase):
             "duplicate-before",
             "duplicate-after",
             "duplicate-wildcard",
+            "overlap",
         ):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as raw:
                 probe = load_probe()
@@ -137,6 +138,10 @@ class OciPersistenceTests(unittest.TestCase):
                         unsafe + "\n" + route if fault == "duplicate-before" else route + "\n" + unsafe
                     )
 
+                if fault == "overlap":
+                    unsafe = route.splitlines()
+                    unsafe[0] = unsafe[0].split(" path ")[0] + ' path "/vm*"'
+                    probe.CADDY.write_text(route + "\n" + "\n".join(unsafe).replace("forward_auth", "reverse_proxy"))
                 calls = []
 
                 def command(*argv, **kwargs):
@@ -208,6 +213,7 @@ class OciPersistenceTests(unittest.TestCase):
             "record",
             "verify",
             "cleanup",
+            "child",
         ):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as raw:
                 probe = load_probe()
@@ -217,6 +223,7 @@ class OciPersistenceTests(unittest.TestCase):
                 original = {"services": {"unrelated": {"enabled": True}}, "storageResources": {}}
                 live = {"document": copy.deepcopy(original), "revision": "a" * 64}
                 destroyed = []
+                destroy_calls = []
                 dataset_owner = "-"
 
                 def command(*argv, input_text=None):
@@ -257,6 +264,11 @@ class OciPersistenceTests(unittest.TestCase):
                     elif argv[:2] == ("zfs", "snapshot") and failure == "snapshot":
                         raise RuntimeError("fixture failure")
                     elif argv[:2] == ("zfs", "destroy"):
+                        destroy_calls.append(argv)
+                        if "@" in argv[-1]:
+                            return ""
+                        if failure == "child":
+                            raise RuntimeError("child dataset remains")
                         destroyed.append(argv[-1])
                         probe.DATA.parent.rmdir()
                     return ""
@@ -273,7 +285,9 @@ class OciPersistenceTests(unittest.TestCase):
                     mock.patch.object(
                         probe,
                         "verify",
-                        side_effect=RuntimeError("fixture failure") if failure in {"verify", "cleanup"} else None,
+                        side_effect=RuntimeError("fixture failure")
+                        if failure in {"verify", "cleanup", "child"}
+                        else None,
                     ),
                     self.assertRaisesRegex(
                         RuntimeError, "manual recovery required" if failure == "cleanup" else "fixture failure"
@@ -284,7 +298,13 @@ class OciPersistenceTests(unittest.TestCase):
                     self.assertNotIn("manual recovery", str(caught.exception))
                 elif failure in {"zfs-unowned", "zfs-inspection"}:
                     self.assertIn("manual recovery", str(caught.exception))
-                if failure in {"cleanup", "replace", "concurrent"}:
+                if failure == "child":
+                    self.assertIn("manual recovery", str(caught.exception))
+                    self.assertEqual(live["document"], original)
+                    self.assertTrue(probe.DATA.parent.exists())
+                    self.assertFalse(destroyed)
+                    self.assertTrue(all("-r" not in call for call in destroy_calls))
+                elif failure in {"cleanup", "replace", "concurrent"}:
                     self.assertIn("manual recovery", str(caught.exception))
                     self.assertIn(probe.SERVICE, live["document"]["services"])
                     if failure == "concurrent":
@@ -344,7 +364,7 @@ class OciPersistenceTests(unittest.TestCase):
                 probe.verify("test reboot")
 
     def test_removal_preserves_unrelated_desired_state_and_rejects_incomplete_cleanup(self):
-        for fault in (None, "data", "container", "inspection", "group", "projection", "symlink"):
+        for fault in (None, "data", "container", "inspection", "group", "projection", "symlink", "route", "write"):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as raw:
                 probe = load_probe()
                 root = pathlib.Path(raw)
@@ -358,7 +378,7 @@ class OciPersistenceTests(unittest.TestCase):
                 probe.BASELINE = root / "baseline"
                 probe.BASELINE.write_text(json.dumps({"data": probe.data_state()}))
                 probe.CADDY = root / "caddy"
-                probe.CADDY.write_text("")
+                probe.CADDY.write_text("/vm-oci-persist" if fault == "route" else "")
                 probe.TOKEN = root / "token"
                 probe.TOKEN.write_text("test-only-token")
                 probe.MANIFEST = root / "manifest"
@@ -384,13 +404,21 @@ class OciPersistenceTests(unittest.TestCase):
                         if input_text is None:
                             self.fail("replacement did not send desired state on stdin")
                         replacements.append(json.loads(input_text))
+                        if fault == "write" and len(replacements) == 1:
+                            raise RuntimeError("write failed")
+                        desired.clear()
+                        desired.update(copy.deepcopy(replacements[-1]))
                         if fault == "data":
                             probe.DATA.write_text("lost")
                     return "inactive" if argv[:2] == ("systemctl", "show") else ""
 
                 groups = [{"name": f"application.{probe.SERVICE}.access"}] if fault == "group" else []
                 with (
-                    mock.patch.object(probe, "document", return_value={"revision": "a" * 64, "document": desired}),
+                    mock.patch.object(
+                        probe,
+                        "document",
+                        side_effect=lambda: {"revision": "a" * 64, "document": copy.deepcopy(desired)},
+                    ),
                     mock.patch.object(probe, "command", side_effect=command),
                     mock.patch.object(
                         probe.subprocess,
@@ -411,6 +439,9 @@ class OciPersistenceTests(unittest.TestCase):
                     else:
                         probe.remove()
                         probe.remove()
+                    if fault == "write":
+                        self.assertIn(probe.SERVICE, desired["services"])
+                        probe.remove()
                     if fault in {"projection", "symlink"}:
                         probe.PROJECTIONS[0].unlink()
                         probe.remove()
@@ -421,7 +452,8 @@ class OciPersistenceTests(unittest.TestCase):
                             "services": {"unrelated": {"enabled": True}},
                             "storageResources": {"other-data": {"path": "/tank/other"}},
                         }
-                    ],
+                    ]
+                    * (2 if fault == "write" else 1),
                 )
 
     def test_teardown_requires_owned_baseline_before_any_authority_write(self):
@@ -467,7 +499,9 @@ class OciPersistenceTests(unittest.TestCase):
         }
         original = copy.deepcopy(desired)
         with (
-            mock.patch.object(probe, "document", return_value={"revision": "a" * 64, "document": desired}),
+            mock.patch.object(
+                probe, "document", side_effect=lambda: {"revision": "a" * 64, "document": copy.deepcopy(desired)}
+            ),
             mock.patch.object(probe, "command") as command,
             self.assertRaisesRegex(RuntimeError, "fixture cleanup blocked.*shared.*another-app"),
         ):

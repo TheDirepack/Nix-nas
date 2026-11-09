@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import configparser
 import hashlib
 import json
 import os
@@ -36,7 +37,7 @@ _QUADLET_DIRECT_NETWORK = re.compile(r"^nas-v2-net-([a-z][a-z0-9-]{0,63})\.netwo
 _QUADLET_SESSION_NETWORK = re.compile(r"^nas-v2-snet-([a-z][a-z0-9-]{0,63})\.network$")
 _QUADLET = re.compile(r"^nas-v2-[A-Za-z0-9_.@:-]+\.(?:container|pod|network|volume|kube|image|build)$")
 _SYSTEMCTL_TIMEOUT_SECONDS = 180
-_TRANSITIONAL_UNIT_STATES = frozenset({"activating", "deactivating"})
+_TRANSITIONAL_UNIT_STATES = frozenset({"activating", "deactivating", "reloading", "refreshing"})
 _UNIT_QUERY_STATES = {
     0: frozenset({"active", "reloading", "refreshing"}),
     3: frozenset({"inactive", "failed", "activating", "deactivating", "maintenance"}),
@@ -391,6 +392,18 @@ def reconcile(
     ):
         raise SystemdReconcileError("readinessOwners must map each gate to a started owner")
 
+    for gate, owner in readiness_owners.items():
+        source = links.get(gate)
+        parser = configparser.ConfigParser(interpolation=None)
+        try:
+            if source is None:
+                raise SystemdReconcileError(f"readinessOwners gate has no generated unit: {gate}")
+            parser.read_string(source.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, configparser.Error) as error:
+            raise SystemdReconcileError(f"unable to validate readinessOwners for {gate}: {error}") from error
+        if any(parser.get("Unit", key, fallback="").split() != [owner] for key in ("Requires", "After")):
+            raise SystemdReconcileError(f"readinessOwners must match the declared gate owner: {gate}")
+
     previous_owned = _string_set("ownedUnits", previous) if previous else set()
     previous_start = _string_set("startUnits", previous) if previous else set()
     previous_readiness = _string_set("readinessUnits", previous) if previous else set()
@@ -489,7 +502,21 @@ def reconcile(
         state = unit_state(unit)
         return None if state is None or state in _TRANSITIONAL_UNIT_STATES else state in _UNIT_QUERY_STATES[0]
 
-    all_units = previous_owned | owned | previous_start | start | stop | units_to_stop | changed_units
+    planned_activations = ((changed_units & owned) - readiness - changed_sessions) | (
+        (start - previous_start) - readiness
+    )
+    # Unchanged probes still gate an activated owner, but unrelated applies
+    # must not be rejected by a workload they did not change or activate.
+    readiness_to_run = {
+        unit
+        for unit in readiness
+        if unit not in previous_readiness
+        or fingerprints.get(unit) != previous_fingerprints.get(unit)
+        or readiness_owners[unit] != previous_readiness_owners.get(unit)
+        or readiness_owners[unit] in planned_activations
+    }
+    all_units = units_to_stop | (changed_units & owned) | (start - previous_start) | readiness_to_run
+    all_units.update(readiness_owners[gate] for gate in readiness_to_run)
     state_snapshot = {unit: unit_state(unit) for unit in sorted(all_units)}
     unstable_units = [
         unit for unit, state in state_snapshot.items() if state is None or state in _TRANSITIONAL_UNIT_STATES
@@ -603,16 +630,6 @@ def reconcile(
             activated_units.add(unit)
             _run_systemctl(systemctl, "start", unit)
 
-        # Unchanged probes still gate an activated owner, but unrelated applies
-        # must not be rejected by a workload they did not change or activate.
-        readiness_to_run = {
-            unit
-            for unit in readiness
-            if unit not in previous_readiness
-            or fingerprints.get(unit) != previous_fingerprints.get(unit)
-            or readiness_owners[unit] != previous_readiness_owners.get(unit)
-            or readiness_owners[unit] in activated_units
-        }
         for unit in sorted(readiness_to_run):
             attempted_readiness.add(unit)
             _run_systemctl(systemctl, "restart", unit)

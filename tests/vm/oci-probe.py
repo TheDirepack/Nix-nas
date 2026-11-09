@@ -126,6 +126,7 @@ def create() -> None:
     ownership = str(uuid.uuid4())
     created = False
     published = False
+    snapshot_created = False
     try:
         command(
             "zfs",
@@ -149,6 +150,7 @@ def create() -> None:
             "podman", "exec", CONTAINER, "sh", "-c", "umask 077; printf '%s\n' nas-v2-persistent-data > /data/sentinel"
         )
         command("zfs", "snapshot", "tank/nas/vm-oci-persist@qualification")
+        snapshot_created = True
         record()
         verify("creation")
     except Exception as error:
@@ -171,7 +173,9 @@ def create() -> None:
                         and RESOURCE not in current.get("storageResources", {}),
                         "failed document update left declarations with unconfirmed ownership",
                     )
-                command("zfs", "destroy", "-r", "tank/nas/vm-oci-persist")
+                if snapshot_created:
+                    command("zfs", "destroy", "tank/nas/vm-oci-persist@qualification")
+                command("zfs", "destroy", "tank/nas/vm-oci-persist")
                 BASELINE.unlink(missing_ok=True)
         except Exception as cleanup_error:
             raise RuntimeError(f"{error}; fixture cleanup failed: {cleanup_error}; manual recovery required") from error
@@ -247,6 +251,9 @@ def verify_route(baseline: dict, stage: str) -> None:
         if separator and any(path.rstrip("/*") == "/vm-oci-persist" for path in shlex.split(paths)):
             matches.append((index, candidate, paths))
     require(len(matches) == 1, f"OCI route missing or duplicated after {stage}")
+    backend = "127.0.0.1:18089"
+    backend_routes = [line for line in actual if line.strip().startswith("reverse_proxy ") and backend in line]
+    require(len(backend_routes) == 1, f"OCI backend has an alternate route after {stage}")
     index, candidate, paths = matches[0]
     # The renderer assigns path indexes across all applications.
     block = "\n".join(expected).replace(matcher.strip(), candidate.strip())
@@ -324,7 +331,10 @@ def remove() -> None:
     for kind, name in (("container", CONTAINER), ("network", "nas-v2-vm-oci-persist")):
         result = subprocess.run(["podman", kind, "exists", name], capture_output=True, timeout=30, check=False)
         require(result.returncode == 1, f"removed OCI {kind} remains or inspection failed")
-    require("/vm-oci-persist/" not in CADDY.read_text(), "removed OCI route remains")
+    require(
+        all(marker not in CADDY.read_text() for marker in ("/vm-oci-persist", "v2_vm_oci_persist_", "127.0.0.1:18089")),
+        "removed OCI route remains",
+    )
     manifest = MANIFEST
     command("systemctl", "start", "nas-managed-services-authentik-reconcile.service")
     require(
