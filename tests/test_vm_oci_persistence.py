@@ -400,6 +400,29 @@ class OciPersistenceTests(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         probe.locked()
 
+    def test_locked_oracle_waits_only_for_bounded_deactivation(self):
+        for states, times, accepted in (
+            (["deactivating", "inactive"], [0, 1], True),
+            (["deactivating", "active"], [0, 1], False),
+            (["deactivating"], [0, 30], False),
+            (["failed"], [0], False),
+        ):
+            probe = load_probe()
+            with (
+                self.subTest(states=states),
+                mock.patch.object(probe, "command", side_effect=states),
+                mock.patch.object(probe.time, "monotonic", side_effect=times),
+                mock.patch.object(probe.time, "sleep"),
+                mock.patch.object(probe.subprocess, "run", return_value=subprocess.CompletedProcess([], 7)) as curl,
+            ):
+                if accepted:
+                    probe.locked()
+                    curl.assert_called_once()
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "while secrets are locked"):
+                        probe.locked()
+                    curl.assert_not_called()
+
     def test_missing_baseline_cannot_qualify_a_reboot(self):
         probe = load_probe()
         with tempfile.TemporaryDirectory() as raw:

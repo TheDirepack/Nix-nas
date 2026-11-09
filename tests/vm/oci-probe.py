@@ -332,7 +332,12 @@ def verify(stage: str) -> None:
 
 
 def locked() -> None:
-    state = command("systemctl", "show", UNIT, "--property=ActiveState", "--value")
+    deadline = time.monotonic() + 30
+    while True:
+        state = command("systemctl", "show", UNIT, "--property=ActiveState", "--value", timeout=5)
+        if state != "deactivating" or time.monotonic() >= deadline:
+            break
+        time.sleep(1)
     require(state == "inactive", f"OCI service remained {state} while secrets are locked")
     result = subprocess.run(
         ["curl", "--silent", "--max-time", "5", "http://127.0.0.1:18089/"],
