@@ -6,10 +6,12 @@ import argparse
 import hashlib
 import json
 import pathlib
+import shlex
 import subprocess
 import sys
 import time
 import urllib.request
+import uuid
 
 SERVICE = "vm-oci-persist"
 RESOURCE = "vm-oci-persist-data"
@@ -114,8 +116,19 @@ def create() -> None:
     fixture = fixture_document()
     for section in ("services", "storageResources"):
         desired.setdefault(section, {}).update(fixture[section])
-    command("zfs", "create", "-o", f"mountpoint={DATA.parent}", "tank/nas/vm-oci-persist")
+    ownership = str(uuid.uuid4())
+    created = False
     try:
+        command(
+            "zfs",
+            "create",
+            "-o",
+            f"mountpoint={DATA.parent}",
+            "-o",
+            f"nas:qualification={ownership}",
+            "tank/nas/vm-oci-persist",
+        )
+        created = True
         command(
             "nas-managed-services-control",
             "replace-json-document",
@@ -131,6 +144,9 @@ def create() -> None:
         verify("creation")
     except Exception as error:
         try:
+            if not created:
+                observed = command("zfs", "get", "-H", "-o", "value", "nas:qualification", "tank/nas/vm-oci-persist")
+                require(observed == ownership, "cannot confirm ownership of partially created fixture dataset")
             remove_declarations(fixture)
             command("zfs", "destroy", "-r", "tank/nas/vm-oci-persist")
             BASELINE.unlink(missing_ok=True)
@@ -191,14 +207,19 @@ def verify_route(baseline: dict, stage: str) -> None:
     expected = expected_route(baseline)
     matcher, patterns = expected[0].split(" path ", 1)
     actual = CADDY.read_text().splitlines()
+    matches = []
     for index, line in enumerate(actual):
         candidate, separator, paths = line.partition(" path ")
-        if separator and paths == patterns:
-            # The renderer assigns path indexes across all applications.
-            block = "\n".join(expected).replace(matcher.strip(), candidate.strip())
-            if "\n".join(actual[index : index + len(expected)]) == block:
-                return
-    raise RuntimeError(f"OCI route target, authentication or proxy changed after {stage}")
+        if separator and any(path.rstrip("/*") == "/vm-oci-persist" for path in shlex.split(paths)):
+            matches.append((index, candidate, paths))
+    require(len(matches) == 1, f"OCI route missing or duplicated after {stage}")
+    index, candidate, paths = matches[0]
+    # The renderer assigns path indexes across all applications.
+    block = "\n".join(expected).replace(matcher.strip(), candidate.strip())
+    require(
+        paths == patterns and "\n".join(actual[index : index + len(expected)]) == block,
+        f"OCI route target, authentication or proxy changed after {stage}",
+    )
 
 
 def verify(stage: str) -> None:

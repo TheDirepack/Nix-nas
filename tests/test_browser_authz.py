@@ -136,8 +136,69 @@ class BrowserAuthzInputTests(unittest.TestCase):
         ):
             self.authz.verify_oci_authorization("https://nas-test.local", "admin", "baseline", "alice")
         self.assertEqual(assign.call_count, 2)
+        for call in assign.call_args_list:
+            self.assertEqual(call.kwargs["scope"], ["application.vm-oci-probe.access"])
         self.assertEqual(assign.call_args_list[0].args[-1], ["application.vm-oci-probe.access"])
         self.assertEqual(assign.call_args_list[1].args[-1], [])
+
+    def test_scoped_capability_edit_preserves_unrelated_membership(self):
+        import json
+        import subprocess
+
+        driver = mock.MagicMock()
+        driver.execute_async_script.return_value = {"ok": True}
+        group = "application.vm-oci-probe.access"
+        with (
+            mock.patch.object(self.authz, "browser", return_value=driver),
+            mock.patch.object(self.authz, "login"),
+        ):
+            self.authz.assign_application_capabilities(
+                "https://nas-test.local", "nasadmin", "secret", "baseline", [group], scope=[group]
+            )
+        script, username, groups, scope = driver.execute_async_script.call_args.args
+        harness = r"""
+        const fs = require('node:fs');
+        const {script, username, groups, scope} = JSON.parse(fs.readFileSync(0, 'utf8'));
+        const membership = new Set(['other']);
+        const writes = [];
+        global.document = {cookie: 'authentik_csrf=test-token'};
+        global.fetch = async (url, options) => {
+          let value;
+          if (url.includes('core/users/?')) value = {results: [{username, pk: 'user', num_pk: 7, groups: [...membership]}]};
+          else if (url.includes('core/groups/?')) value = {results: [
+            {pk: 'other', name: 'application.other.access', attributes: {nasManagedCapability: true}},
+            {pk: 'oci', name: scope[0], attributes: {nasManagedCapability: true}},
+          ]};
+          else {
+            writes.push(url);
+            if (url.includes('/add_user/')) membership.add('oci');
+            else membership.delete('oci');
+          }
+          return {ok: true, status: value ? 200 : 204, json: async () => value};
+        };
+        const run = names => new Promise(resolve => new Function(script)(username, names, scope, resolve));
+        (async () => {
+          const granted = await run(groups);
+          const during = [...membership];
+          const revoked = await run([]);
+          process.stdout.write(JSON.stringify({granted, revoked, during, after: [...membership], writes}));
+        })().catch(error => {console.error(error); process.exitCode = 1});
+        """
+        result = subprocess.run(
+            ["node", "-e", harness],
+            input=json.dumps({"script": script, "username": username, "groups": groups, "scope": scope}),
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=True,
+        )
+        outcome = json.loads(result.stdout)
+        self.assertTrue(outcome["granted"]["ok"])
+        self.assertTrue(outcome["revoked"]["ok"])
+        self.assertEqual(set(outcome["during"]), {"other", "oci"})
+        self.assertEqual(outcome["after"], ["other"])
+        self.assertEqual(len(outcome["writes"]), 2)
+        self.assertTrue(all("/oci/" in url for url in outcome["writes"]))
 
     @staticmethod
     def secret(root: pathlib.Path, name: str, value: str) -> pathlib.Path:
@@ -1205,7 +1266,7 @@ class BrowserAuthzInputTests(unittest.TestCase):
         login.assert_called_once_with(driver, "https://nas-test.local", "nasadmin", "secret", "/identity/if/user/")
         self.assertIn("X-Authentik-Csrf", driver.execute_async_script.call_args.args[0])
         self.assertIn("remove_user", driver.execute_async_script.call_args.args[0])
-        self.assertEqual(driver.execute_async_script.call_args.args[1:], ("alice", groups))
+        self.assertEqual(driver.execute_async_script.call_args.args[1:], ("alice", groups, None))
         driver.quit.assert_called_once_with()
 
 

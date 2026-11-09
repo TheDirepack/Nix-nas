@@ -80,6 +80,9 @@ class OciPersistenceTests(unittest.TestCase):
             "upstream",
             "proxy",
             "auth",
+            "duplicate-before",
+            "duplicate-after",
+            "duplicate-wildcard",
         ):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as raw:
                 probe = load_probe()
@@ -123,6 +126,16 @@ class OciPersistenceTests(unittest.TestCase):
                     probe.CADDY.write_text(route.replace('/vm-oci-persist"', '/wrong"'))
                 elif fault == "auth":
                     probe.CADDY.write_text(route.replace("forward_auth", "reverse_proxy"))
+
+                if fault in {"duplicate-before", "duplicate-after", "duplicate-wildcard"}:
+                    unsafe = route.replace("forward_auth", "reverse_proxy").replace("_path_0", "_path_8")
+                    if fault == "duplicate-wildcard":
+                        unsafe_lines = unsafe.splitlines()
+                        unsafe_lines[0] = unsafe_lines[0].split(" path ")[0] + ' path "/vm-oci-persist/*"'
+                        unsafe = "\n".join(unsafe_lines)
+                    probe.CADDY.write_text(
+                        unsafe + "\n" + route if fault == "duplicate-before" else route + "\n" + unsafe
+                    )
 
                 calls = []
 
@@ -183,7 +196,17 @@ class OciPersistenceTests(unittest.TestCase):
                 command.assert_not_called()
 
     def test_failed_creation_compensates_only_its_own_resources(self):
-        for failure in ("zfs", "replace", "sentinel", "snapshot", "record", "verify", "cleanup"):
+        for failure in (
+            "zfs",
+            "zfs-after",
+            "zfs-unowned",
+            "replace",
+            "sentinel",
+            "snapshot",
+            "record",
+            "verify",
+            "cleanup",
+        ):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as raw:
                 probe = load_probe()
                 root = pathlib.Path(raw)
@@ -192,12 +215,21 @@ class OciPersistenceTests(unittest.TestCase):
                 original = {"services": {"unrelated": {"enabled": True}}, "storageResources": {}}
                 live = {"document": copy.deepcopy(original), "revision": "a" * 64}
                 destroyed = []
+                dataset_owner = "-"
 
                 def command(*argv, input_text=None):
+                    nonlocal dataset_owner
                     if argv[:2] == ("zfs", "create"):
-                        if failure == "zfs":
+                        if failure in {"zfs", "zfs-unowned"}:
                             raise RuntimeError("fixture failure")
                         probe.DATA.parent.mkdir()
+                        dataset_owner = next(
+                            arg.split("=", 1)[1] for arg in argv if arg.startswith("nas:qualification=")
+                        )
+                        if failure == "zfs-after":
+                            raise RuntimeError("fixture failure")
+                    elif argv[:2] == ("zfs", "get"):
+                        return dataset_owner
                     elif "replace-json-document" in argv:
                         if input_text is None:
                             self.fail("replacement did not send desired state on stdin")
@@ -245,7 +277,9 @@ class OciPersistenceTests(unittest.TestCase):
                     self.assertEqual(live["document"], original)
                     self.assertFalse(probe.BASELINE.exists())
                     self.assertFalse(probe.DATA.parent.exists())
-                    self.assertEqual(destroyed, [] if failure == "zfs" else ["tank/nas/vm-oci-persist"])
+                    self.assertEqual(
+                        destroyed, [] if failure in {"zfs", "zfs-unowned"} else ["tank/nas/vm-oci-persist"]
+                    )
 
     def test_readiness_retries_read_only_until_ready_and_times_out(self):
         probe = load_probe()

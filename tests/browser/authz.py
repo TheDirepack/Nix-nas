@@ -365,13 +365,15 @@ def assign_application_capabilities(
     password: str,
     username: str,
     groups: list[str],
+    *,
+    scope: list[str] | None = None,
 ) -> None:
     driver = browser()
     try:
         login(driver, origin, administrator, password, "/identity/if/user/")
         result = driver.execute_async_script(
             """
-            const [username, groupNames, done] = arguments;
+            const [username, groupNames, scopedNames, done] = arguments;
             const csrf = document.cookie
               .split('; ')
               .find(cookie => cookie.startsWith('authentik_csrf='))
@@ -392,7 +394,9 @@ def assign_application_capabilities(
               const user = users.results.find(candidate => candidate.username === username);
               if (!user) throw new Error(`Authentik user ${username} was not found`);
               const groups = await request('core/groups/?ordering=name&page_size=100');
-              const capabilityGroups = groups.results.filter(group => group.attributes?.nasManagedCapability === true);
+              const scope = scopedNames === null ? null : new Set(scopedNames);
+              const capabilityGroups = groups.results.filter(group =>
+                group.attributes?.nasManagedCapability === true && (scope === null || scope.has(group.name)));
               const requested = new Set(groupNames);
               for (const groupName of requested) {
                 if (!capabilityGroups.some(group => group.name === groupName)) {
@@ -415,6 +419,7 @@ def assign_application_capabilities(
             """,
             username,
             groups,
+            scope,
         )
         if not isinstance(result, dict) or result.get("ok") is not True:
             raise RuntimeError(f"Authentik capability assignment failed: {result}")
@@ -1124,11 +1129,18 @@ def verify_oci_authorization(
     verify_oci_route_account(origin, "baseline", baseline_password, False)
     try:
         assign_application_capabilities(
-            origin, "nasadmin", administrator_password, "baseline", ["application.vm-oci-probe.access"]
+            origin,
+            "nasadmin",
+            administrator_password,
+            "baseline",
+            ["application.vm-oci-probe.access"],
+            scope=["application.vm-oci-probe.access"],
         )
         verify_oci_route_account(origin, "baseline", baseline_password, True)
     finally:
-        assign_application_capabilities(origin, "nasadmin", administrator_password, "baseline", [])
+        assign_application_capabilities(
+            origin, "nasadmin", administrator_password, "baseline", [], scope=["application.vm-oci-probe.access"]
+        )
     verify_oci_route_account(origin, "baseline", baseline_password, False)
 
 
