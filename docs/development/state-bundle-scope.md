@@ -2,6 +2,17 @@
 
 `nas-state` is the small, versioned migration and validation bundle for mutable control configuration. It is not a second application-data backup system.
 
+Execution requires an explicit registry, including direct development calls.
+The installed wrapper supplies it; there is no automatic broader development
+fallback containing application databases or secrets.
+
+Restoring changed NetworkManager/firewall state requires the CLI's explicit
+`--allow-network-disconnect` acknowledgement before rollback capture or service
+quiesce. Use it only with working out-of-band recovery. Unchanged network entries
+do not require it and are neither rewritten nor quiesced for unrelated configuration
+changes. This acknowledgement does not provide timed remote-confirmation
+rollback; remote network restore remains unqualified until that path is tested.
+
 The installed registry contains only configuration that is both runtime-editable and useful to move as one small bundle:
 
 - Managed Services desired state (`/var/lib/nas-control/services.yaml`);

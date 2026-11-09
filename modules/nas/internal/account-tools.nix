@@ -199,7 +199,6 @@ let
     ] ++ lib.optional cfg.networking.enable pkgs.networkmanager;
     text = ''
       export NAS_STATE_REGISTRY_FILE=${stateRegistryFile}
-      export NAS_STATE_REGISTRY_REQUIRED=1
       export NAS_STATE_RUNTIME_ROOT=/run/nas-state
       export NAS_STATE_QUIESCE_UNITS_JSON=${lib.escapeShellArg (builtins.toJSON stateQuiesceUnits)}
       export NAS_STATE_RESTORE_UNITS_JSON=${lib.escapeShellArg (builtins.toJSON stateRestoreUnits)}
@@ -224,7 +223,6 @@ let
       export NAS_SETUP_JOURNAL=/var/lib/nas-setup/first-run-journal.json
       export NAS_FIRST_START_STATUS=/var/lib/nas-first-start/status.json
       export NAS_STATE_REGISTRY_FILE=${stateRegistryFile}
-      export NAS_STATE_REGISTRY_REQUIRED=1
       export NAS_VERSION_FILE=${../../../VERSION}
       exec ${nasDoctorScript} "$@"
     '';

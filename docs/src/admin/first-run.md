@@ -150,13 +150,15 @@ their existing command timeouts; the request-read deadline does not discard a
 legitimate processing response. A disconnected browser still does not cancel
 the detached worker. Refresh and resume to recover its progress.
 
-The browser path is the only first-start execution surface. `nas-setup` on the
-recovery plane stays read-only for this workflow: use
-`nas-setup prepare-first-start` to review the published `ready` state and plan
-digest, and `nas-setup status` to watch completion, but do not expect the
-interactive `first-run` subcommand to perform setup; the wizard's submission
-path is what validates the plan digest, confirms every storage device, and
-runs the guarded job.
+The browser wizard is the primary first-start interface. Cockpit links to this
+same wizard instead of maintaining a second setup form. CLI commands own plan,
+identity and storage validation, authorization, locking, journal and execution.
+For trusted backend/recovery integrations, `nas-setup first-run` also accepts
+`--secret-payload-stdin`: one bounded JSON line containing `keepass` and the
+administrator's `username`, `name`, `email`, and `password`. The same secret
+validator runs in the API and detached worker. This input does not bypass the
+configured local recovery administrator, plan digest or exact disk confirmations.
+Keep secrets out of arguments, environment variables and persistent JSON files.
 
 When the plan creates a pool, the wizard requires the destructive-storage
 confirmation and the displayed SHA-256 plan digest before it will submit. The
@@ -181,7 +183,7 @@ against partially regenerated databases.
 
 The workflow prompts once for the KeePass database password. It then:
 
-1. verifies the configured KDBX database or creates it when missing;
+1. creates the setup KeePass database or verifies the database from a resumable setup stage;
 2. runs `nas-secrets init` idempotently;
 3. verifies existing ZFS storage or creates the explicitly confirmed pool and
    managed dataset;
@@ -286,7 +288,7 @@ memberships while preserving unrelated Authentik groups. Accounts carry the
 `deactivateMissingManagedAccounts` mode can disable accounts removed from the
 file without touching manually managed Authentik accounts.
 
-The initial runtime Authentik API token remains the bootstrap token until the
-administrator creates a narrower service-account token and stores it with
-`nas-secrets set-authentik-token`. Complete that post-bootstrap hardening step
-before production use.
+Successful setup provisions and verifies a scoped runtime Authentik token and
+retires the bootstrap authority. Routine post-setup token replacement is not
+required. If an incomplete or older setup leaves a runtime-token warning, use
+the [Authentik service-token recovery guidance](authentik.md#service-token).

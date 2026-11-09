@@ -179,6 +179,7 @@
             (pkgs.python3.withPackages (pythonPackages: with pythonPackages; [
               bandit
               coverage
+              defusedxml
               diceware
               django
               django-csp

@@ -37,6 +37,9 @@ from nas_operation_lock import (
     reserve_operation,
 )
 
+from nas_setup_first_start import parse_first_start_secrets
+from nas_setup_config import SetupError
+
 ZFS_POOL = os.environ.get("NAS_ZFS_POOL", "tank")
 ZFS_DATASET = os.environ.get("NAS_ZFS_DATASET", "tank/nas")
 ZFS_ROOT = pathlib.Path(os.environ.get("NAS_ZFS_ROOT", "/tank"))
@@ -439,23 +442,15 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
     password = _json_string(request, "password", required=True, max_length=MAX_PASSWORD_LENGTH)
     if "\n" in password or "\r" in password:
         raise ApiError("KeePassXC database password must be a single line")
-    administrator = request.get("administrator")
-    if not isinstance(administrator, dict) or set(administrator) != {"username", "name", "email", "password"}:
-        raise ApiError("First-start administrator details are invalid")
-    username = _json_string(administrator, "username", required=True, max_length=64)
-    name = _json_string(administrator, "name", required=True, max_length=256)
-    email = _json_string(administrator, "email", required=True, max_length=320)
-    administrator_password = _json_string(administrator, "password", required=True, max_length=MAX_PASSWORD_LENGTH)
-    if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", username):
-        raise ApiError("Administrator username is invalid")
-    if username == "akadmin":
-        raise ApiError("Administrator username is the reserved bootstrap identity")
-    if any("\n" in value or "\r" in value for value in (name, email, administrator_password)):
-        raise ApiError("Administrator details must be single-line values")
-    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
-        raise ApiError("Administrator email is invalid")
-    if len(administrator_password) < 12:
-        raise ApiError("Administrator password must contain at least 12 characters")
+    try:
+        password, administrator = parse_first_start_secrets(
+            json.dumps({"keepass": password, "administrator": request.get("administrator")})
+        )
+    except SetupError as exc:
+        raise ApiError(str(exc)) from exc
+    username, name, email, administrator_password = (
+        administrator[key] for key in ("username", "name", "email", "password")
+    )
     plan_digest = _json_string(request, "planDigest", required=True, max_length=64)
     if not re.fullmatch(r"[0-9a-f]{64}", plan_digest):
         raise ApiError("Invalid first-start plan digest")
