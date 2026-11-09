@@ -458,6 +458,23 @@ class OciPersistenceTests(unittest.TestCase):
                 command.assert_not_called()
                 self.assertEqual(desired, before)
 
+    def test_shared_resource_blocks_cleanup_before_document_mutation(self):
+        probe = load_probe()
+        desired = probe.fixture_document()
+        expected = copy.deepcopy(desired)
+        desired["services"]["another-app"] = {
+            "storage": [{"resource": probe.RESOURCE, "mountPath": "/shared", "access": "read"}]
+        }
+        original = copy.deepcopy(desired)
+        with (
+            mock.patch.object(probe, "document", return_value={"revision": "a" * 64, "document": desired}),
+            mock.patch.object(probe, "command") as command,
+            self.assertRaisesRegex(RuntimeError, "fixture cleanup blocked.*shared.*another-app"),
+        ):
+            probe.remove_declarations(expected)
+        command.assert_not_called()
+        self.assertEqual(desired, original)
+
     def test_installer_retains_fixture_for_final_browser_and_native_path_tears_it_down(self):
         installer = (ROOT / "scripts/qemu-test.sh").read_text()
         final = installer.split('log "Rebooting the switched generation for persistence verification"', 1)[1]

@@ -161,14 +161,18 @@ class BrowserAuthzInputTests(unittest.TestCase):
         const {script, username, groups, scope} = JSON.parse(fs.readFileSync(0, 'utf8'));
         const membership = new Set(['other']);
         const writes = [];
+        const pages = [];
         global.document = {cookie: 'authentik_csrf=test-token'};
         global.fetch = async (url, options) => {
           let value;
           if (url.includes('core/users/?')) value = {results: [{username, pk: 'user', num_pk: 7, groups: [...membership]}]};
-          else if (url.includes('core/groups/?')) value = {results: [
-            {pk: 'other', name: 'application.other.access', attributes: {nasManagedCapability: true}},
-            {pk: 'oci', name: scope[0], attributes: {nasManagedCapability: true}},
-          ]};
+          else if (url.includes('core/groups/?')) {
+            const page = Number(new URL(url, 'https://nas-test.local').searchParams.get('page') || 1);
+            pages.push(page);
+            value = page === 1
+              ? {results: [{pk: 'other', name: 'application.other.access', attributes: {nasManagedCapability: true}}], pagination: {next: 2}}
+              : {results: [{pk: 'oci', name: scope[0], attributes: {nasManagedCapability: true}}], pagination: {next: 0}};
+          }
           else {
             writes.push(url);
             if (url.includes('/add_user/')) membership.add('oci');
@@ -181,7 +185,7 @@ class BrowserAuthzInputTests(unittest.TestCase):
           const granted = await run(groups);
           const during = [...membership];
           const revoked = await run([]);
-          process.stdout.write(JSON.stringify({granted, revoked, during, after: [...membership], writes}));
+          process.stdout.write(JSON.stringify({granted, revoked, during, after: [...membership], writes, pages}));
         })().catch(error => {console.error(error); process.exitCode = 1});
         """
         result = subprocess.run(
@@ -197,6 +201,7 @@ class BrowserAuthzInputTests(unittest.TestCase):
         self.assertTrue(outcome["revoked"]["ok"])
         self.assertEqual(set(outcome["during"]), {"other", "oci"})
         self.assertEqual(outcome["after"], ["other"])
+        self.assertEqual(outcome["pages"], [1, 2, 1, 2])
         self.assertEqual(len(outcome["writes"]), 2)
         self.assertTrue(all("/oci/" in url for url in outcome["writes"]))
 

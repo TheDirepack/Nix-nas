@@ -88,6 +88,13 @@ def fixture_document() -> dict:
 def remove_declarations(expected: dict | None = None) -> None:
     value = document()
     desired = value["document"]
+    if RESOURCE in desired.get("storageResources", {}):
+        consumers = sorted(
+            name
+            for name, service in desired.get("services", {}).items()
+            if name != SERVICE and any(item.get("resource") == RESOURCE for item in service.get("storage", []))
+        )
+        require(not consumers, f"fixture cleanup blocked: resource {RESOURCE} is shared by {', '.join(consumers)}")
     changed = False
     for section, key in (("services", SERVICE), ("storageResources", RESOURCE)):
         entries = desired.get(section, {})

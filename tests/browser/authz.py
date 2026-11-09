@@ -393,9 +393,19 @@ def assign_application_capabilities(
               const users = await request(`core/users/?username=${encodeURIComponent(username)}`);
               const user = users.results.find(candidate => candidate.username === username);
               if (!user) throw new Error(`Authentik user ${username} was not found`);
-              const groups = await request('core/groups/?ordering=name&page_size=100');
+              const groups = [];
+              let page = 1;
+              while (page !== 0) {
+                const result = await request(`core/groups/?ordering=name&page_size=100&page=${page}`);
+                groups.push(...result.results);
+                const next = result.pagination?.next ?? 0;
+                if (!Number.isInteger(next) || next < 0 || (next !== 0 && next <= page)) {
+                  throw new Error('Invalid Authentik group pagination');
+                }
+                page = next;
+              }
               const scope = scopedNames === null ? null : new Set(scopedNames);
-              const capabilityGroups = groups.results.filter(group =>
+              const capabilityGroups = groups.filter(group =>
                 group.attributes?.nasManagedCapability === true && (scope === null || scope.has(group.name)));
               const requested = new Set(groupNames);
               for (const groupName of requested) {
