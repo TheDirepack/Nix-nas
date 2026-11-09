@@ -68,9 +68,16 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 systemctl=str(systemctl),
             )
 
-    def test_readiness_failure_restores_live_owner_as_well_as_links(self) -> None:
-        for initially_active, fail_restore in ((True, False), (False, False), (True, True)):
-            with self.subTest(active=initially_active, fail_restore=fail_restore), tempfile.TemporaryDirectory() as raw:
+    def test_rejected_apply_restores_live_owner_as_well_as_links(self) -> None:
+        for failure_stage, initially_active, fail_restore in (
+            (stage, active, restore)
+            for stage in ("readiness", "commit")
+            for active, restore in ((True, False), (False, False), (True, True))
+        ):
+            with (
+                self.subTest(stage=failure_stage, active=initially_active, fail_restore=fail_restore),
+                tempfile.TemporaryDirectory() as raw,
+            ):
                 root = pathlib.Path(raw)
                 control = root / "control"
                 runtime = root / "units"
@@ -147,10 +154,25 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     previous_state = state.read_bytes()
                     running["version"] = "healthy" if initially_active else None
                     running["fail_restore"] = fail_restore
+                    running["allow_candidate"] = failure_stage == "commit"
                     projection.unlink()
                     projection.symlink_to(manifests["candidate"].parent)
-                    message = "manual recovery required" if fail_restore else ready
-                    with self.assertRaisesRegex(reconcile.SystemdReconcileError, message):
+                    message = (
+                        "manual recovery required"
+                        if fail_restore
+                        else ("No space left" if failure_stage == "commit" else ready)
+                    )
+                    write_state = reconcile._atomic_json
+                    with (
+                        mock.patch.object(
+                            reconcile,
+                            "_atomic_json",
+                            side_effect=OSError(28, "No space left on device")
+                            if failure_stage == "commit"
+                            else write_state,
+                        ),
+                        self.assertRaisesRegex(reconcile.SystemdReconcileError, message),
+                    ):
                         apply(manifests["candidate"])
                     self.assertEqual(state.read_bytes(), previous_state)
                     self.assertEqual((quadlet / "nas-v2-demo.container").resolve(), sources["healthy"])

@@ -504,6 +504,11 @@ class V2SystemdReconcileTests(unittest.TestCase):
             log.write_text("")
             self.assertTrue(self.run_reconcile(**kwargs)["noop"])
             self.assertEqual(log.read_text(), "")
+            state.write_text(json.dumps({**json.loads(previous), "readinessOwners": {ready: None}}))
+            with self.assertRaisesRegex(reconcile.SystemdReconcileError, "previous.*readinessOwners"):
+                self.run_reconcile(**kwargs)
+            self.assertEqual(log.read_text(), "")
+            state.write_bytes(previous)
             manifest.write_text(json.dumps({**value, "readinessUnits": ["not-started.service"]}))
             with self.assertRaisesRegex(reconcile.SystemdReconcileError, "readinessUnits"):
                 self.run_reconcile(**kwargs)

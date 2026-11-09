@@ -403,6 +403,10 @@ def reconcile(
         )
     ):
         raise SystemdReconcileError("previous systemd reconcile state is malformed")
+    if previous:
+        _state_link_keys("readinessOwners", previous)
+        if not all(isinstance(owner, str) for owner in previous_readiness_owners.values()):
+            raise SystemdReconcileError("previous systemd reconcile field readinessOwners is malformed")
 
     previous_link_keys = _state_link_keys("links", previous) if previous else set()
     previous_quadlet_link_keys = _state_link_keys("quadletLinks", previous) if previous else set()
@@ -523,7 +527,6 @@ def reconcile(
                 continue
 
     activated_units: set[str] = set()
-    readiness_failed = False
     try:
         for unit in sorted(units_to_stop):
             if _SESSION_TARGET.fullmatch(unit) and unit not in previous_links_raw and unit not in current_links:
@@ -580,11 +583,7 @@ def reconcile(
             or readiness_owners[unit] in activated_units
         }
         for unit in sorted(readiness_to_run):
-            try:
-                _run_systemctl(systemctl, "restart", unit)
-            except SystemdReconcileError:
-                readiness_failed = True
-                raise
+            _run_systemctl(systemctl, "restart", unit)
             restarted.add(unit)
 
         state = {
@@ -612,14 +611,14 @@ def reconcile(
         try:
             rollback_links()
             restart_errors: list[str] = []
-            if readiness_failed:
-                # Restoring links cannot replace a still-active candidate process.
-                for unit in sorted(activated_units & previous_owned):
-                    if active_snapshot.get(unit) is True and unit not in disrupted_sessions:
-                        try:
-                            _run_systemctl(systemctl, "restart", unit)
-                        except SystemdReconcileError as restart_exc:
-                            restart_errors.append(str(restart_exc))
+            # Restoring links cannot replace a still-active candidate process,
+            # including when readiness succeeded but the state commit failed.
+            for unit in sorted(activated_units & previous_owned):
+                if active_snapshot.get(unit) is True and unit not in disrupted_sessions:
+                    try:
+                        _run_systemctl(systemctl, "restart", unit)
+                    except SystemdReconcileError as restart_exc:
+                        restart_errors.append(str(restart_exc))
             rollback_active_state()
             if restart_errors:
                 raise SystemdReconcileError("; ".join(restart_errors))

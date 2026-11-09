@@ -889,10 +889,14 @@ class BrowserAuthzInputTests(unittest.TestCase):
 
     def test_authenticated_https_request_carries_browser_cookies_without_following_redirects(self) -> None:
         driver = mock.Mock()
-        driver.get_cookies.return_value = [
-            {"name": "authentik_session", "value": "session-value"},
-            {"name": "authentik_proxy", "value": "proxy-value"},
-        ]
+        driver.current_url = "chrome-error://chromewebdata/"
+        driver.get_cookies.side_effect = AssertionError("error-document cookie scope must not be used")
+        driver.execute_cdp_cmd.return_value = {
+            "cookies": [
+                {"name": "authentik_session", "value": "session-value"},
+                {"name": "authentik_proxy", "value": "proxy-value"},
+            ]
+        }
         response = mock.Mock()
         response.status = 302
         response.read.return_value = b"redirect"
@@ -911,6 +915,9 @@ class BrowserAuthzInputTests(unittest.TestCase):
                 "blocked-write",
             )
 
+        driver.execute_cdp_cmd.assert_called_once_with(
+            "Network.getCookies", {"urls": ["https://nas-test.local:8443/shares/users/bob/isolation-e2e.txt"]}
+        )
         self.assertEqual(result["status"], 302)
         pinned.assert_called_once()
         self.assertEqual(pinned.call_args.args, ("nas-test.local", "127.0.0.1"))

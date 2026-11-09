@@ -933,7 +933,10 @@ def authenticated_https_request(
     if parsed.scheme != "https" or not parsed.hostname or not path.startswith("/"):
         raise ValueError("authenticated browser probe requires an HTTPS origin and root-relative path")
     address = os.environ.get("NAS_BROWSER_HOST_ADDRESS", "").strip() or parsed.hostname
-    cookies = "; ".join(f"{cookie['name']}={cookie['value']}" for cookie in driver.get_cookies())
+    # A denied navigation may leave Chromium on an error document whose cookie
+    # scope differs from the protected route we are testing.
+    route_cookies = driver.execute_cdp_cmd("Network.getCookies", {"urls": [origin.rstrip("/") + path]})["cookies"]
+    cookies = "; ".join(f"{cookie['name']}={cookie['value']}" for cookie in route_cookies)
     headers = {"Host": parsed.netloc, "Cookie": cookies}
     payload = body.encode() if body is not None else None
     if payload is not None:
