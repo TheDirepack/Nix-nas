@@ -200,6 +200,7 @@ class OciPersistenceTests(unittest.TestCase):
             "zfs",
             "zfs-after",
             "zfs-unowned",
+            "zfs-inspection",
             "replace",
             "sentinel",
             "snapshot",
@@ -220,7 +221,7 @@ class OciPersistenceTests(unittest.TestCase):
                 def command(*argv, input_text=None):
                     nonlocal dataset_owner
                     if argv[:2] == ("zfs", "create"):
-                        if failure in {"zfs", "zfs-unowned"}:
+                        if failure in {"zfs", "zfs-unowned", "zfs-inspection"}:
                             raise RuntimeError("fixture failure")
                         probe.DATA.parent.mkdir()
                         dataset_owner = next(
@@ -228,6 +229,12 @@ class OciPersistenceTests(unittest.TestCase):
                         )
                         if failure == "zfs-after":
                             raise RuntimeError("fixture failure")
+                    elif argv[:2] == ("zfs", "list"):
+                        if failure == "zfs-inspection":
+                            raise RuntimeError("inspection failure")
+                        return (
+                            "tank/nas/vm-oci-persist" if probe.DATA.parent.exists() or failure == "zfs-unowned" else ""
+                        )
                     elif argv[:2] == ("zfs", "get"):
                         return dataset_owner
                     elif "replace-json-document" in argv:
@@ -267,9 +274,13 @@ class OciPersistenceTests(unittest.TestCase):
                     ),
                     self.assertRaisesRegex(
                         RuntimeError, "manual recovery required" if failure == "cleanup" else "fixture failure"
-                    ),
+                    ) as caught,
                 ):
                     probe.create()
+                if failure == "zfs":
+                    self.assertNotIn("manual recovery", str(caught.exception))
+                elif failure in {"zfs-unowned", "zfs-inspection"}:
+                    self.assertIn("manual recovery", str(caught.exception))
                 if failure == "cleanup":
                     self.assertTrue(probe.DATA.parent.exists())
                     self.assertFalse(destroyed)
@@ -278,7 +289,8 @@ class OciPersistenceTests(unittest.TestCase):
                     self.assertFalse(probe.BASELINE.exists())
                     self.assertFalse(probe.DATA.parent.exists())
                     self.assertEqual(
-                        destroyed, [] if failure in {"zfs", "zfs-unowned"} else ["tank/nas/vm-oci-persist"]
+                        destroyed,
+                        [] if failure in {"zfs", "zfs-unowned", "zfs-inspection"} else ["tank/nas/vm-oci-persist"],
                     )
 
     def test_readiness_retries_read_only_until_ready_and_times_out(self):
@@ -348,6 +360,16 @@ class OciPersistenceTests(unittest.TestCase):
                     "services": {probe.SERVICE: {}, "unrelated": {"enabled": True}},
                     "storageResources": {probe.RESOURCE: {}, "other-data": {"path": "/tank/other"}},
                 }
+                probe.BASELINE.write_text(
+                    json.dumps(
+                        {
+                            "revision": "a" * 64,
+                            "service": copy.deepcopy(desired["services"][probe.SERVICE]),
+                            "resource": copy.deepcopy(desired["storageResources"][probe.RESOURCE]),
+                            "data": probe.data_state(),
+                        }
+                    )
+                )
                 replacements = []
 
                 def command(*argv, input_text=None):
@@ -394,6 +416,40 @@ class OciPersistenceTests(unittest.TestCase):
                         }
                     ],
                 )
+
+    def test_teardown_requires_owned_baseline_before_any_authority_write(self):
+        for fault in ("missing", "invalid", "service", "resource"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as raw:
+                probe = load_probe()
+                probe.BASELINE = pathlib.Path(raw) / "baseline"
+                desired = probe.fixture_document()
+                baseline = {
+                    "revision": "a" * 64,
+                    "service": copy.deepcopy(desired["services"][probe.SERVICE]),
+                    "resource": copy.deepcopy(desired["storageResources"][probe.RESOURCE]),
+                    "data": {},
+                }
+                if fault == "invalid":
+                    probe.BASELINE.write_text('{"data": {}}')
+                elif fault != "missing":
+                    probe.BASELINE.write_text(json.dumps(baseline))
+                    key, section = (
+                        (probe.SERVICE, "services") if fault == "service" else (probe.RESOURCE, "storageResources")
+                    )
+                    desired[section][key] = {"name": "unrelated replacement"}
+                before = copy.deepcopy(desired)
+                with (
+                    mock.patch.object(
+                        probe,
+                        "document",
+                        side_effect=lambda: {"revision": "b" * 64, "document": copy.deepcopy(desired)},
+                    ),
+                    mock.patch.object(probe, "command") as command,
+                    self.assertRaises((RuntimeError, FileNotFoundError)),
+                ):
+                    probe.remove()
+                command.assert_not_called()
+                self.assertEqual(desired, before)
 
     def test_installer_retains_fixture_for_final_browser_and_native_path_tears_it_down(self):
         installer = (ROOT / "scripts/qemu-test.sh").read_text()

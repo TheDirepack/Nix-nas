@@ -71,7 +71,15 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
     def test_rejected_apply_restores_live_owner_as_well_as_links(self) -> None:
         for failure_stage, initially_active, fail_restore in (
             (stage, active, restore)
-            for stage in ("restart", "readiness", "commit", "publish", "durability")
+            for stage in (
+                "restart",
+                "readiness",
+                "readiness-existing-failure",
+                "reset",
+                "commit",
+                "publish",
+                "durability",
+            )
             for active, restore in ((True, False), (False, False), (True, True), (False, True))
         ):
             with (
@@ -116,7 +124,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     manifests[version] = manifest
                     sources[version] = source
                 projection.symlink_to(manifests["healthy"].parent)
-                running = {"version": None, "allow_candidate": False, "fail_restore": False}
+                running = {"version": None, "allow_candidate": False, "fail_restore": False, "gate_state": "inactive"}
                 calls = []
 
                 def systemctl(_binary, operation, *units, check=True):
@@ -124,7 +132,8 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     code, output = 0, ""
                     if operation == "is-active":
                         active = units[0] == owner and running["version"] is not None
-                        code, output = (0, "active") if active else (3, "inactive")
+                        output = ("active" if active else "inactive") if units[0] == owner else running["gate_state"]
+                        code = 0 if output == "active" else 3
                     elif operation in {"restart", "start", "try-restart"} and units[0] == owner:
                         desired = (quadlet / "nas-v2-demo.container").read_text().split("Image=", 1)[1].strip()
                         if running["fail_restore"] and desired == "healthy":
@@ -135,6 +144,12 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                                 code = 1
                     elif operation == "restart" and units[0] == ready:
                         code = int(running["version"] == "candidate" and not running["allow_candidate"])
+                        running["gate_state"] = "failed" if code else "inactive"
+                    elif operation == "reset-failed" and units[0] == ready:
+                        if failure_stage == "reset":
+                            code = 1
+                        else:
+                            running["gate_state"] = "inactive"
                     elif operation == "stop" and units[0] == owner:
                         if running["fail_restore"]:
                             code = 1
@@ -160,12 +175,13 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     state.write_bytes(previous_state)
                     running["version"] = "healthy" if initially_active else None
                     running["fail_restore"] = fail_restore
+                    running["gate_state"] = "failed" if failure_stage == "readiness-existing-failure" else "inactive"
                     running["allow_candidate"] = failure_stage in {"commit", "publish", "durability"}
                     projection.unlink()
                     projection.symlink_to(manifests["candidate"].parent)
                     message = (
                         "manual recovery required"
-                        if fail_restore or failure_stage == "durability"
+                        if fail_restore or failure_stage in {"durability", "reset"}
                         else (
                             "No space left"
                             if failure_stage in {"commit", "publish", "durability"}
@@ -201,9 +217,12 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     self.assertEqual((quadlet / "nas-v2-demo.container").resolve(), sources["healthy"])
                     for version, source in sources.items():
                         self.assertEqual(source.read_text(), f"[Container]\nImage={version}\n")
-                    if fail_restore or failure_stage == "durability":
+                    if fail_restore or failure_stage in {"durability", "reset"}:
                         continue
                     self.assertEqual(running["version"], "healthy" if initially_active else None)
+                    self.assertEqual(
+                        running["gate_state"], "failed" if failure_stage == "readiness-existing-failure" else "inactive"
+                    )
                     projection.unlink()
                     projection.symlink_to(manifests["healthy"].parent)
                     calls.clear()

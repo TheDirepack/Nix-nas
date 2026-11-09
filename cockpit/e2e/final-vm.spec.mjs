@@ -635,7 +635,9 @@ test("installed Services editor reconciles form changes and preserves rejected e
         body: String(error),
         contentType: "text/plain",
       });
+      throw error;
+    } finally {
+      await otherPage.close();
     }
-    await otherPage.close();
   }
 });

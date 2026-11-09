@@ -471,15 +471,20 @@ def reconcile(
     }
     units_to_stop.update(changed_sessions)
 
-    def is_active(unit: str) -> bool | None:
+    def unit_state(unit: str) -> str | None:
         try:
             result = _run_systemctl(systemctl, "is-active", unit, check=False)
         except SystemdReconcileError:
             return None
-        return result.stdout.strip() == "active"
+        return result.stdout.strip()
+
+    def is_active(unit: str) -> bool | None:
+        state = unit_state(unit)
+        return None if state is None else state == "active"
 
     all_units = previous_owned | owned | previous_start | start | stop | units_to_stop | changed_units
-    active_snapshot = {unit: is_active(unit) for unit in sorted(all_units)}
+    state_snapshot = {unit: unit_state(unit) for unit in sorted(all_units)}
+    active_snapshot = {unit: None if state is None else state == "active" for unit, state in state_snapshot.items()}
     # An interrupted or partially recorded apply can leave a target active with
     # no installed link. Stop it before installing the changed descriptor.
     active_unlinked_sessions = {
@@ -539,6 +544,7 @@ def reconcile(
         return errors
 
     activated_units: set[str] = set()
+    attempted_readiness: set[str] = set()
     state_commit_attempted = False
     try:
         for unit in sorted(units_to_stop):
@@ -596,6 +602,7 @@ def reconcile(
             or readiness_owners[unit] in activated_units
         }
         for unit in sorted(readiness_to_run):
+            attempted_readiness.add(unit)
             _run_systemctl(systemctl, "restart", unit)
             restarted.add(unit)
 
@@ -638,6 +645,18 @@ def reconcile(
                     except SystemdReconcileError as restart_exc:
                         rollback_errors.append(str(restart_exc))
         rollback_errors.extend(rollback_active_state(links_restored=links_restored))
+        if not rollback_errors:
+            for unit in sorted(attempted_readiness):
+                if active_snapshot.get(unit) is not False or state_snapshot.get(unit) == "failed":
+                    continue
+                try:
+                    state = unit_state(unit)
+                    if state is None:
+                        raise SystemdReconcileError(f"unable to verify readiness rollback state for {unit}")
+                    if state == "failed":
+                        _run_systemctl(systemctl, "reset-failed", unit)
+                except SystemdReconcileError as reset_exc:
+                    rollback_errors.append(str(reset_exc))
         if state_commit_attempted:
             try:
                 try:

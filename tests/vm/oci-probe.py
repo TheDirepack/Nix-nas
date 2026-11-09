@@ -145,11 +145,17 @@ def create() -> None:
     except Exception as error:
         try:
             if not created:
-                observed = command("zfs", "get", "-H", "-o", "value", "nas:qualification", "tank/nas/vm-oci-persist")
-                require(observed == ownership, "cannot confirm ownership of partially created fixture dataset")
-            remove_declarations(fixture)
-            command("zfs", "destroy", "-r", "tank/nas/vm-oci-persist")
-            BASELINE.unlink(missing_ok=True)
+                datasets = command("zfs", "list", "-H", "-o", "name", "-t", "filesystem").splitlines()
+                if "tank/nas/vm-oci-persist" in datasets:
+                    observed = command(
+                        "zfs", "get", "-H", "-o", "value", "nas:qualification", "tank/nas/vm-oci-persist"
+                    )
+                    require(observed == ownership, "cannot confirm ownership of partially created fixture dataset")
+                    created = True
+            if created:
+                remove_declarations(fixture)
+                command("zfs", "destroy", "-r", "tank/nas/vm-oci-persist")
+                BASELINE.unlink(missing_ok=True)
         except Exception as cleanup_error:
             raise RuntimeError(f"{error}; fixture cleanup failed: {cleanup_error}; manual recovery required") from error
         raise
@@ -168,6 +174,17 @@ def record() -> None:
     BASELINE.parent.mkdir(parents=True, exist_ok=True)
     BASELINE.write_text(json.dumps(baseline, sort_keys=True) + "\n")
     BASELINE.chmod(0o600)
+
+
+def read_baseline() -> dict:
+    baseline = json.loads(BASELINE.read_text())
+    require(
+        isinstance(baseline, dict)
+        and isinstance(baseline.get("revision"), str)
+        and all(isinstance(baseline.get(key), dict) for key in ("service", "resource", "data")),
+        "invalid OCI fixture baseline",
+    )
+    return baseline
 
 
 def wait_ready(stage: str, timeout: float = 60.0) -> None:
@@ -223,7 +240,7 @@ def verify_route(baseline: dict, stage: str) -> None:
 
 
 def verify(stage: str) -> None:
-    baseline = json.loads(BASELINE.read_text())
+    baseline = read_baseline()
     value = document()
     require(value["revision"] == baseline["revision"], f"desired revision changed after {stage}")
     require(value["document"]["services"][SERVICE] == baseline["service"], f"OCI declaration changed after {stage}")
@@ -278,7 +295,10 @@ def locked() -> None:
 
 
 def remove() -> None:
-    remove_declarations()
+    baseline = read_baseline()
+    remove_declarations(
+        {"services": {SERVICE: baseline["service"]}, "storageResources": {RESOURCE: baseline["resource"]}}
+    )
     require(
         command("systemctl", "show", UNIT, "--property=ActiveState", "--value") == "inactive", "removed OCI is active"
     )
@@ -304,7 +324,7 @@ def remove() -> None:
     require(
         not any(group["name"] == f"application.{SERVICE}.access" for group in groups), "removed Authentik group remains"
     )
-    require(data_state() == json.loads(BASELINE.read_text())["data"], "app removal deleted retained data")
+    require(data_state() == baseline["data"], "app removal deleted retained data")
     print("PASS: OCI removal cleaned projections and retained application data", flush=True)
 
 
