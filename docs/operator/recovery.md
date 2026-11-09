@@ -120,7 +120,7 @@ Test restored keys against a clone or read-only recovery environment whenever po
    sudo nas-secrets check-authentik-token
    ```
 
-`init` creates only missing entries. It does not replace existing secrets. If the runtime Authentik token still equals the bootstrap token, Cockpit and `nas-secrets` show a warning; replace it with a scoped read-only token and reactivate.
+`init` creates only missing entries. It does not replace existing secrets. If the runtime Authentik token still equals the bootstrap token, `nas-secrets status` shows a warning. Follow the [Authentik service-token recovery procedure](../src/admin/authentik.md#service-token), which preserves the required automation role, both runtime credentials, and the boot-side token handoff.
 
 ## Authentik PostgreSQL and media restore
 
