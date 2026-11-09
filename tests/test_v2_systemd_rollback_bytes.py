@@ -4,6 +4,7 @@ import json
 import os
 import pathlib
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -66,6 +67,105 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 state_path=state,
                 systemctl=str(systemctl),
             )
+
+    def test_readiness_failure_restores_live_owner_as_well_as_links(self) -> None:
+        for initially_active, fail_restore in ((True, False), (False, False), (True, True)):
+            with self.subTest(active=initially_active, fail_restore=fail_restore), tempfile.TemporaryDirectory() as raw:
+                root = pathlib.Path(raw)
+                control = root / "control"
+                runtime = root / "units"
+                quadlet = root / "quadlets"
+                runtime.mkdir()
+                quadlet.mkdir()
+                projection = control / "systemd"
+                state = control / "state.json"
+                owner = "nas-v2-demo.service"
+                ready = "nas-v2-ready-demo.service"
+                manifests = {}
+                sources = {}
+                for version in ("healthy", "candidate"):
+                    generation = control / "generations" / version / "systemd"
+                    generation.mkdir(parents=True)
+                    source = generation / "nas-v2-demo.container"
+                    source.write_text(f"[Container]\nImage={version}\n")
+                    gate = generation / ready
+                    gate.write_text(f"[Unit]\nRequires={owner}\nAfter={owner}\n[Service]\nExecStart=/bin/true\n")
+                    manifest = generation / "manifest.json"
+                    manifest.write_text(
+                        json.dumps(
+                            {
+                                "schemaVersion": 1,
+                                "links": [{"target": ready, "source": str(gate)}],
+                                "quadletLinks": [{"target": source.name, "source": str(source)}],
+                                "ownedUnits": [owner, ready],
+                                "startUnits": [owner, ready],
+                                "readinessUnits": [ready],
+                                "stopUnits": [],
+                                "fingerprints": {owner: version, ready: "unchanged-probe"},
+                            }
+                        )
+                    )
+                    manifests[version] = manifest
+                    sources[version] = source
+                projection.symlink_to(manifests["healthy"].parent)
+                running = {"version": None, "allow_candidate": False, "fail_restore": False}
+                calls = []
+
+                def systemctl(_binary, operation, *units, check=True):
+                    calls.append((operation, *units))
+                    code, output = 0, ""
+                    if operation == "is-active":
+                        active = units[0] == owner and running["version"] is not None
+                        code, output = (0, "active") if active else (3, "inactive")
+                    elif operation in {"restart", "start", "try-restart"} and units[0] == owner:
+                        desired = (quadlet / "nas-v2-demo.container").read_text().split("Image=", 1)[1].strip()
+                        if running["fail_restore"] and desired == "healthy":
+                            code = 1
+                        else:
+                            running["version"] = desired
+                    elif operation == "restart" and units[0] == ready:
+                        code = int(running["version"] == "candidate" and not running["allow_candidate"])
+                    elif operation == "stop" and units[0] == owner:
+                        running["version"] = None
+                    if code and check:
+                        raise reconcile.SystemdReconcileError(f"systemctl {operation} {' '.join(units)} failed")
+                    return subprocess.CompletedProcess([], code, output, "")
+
+                kwargs = dict(
+                    projection_root=projection,
+                    systemd_runtime_dir=runtime,
+                    quadlet_runtime_dir=quadlet,
+                    state_path=state,
+                    systemctl="systemctl",
+                )
+                with mock.patch.object(reconcile, "_run_systemctl", side_effect=systemctl):
+                    reconcile.reconcile(manifest_path=manifests["healthy"], **kwargs)
+                    previous_state = state.read_bytes()
+                    running["version"] = "healthy" if initially_active else None
+                    running["fail_restore"] = fail_restore
+                    projection.unlink()
+                    projection.symlink_to(manifests["candidate"].parent)
+                    message = "manual recovery required" if fail_restore else ready
+                    with self.assertRaisesRegex(reconcile.SystemdReconcileError, message):
+                        reconcile.reconcile(manifest_path=manifests["candidate"], **kwargs)
+                    self.assertEqual(state.read_bytes(), previous_state)
+                    self.assertEqual((quadlet / "nas-v2-demo.container").resolve(), sources["healthy"])
+                    for version, source in sources.items():
+                        self.assertEqual(source.read_text(), f"[Container]\nImage={version}\n")
+                    if fail_restore:
+                        continue
+                    self.assertEqual(running["version"], "healthy" if initially_active else None)
+                    projection.unlink()
+                    projection.symlink_to(manifests["healthy"].parent)
+                    calls.clear()
+                    self.assertTrue(reconcile.reconcile(manifest_path=manifests["healthy"], **kwargs)["noop"])
+                    self.assertEqual(calls, [])
+                    self.assertEqual(running["version"], "healthy" if initially_active else None)
+                    projection.unlink()
+                    projection.symlink_to(manifests["candidate"].parent)
+                    running["allow_candidate"] = True
+                    reconcile.reconcile(manifest_path=manifests["candidate"], **kwargs)
+                    self.assertEqual(running["version"], "candidate")
 
     def test_restart_failure_restores_runtime_link_without_mutating_generations(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

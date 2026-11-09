@@ -509,6 +509,8 @@ def reconcile(
             except SystemdReconcileError:
                 continue
 
+    activated_units: set[str] = set()
+    readiness_failed = False
     try:
         for unit in sorted(units_to_stop):
             if _SESSION_TARGET.fullmatch(unit) and unit not in previous_links_raw and unit not in current_links:
@@ -547,15 +549,21 @@ def reconcile(
                 restarted.add(unit)
             else:
                 _run_systemctl(systemctl, "try-restart", unit)
+            activated_units.add(unit)
 
         units_to_start = (start - previous_start) - restarted - readiness
         for unit in sorted(units_to_start):
             _run_systemctl(systemctl, "start", unit)
+            activated_units.add(unit)
 
         # A probe definition may be unchanged while its candidate runtime changes.
         # Run persistent gates after owner activation and before recording success.
         for unit in sorted(readiness):
-            _run_systemctl(systemctl, "restart", unit)
+            try:
+                _run_systemctl(systemctl, "restart", unit)
+            except SystemdReconcileError:
+                readiness_failed = True
+                raise
             restarted.add(unit)
 
         state = {
@@ -581,7 +589,18 @@ def reconcile(
         rollback_error: Exception | None = None
         try:
             rollback_links()
+            restart_errors: list[str] = []
+            if readiness_failed:
+                # Restoring links cannot replace a still-active candidate process.
+                for unit in sorted(activated_units & previous_owned):
+                    if active_snapshot.get(unit) is True and unit not in disrupted_sessions:
+                        try:
+                            _run_systemctl(systemctl, "restart", unit)
+                        except SystemdReconcileError as restart_exc:
+                            restart_errors.append(str(restart_exc))
             rollback_active_state()
+            if restart_errors:
+                raise SystemdReconcileError("; ".join(restart_errors))
         except Exception as rollback_exc:  # noqa: BLE001
             rollback_error = rollback_exc
         if disrupted_sessions:
