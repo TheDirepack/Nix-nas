@@ -27,6 +27,64 @@ SPEC.loader.exec_module(state)
 
 
 class StateBundleTests(unittest.TestCase):
+    def test_external_network_edit_after_policy_check_does_not_affect_application_restore(self):
+        root = pathlib.Path(self.temporary.name)
+        profile, app = root / "profile", root / "app"
+        registry = json.loads(self.registry(profile, app, root / "missing"))[:2]
+        registry[0]["name"] = "networkmanager"
+        registry[1]["sensitive"] = False
+        bundle = root / "config.tar.gz"
+        check_network = state.require_network_restore_acknowledgement
+
+        def edit_network_after_check(*args):
+            result = check_network(*args)
+            profile.write_text("external network edit")
+            return result
+
+        with mock.patch.dict(os.environ, self.environment(json.dumps(registry))):
+            for app_changed in (False, True):
+                with self.subTest(app_changed=app_changed):
+                    profile.write_text("saved network")
+                    app.write_text("saved application")
+                    state.export_bundle(bundle, include_sensitive=False)
+                    if app_changed:
+                        app.write_text("current application")
+                    with (
+                        mock.patch.object(
+                            state, "require_network_restore_acknowledgement", side_effect=edit_network_after_check
+                        ),
+                        mock.patch.object(state, "capture_unit_state", return_value={"app.service": True}),
+                        mock.patch.object(state, "stop_active_units") as stop,
+                        mock.patch.object(state, "reapply_runtime_consumers"),
+                        mock.patch.object(state, "export_bundle", wraps=state.export_bundle) as capture,
+                    ):
+                        result = state.restore_bundle(
+                            bundle, confirm_host=socket.gethostname(), allow_partial=False, include_sensitive=False
+                        )
+                    self.assertTrue(result["ok"])
+                    self.assertEqual(profile.read_text(), "external network edit")
+                    self.assertEqual(app.read_text(), "saved application")
+                    if app_changed:
+                        stop.assert_called_once()
+                        capture.assert_called_once()
+                    else:
+                        self.assertTrue(result["skipped"])
+                        stop.assert_not_called()
+                        capture.assert_not_called()
+
+    def test_network_comparison_error_remains_diagnosable_and_requires_acknowledgement(self):
+        authority = state.Authority("networkmanager", "/etc/NetworkManager/system-connections")
+        manifest = {"entries": [{"name": "networkmanager", "status": "captured", "payload": "payload/network"}]}
+        error = PermissionError("network profile read denied")
+        with (
+            mock.patch.object(state, "authorities", return_value=(authority,)),
+            mock.patch.object(state, "restored_content_matches", side_effect=error),
+        ):
+            with self.assertRaisesRegex(state.StateError, "network profile read denied") as caught:
+                state.require_network_restore_acknowledgement(pathlib.Path("/staging"), manifest, False)
+            self.assertIs(caught.exception.__cause__, error)
+            self.assertTrue(state.require_network_restore_acknowledgement(pathlib.Path("/staging"), manifest, True))
+
     def test_failed_application_restore_preserves_a_later_external_network_change(self):
         root = pathlib.Path(self.temporary.name)
         profile, app = root / "profile", root / "app"
@@ -1284,6 +1342,7 @@ class StateBundleTests(unittest.TestCase):
                 # The database restore ran while the writers were quiesced; the
                 # rollback stopped them again before overwriting restored data.
                 self.assertNotIn("firewalld.service", data["unitSnapshot"])
+                self.assertIn("nas-protected-services.target", data["unitSnapshot"])
 
     def test_rollback_snapshot_captured_before_quiesce(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

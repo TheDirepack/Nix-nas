@@ -1602,6 +1602,7 @@ def rollback_inventory() -> dict[str, Any]:
 
 
 def require_network_restore_acknowledgement(staging: pathlib.Path, manifest: dict[str, Any], allowed: bool) -> bool:
+    """Require acknowledgement for changed or unreadable network authorities."""
     registry = {item.name: item for item in authorities()}
     if not any(name in registry for name in ("networkmanager", "firewall")):
         return False
@@ -1610,6 +1611,7 @@ def require_network_restore_acknowledgement(staging: pathlib.Path, manifest: dic
         if authority.name not in {"networkmanager", "firewall"}:
             continue
         source = pathlib.Path(authority.source)
+        comparison_error: OSError | None = None
         try:
             if entry["status"] == "absent":
                 changed = lstat_type(source) != 0
@@ -1618,19 +1620,22 @@ def require_network_restore_acknowledgement(staging: pathlib.Path, manifest: dic
                 changed = not restored_content_matches(source, payload)
             else:
                 continue
-        except OSError:
+        except OSError as exc:
             changed = True
+            comparison_error = exc
         if changed:
             if allowed:
                 return True
             raise StateError(
                 "Network configuration restore can disconnect administration; use --allow-network-disconnect only with working out-of-band recovery"
-            )
+                + (f" ({authority.name}: {comparison_error})" if comparison_error else "")
+            ) from comparison_error
 
     return False
 
 
 def restore_manifest_for_network_policy(manifest: dict[str, Any], network_change: bool) -> dict[str, Any]:
+    """Freeze excluded network authorities across apply, verification and compensation."""
     if network_change:
         return manifest
     # Preserve unchanged network files through forward apply and compensation;
@@ -1685,6 +1690,7 @@ def restore_bundle(
             ):
                 raise StateError("Sensitive bundle restore requires --include-sensitive")
             network_change = require_network_restore_acknowledgement(staging, manifest, allow_network_disconnect)
+            apply_manifest = restore_manifest_for_network_policy(manifest, network_change)
             prune_rollbacks()
             rollback = DEFAULT_ROLLBACK_ROOT / f"rollback-{int(time.time())}-{secrets.token_hex(4)}.tar.gz"
             selected_units = [
@@ -1701,7 +1707,7 @@ def restore_bundle(
         try:
             registry = {item.name: item for item in authorities()}
             drift = False
-            for entry in canonical_apply_entries(manifest):
+            for entry in canonical_apply_entries(apply_manifest):
                 authority = registry[entry["name"]]
                 if entry["status"] == "captured":
                     if authority.kind == "database":
@@ -1743,7 +1749,7 @@ def restore_bundle(
             restore_journal_update("rollback-captured", rollbackBundle=str(rollback))
             # Reject absence conflicts while the runtime is untouched: stopping
             # a unit with CleanupOnExit=yes already changes the live system.
-            preflight_restore_absence(manifest, restore_absence=restore_absence)
+            preflight_restore_absence(apply_manifest, restore_absence=restore_absence)
             stop_active_units(unit_snapshot)
             restore_journal_update("quiesced", unitSnapshot=unit_snapshot)
             state_mutated = True
@@ -1751,13 +1757,11 @@ def restore_bundle(
             # need PostgreSQL running again before the payload is applied.
             if any(entry["status"] == "captured" and entry["kind"] == "database" for entry in manifest["entries"]):
                 run_systemctl("start", "postgresql.service")
-            apply_extracted(
-                staging, restore_manifest_for_network_policy(manifest, network_change), restore_absence=restore_absence
-            )
+            apply_extracted(staging, apply_manifest, restore_absence=restore_absence)
             restore_journal_update("state-applied")
             # Verification runs before runtime consumers restart: a writer that
             # touches a restored file first would make the commit look drifted.
-            verify_restored_state(staging, manifest)
+            verify_restored_state(staging, apply_manifest)
             reapply_runtime_consumers(unit_snapshot)
             restore_journal_update("committed", completedAt=int(time.time()))
         except Exception as original:

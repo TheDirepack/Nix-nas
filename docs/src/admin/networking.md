@@ -21,8 +21,11 @@ Locked boot exposes no browser management endpoint. Use the local console, SSH w
 ## Restoring network configuration
 
 Normal network administration uses Cockpit Networking. A `nas-state` restore
-that changes saved NetworkManager profiles or firewall configuration requires
-`--allow-network-disconnect` through the recovery terminal. Use this only with
+that changes saved NetworkManager profiles requires `--allow-network-disconnect`
+through the recovery terminal. The installed bundle does not include firewalld
+configuration; recover it separately. If a different registry includes a
+`firewall` authority, restoring changed firewall configuration also requires
+this acknowledgement. Use this only with
 working console or hardware KVM access: it acknowledges possible disconnection
 and does not provide timed automatic rollback. Restores of unrelated settings
 leave matching network files and services alone.
