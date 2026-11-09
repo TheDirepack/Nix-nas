@@ -20,6 +20,7 @@ let
     cp ${../../../README.md} "$work/src/reference/project-README.md"
     cp ${../../../SECURITY.md} "$work/src/reference/project-SECURITY.md"
     cp ${../../../docs/operator/recovery.md} "$work/src/reference/project-RECOVERY.md"
+    sed -i 's|(\.\./src/admin/authentik\.md#service-token)|(../admin/authentik.md#service-token)|g' "$work/src/reference/project-RECOVERY.md"
     cp ${../../../CHANGELOG.md} "$work/src/reference/project-CHANGELOG.md"
 
     emit_help() {
