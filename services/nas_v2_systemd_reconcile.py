@@ -524,6 +524,9 @@ def reconcile(
     if unstable_units:
         raise SystemdReconcileError(f"unable to snapshot stable systemd state: {', '.join(unstable_units)}")
     active_snapshot = {unit: state in _UNIT_QUERY_STATES[0] for unit, state in state_snapshot.items()}
+    observed_readiness = dict(state_snapshot)
+    for unit in (set(readiness_owners) | set(readiness_owners.values())) - set(observed_readiness):
+        observed_readiness[unit] = unit_state(unit)
     # An interrupted or partially recorded apply can leave a target active with
     # no installed link. Stop it before installing the changed descriptor.
     active_unlinked_sessions = {
@@ -633,10 +636,33 @@ def reconcile(
             activated_units.add(unit)
             _run_systemctl(systemctl, "start", unit)
 
-        for unit in sorted(readiness_to_run):
-            attempted_readiness.add(unit)
-            _run_systemctl(systemctl, "restart", unit)
-            restarted.add(unit)
+        for owner in set(readiness_owners.values()) - activated_units:
+            before = observed_readiness[owner]
+            if before not in {"inactive", "failed", "unknown"}:
+                continue
+            now = unit_state(owner)
+            if now is None:
+                state_snapshot[owner] = before
+                active_snapshot[owner] = False
+                raise SystemdReconcileError(f"unable to inspect dependency activation: {owner}")
+            if now not in _UNIT_QUERY_STATES[0] | {"activating"}:
+                continue
+            activated_units.add(owner)
+            state_snapshot[owner] = before
+            active_snapshot[owner] = False
+            for gate, gate_owner in readiness_owners.items():
+                if gate_owner != owner:
+                    continue
+                prior = observed_readiness[gate]
+                if prior is None or prior in _TRANSITIONAL_UNIT_STATES:
+                    raise SystemdReconcileError(f"unable to snapshot dependency readiness: {gate}")
+                state_snapshot[gate] = prior
+                active_snapshot[gate] = prior in _UNIT_QUERY_STATES[0]
+                readiness_to_run.add(gate)
+        if readiness_to_run:
+            attempted_readiness.update(readiness_to_run)
+            _run_systemctl(systemctl, "restart", *sorted(readiness_to_run))
+            restarted.update(readiness_to_run)
 
         state = {
             "schemaVersion": 1,

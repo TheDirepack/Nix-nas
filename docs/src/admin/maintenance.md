@@ -28,13 +28,20 @@ Saving an always-on application's definition in Cockpit Services runs its declar
 readiness probes after activating an affected runtime. Persistent-daemon
 readiness budgets are limited to 150 seconds; longer budgets are rejected during
 projection validation before runtime activation. The generated gate includes
-a finite startup allowance for probe and process overhead inside the existing
-180-second controller and 300-second guarded-apply limits. A probe failure rejects
+a finite startup allowance for probe and process overhead. Affected gates run
+together in one systemd job within the 180-second per-unit controller limit.
+The guarded apply retains its 300-second limit; the CLI waits up to 330 seconds
+so that it can report the guard's result. A probe failure rejects
 the apply. The controller attempts to restore the previous generation's runtime
 links, previously active owners, and recorded state. It reports failed or
 uncertain recovery explicitly; a rejected update must not be treated as healthy
 merely because the previous definition is visible again. Transient sessions
 that were terminated may need operator recovery.
+
+Generated OCI applications stop with the protected-service target when secrets
+are locked. Enabled persistent OCI applications and their readiness gates join
+that target again on secret activation. A generated OCI owner cannot start
+without the runtime secret-ready marker.
 
 Use the Services error and read-only status and journal information to identify
 the failed gate. Replace `APP` with the service identifier:

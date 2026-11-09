@@ -52,8 +52,8 @@ def _editor_platform_path() -> pathlib.Path | None:
     return PLATFORM_PATH if PLATFORM_PATH.is_file() else None
 
 
-def _systemctl(*args: str, check: bool = True) -> None:
-    result = run_command([SYSTEMCTL, *args], timeout_seconds=180)
+def _systemctl(*args: str, check: bool = True, timeout_seconds: int = 180) -> None:
+    result = run_command([SYSTEMCTL, *args], timeout_seconds=timeout_seconds)
     if check and result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()[:2000]
         raise ControlError(detail or f"systemctl {' '.join(args)} failed with exit {result.returncode}")
@@ -204,7 +204,7 @@ def _read_json_document(source: str) -> dict[str, Any]:
 def _reconcile() -> None:
     # The oneshot unit records the attempted Git revision, arms rollback,
     # applies/verifies runtime projections, then advances refs/nas/applied.
-    _systemctl("start", RECONCILE_UNIT)
+    _systemctl("start", RECONCILE_UNIT, timeout_seconds=330)
 
 
 def _attach_status(result: dict[str, Any]) -> dict[str, Any]:

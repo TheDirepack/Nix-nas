@@ -322,6 +322,29 @@ class V2SystemdProjectionTests(unittest.TestCase):
                         else {},
                     )
 
+    def test_oci_persistent_lifecycle_follows_protected_target(self):
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled):
+                service = {
+                    "name": "Demo",
+                    "enabled": enabled,
+                    "workload": {"kind": "daemon", "activation": "persistent"},
+                    "runtime": {"type": "oci", "image": "example.invalid/demo:1"},
+                    "readiness": {"probes": [{"type": "tcp", "port": 8080}]},
+                    "routes": self.route(),
+                }
+                output = pathlib.Path("/projection")
+                files, manifest = self.generate(self.compile({"demo": service}), output)
+                source = files[output / "quadlet/nas-v2-demo.container"].decode()
+                self.assertIn("PartOf=nas-protected-services.target", source)
+                self.assertIn("ConditionPathExists=/run/nas-secrets/ready", source)
+                target = output / "units/nas-protected-services.target.d/50-nas-v2.conf"
+                if enabled:
+                    self.assertIn("Wants=nas-v2-demo.service nas-v2-ready-demo.service", files[target].decode())
+                    self.assertIn(str(target), [entry["source"] for entry in manifest["links"]])
+                else:
+                    self.assertNotIn(target, files)
+
     def test_ready_dependency_uses_transient_gate(self):
         effective = self.compile(
             {

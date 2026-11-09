@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import pathlib
 import shlex
 import subprocess
@@ -127,7 +128,12 @@ def create() -> None:
     created = False
     published = False
     snapshot_created = False
+    mount_created = False
+    mount_fd = None
     try:
+        DATA.parent.mkdir(mode=0o700)
+        mount_created = True
+        mount_fd = os.open(DATA.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         command(
             "zfs",
             "create",
@@ -154,6 +160,8 @@ def create() -> None:
         record()
         verify("creation")
     except Exception as error:
+        if not mount_created:
+            raise
         try:
             if not created:
                 datasets = command("zfs", "list", "-H", "-o", "name", "-t", "filesystem").splitlines()
@@ -177,9 +185,22 @@ def create() -> None:
                     command("zfs", "destroy", "tank/nas/vm-oci-persist@qualification")
                 command("zfs", "destroy", "tank/nas/vm-oci-persist")
                 BASELINE.unlink(missing_ok=True)
+            if DATA.parent.exists() or DATA.parent.is_symlink():
+                if mount_fd is None:
+                    raise RuntimeError("cannot verify fixture mountpoint ownership")
+                expected = os.fstat(mount_fd)
+                actual = DATA.parent.lstat()
+                require(
+                    (actual.st_dev, actual.st_ino) == (expected.st_dev, expected.st_ino),
+                    "fixture mountpoint was replaced",
+                )
+                DATA.parent.rmdir()
         except Exception as cleanup_error:
             raise RuntimeError(f"{error}; fixture cleanup failed: {cleanup_error}; manual recovery required") from error
         raise
+    finally:
+        if mount_fd is not None:
+            os.close(mount_fd)
 
 
 def record() -> None:
@@ -252,7 +273,11 @@ def verify_route(baseline: dict, stage: str) -> None:
             matches.append((index, candidate, paths))
     require(len(matches) == 1, f"OCI route missing or duplicated after {stage}")
     backend = "127.0.0.1:18089"
-    backend_routes = [line for line in actual if line.strip().startswith("reverse_proxy ") and backend in line]
+    backend_routes = [
+        line
+        for line in actual
+        if line.strip().startswith("reverse_proxy ") and backend in shlex.split(line, comments=True)[1:]
+    ]
     require(len(backend_routes) == 1, f"OCI backend has an alternate route after {stage}")
     index, candidate, paths = matches[0]
     # The renderer assigns path indexes across all applications.
@@ -331,10 +356,17 @@ def remove() -> None:
     for kind, name in (("container", CONTAINER), ("network", "nas-v2-vm-oci-persist")):
         result = subprocess.run(["podman", kind, "exists", name], capture_output=True, timeout=30, check=False)
         require(result.returncode == 1, f"removed OCI {kind} remains or inspection failed")
-    require(
-        all(marker not in CADDY.read_text() for marker in ("/vm-oci-persist", "v2_vm_oci_persist_", "127.0.0.1:18089")),
-        "removed OCI route remains",
-    )
+    for line in CADDY.read_text().splitlines():
+        tokens = shlex.split(line, comments=True)
+        require(
+            not (
+                len(tokens) > 2
+                and tokens[1] == "path"
+                and any(path.rstrip("/*") == "/vm-oci-persist" for path in tokens[2:])
+            )
+            and not (tokens[:1] == ["reverse_proxy"] and "127.0.0.1:18089" in tokens[1:]),
+            "removed OCI route remains",
+        )
     manifest = MANIFEST
     command("systemctl", "start", "nas-managed-services-authentik-reconcile.service")
     require(

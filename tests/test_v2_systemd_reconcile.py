@@ -543,7 +543,7 @@ class V2SystemdReconcileTests(unittest.TestCase):
                 .replace('if [ "$1" = is-active ];', f'if [ "$1" = is-active ] && [ "$2" != {owner} ];')
             )
             self.run_reconcile(**kwargs)
-            self.assertNotIn("is-active " + owner, log.read_text())
+            self.assertNotIn("stop " + owner, log.read_text())
             self.assertNotIn("restart " + ready, log.read_text())
             self.assertIn("restart " + other, log.read_text())
             previous = state.read_bytes()
@@ -571,6 +571,20 @@ class V2SystemdReconcileTests(unittest.TestCase):
                 self.run_reconcile(**kwargs)
             self.assertEqual(state.read_bytes(), previous)
             self.assertNotIn("restart " + owner, log.read_text())
+            second = "nas-v2-ready-second.service"
+            second_source = projection / second
+            second_source.write_text(gate.read_text())
+            value["links"].append({"target": second, "source": str(second_source)})
+            value["ownedUnits"].append(second)
+            value["startUnits"].append(second)
+            value["readinessUnits"].append(second)
+            value["readinessOwners"][second] = owner
+            value["fingerprints"][second] = "second-probe"
+            manifest.write_text(json.dumps(value))
+            self.make_systemctl(root)
+            log.write_text("")
+            self.run_reconcile(**kwargs)
+            self.assertIn("restart " + " ".join(sorted([ready, second])), log.read_text().splitlines())
 
     def test_identical_second_reconcile_is_a_true_noop(self):
         with tempfile.TemporaryDirectory() as tmp:

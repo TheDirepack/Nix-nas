@@ -37,7 +37,7 @@ class SystemdProjectionError(RuntimeError):
 
 _SAFE_IDENTITY = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_.-]{0,63}|[0-9]{1,10})$")
 APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
-# Leave room for process startup and bounded probes within the 180s apply client.
+# Leave room for startup and probes within the 180s per-unit systemctl client.
 PERSISTENT_READINESS_TIMEOUT_MAX = 150
 _CTRL = ("\x00", "\r", "\n")
 
@@ -342,6 +342,8 @@ def _existing_dropin(effective: dict[str, Any], service: dict[str, Any]) -> byte
 def _quadlet_source(effective: dict[str, Any], service_id: str, service: dict[str, Any]) -> bytes:
     unit_lines = [
         "Description=" + _single_line(service["name"], field="service name"),
+        "PartOf=nas-protected-services.target",
+        "ConditionPathExists=/run/nas-secrets/ready",
         *(["StopWhenUnneeded=yes"] if _is_on_demand(service) else []),
         *_dependency_lines(effective, service),
     ]
@@ -713,6 +715,7 @@ def generate_projection(
     quadlet_links: dict[str, str] = {}
     start_units: set[str] = set()
     readiness_owners: dict[str, str] = {}
+    protected_start: set[str] = set()
     owned_units: set[str] = set()
     stop_units: set[str] = set()
     fingerprints: dict[str, str] = {}
@@ -844,6 +847,10 @@ def generate_projection(
                     ready = f"nas-v2-ready-{service_id}.service"
                     start_units.add(ready)
                     readiness_owners[ready] = owner
+                if runtime["type"] in {"oci", "quadlet"}:
+                    protected_start.add(owner)
+                    if "readiness" in service:
+                        protected_start.add(f"nas-v2-ready-{service_id}.service")
 
         fp: dict[str, Any] = {
             "runtime": runtime,
@@ -861,6 +868,12 @@ def generate_projection(
         if source_hash is not None:
             fp["runtimeSourceSha256"] = source_hash
         fingerprints[owner] = _fingerprint(fp)
+
+    if protected_start:
+        target = "nas-protected-services.target.d/50-nas-v2.conf"
+        path = unit_dir / target
+        files[path] = ("[Unit]\nWants=" + " ".join(sorted(protected_start)) + "\n").encode()
+        links[target] = str(path)
 
     manifest = {
         "schemaVersion": 1,

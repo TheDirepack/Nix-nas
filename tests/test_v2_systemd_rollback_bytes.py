@@ -75,6 +75,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 "restart",
                 "readiness",
                 "probe-only",
+                "dependency",
                 "readiness-existing-failure",
                 "query",
                 "reset",
@@ -84,13 +85,14 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 "durability",
             )
             for active, restore in ((True, False), (False, False), (True, True), (False, True))
-            if stage != "probe-only" or (not active and not restore)
+            if stage not in {"probe-only", "dependency"} or (not active and not restore)
         ):
             with (
                 self.subTest(stage=failure_stage, active=initially_active, fail_restore=fail_restore),
                 tempfile.TemporaryDirectory() as raw,
             ):
-                probe_only = failure_stage == "probe-only"
+                dependency_only = failure_stage == "dependency"
+                probe_only = failure_stage in {"probe-only", "dependency"}
                 root = pathlib.Path(raw)
                 control = root / "control"
                 runtime = root / "units"
@@ -132,7 +134,15 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     sources["candidate"].write_bytes(sources["healthy"].read_bytes())
                     candidate = json.loads(manifests["candidate"].read_text())
                     candidate["fingerprints"][owner] = "healthy"
-                    candidate["fingerprints"][ready] = "changed-probe"
+                    if dependency_only:
+                        trigger = manifests["candidate"].parent / "nas-v2-trigger.service"
+                        trigger.write_text(f"[Unit]\nRequires={owner}\n[Service]\nExecStart=/bin/true\n")
+                        candidate["links"].append({"target": trigger.name, "source": str(trigger)})
+                        candidate["ownedUnits"].append(trigger.name)
+                        candidate["startUnits"].append(trigger.name)
+                        candidate["fingerprints"][trigger.name] = "new-trigger"
+                    else:
+                        candidate["fingerprints"][ready] = "changed-probe"
                     manifests["candidate"].write_text(json.dumps(candidate))
                 projection.symlink_to(manifests["healthy"].parent)
                 running = {"version": None, "allow_candidate": False, "fail_restore": False, "gate_state": "inactive"}
@@ -143,7 +153,15 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     code, output = 0, ""
                     if operation == "is-active":
                         active = units[0] == owner and running["version"] is not None
-                        output = ("active" if active else "inactive") if units[0] == owner else running["gate_state"]
+                        output = (
+                            ("active" if active else "inactive")
+                            if units[0] == owner
+                            else running["gate_state"]
+                            if units[0] == ready
+                            else "active"
+                            if running.get("trigger_active", False)
+                            else "inactive"
+                        )
                         code = 0 if output == "active" else 3
                         if failure_stage == "query" and running.get("query_failure") and units[0] == owner:
                             code, output = 1, ""
@@ -155,6 +173,11 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                             running["version"] = desired
                             if desired == "candidate" and failure_stage == "restart":
                                 code = 1
+                    elif operation in {"start", "restart"} and units[0] == "nas-v2-trigger.service":
+                        running["trigger_active"] = True
+                        running["version"] = "healthy"
+                    elif operation == "stop" and units[0] == "nas-v2-trigger.service":
+                        running["trigger_active"] = False
                     elif operation == "restart" and units[0] == ready:
                         if probe_only and running["version"] is None:
                             running["version"] = "healthy"
@@ -320,6 +343,13 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     if accepted:
                         apply()
                         self.assertTrue(state.exists())
+                        state.unlink()
+                        expected_active = output == "active"
+                        with mock.patch.object(reconcile, "_atomic_json", side_effect=OSError("commit failed")):
+                            with self.assertRaisesRegex(reconcile.SystemdReconcileError, "commit failed"):
+                                apply()
+                        restore_restarts = [c for c in calls.call_args_list if c.args[1] == "restart"]
+                        self.assertEqual(len(restore_restarts), 3 if expected_active else 2)
                     else:
                         with self.assertRaisesRegex(reconcile.SystemdReconcileError, "snapshot"):
                             apply()
