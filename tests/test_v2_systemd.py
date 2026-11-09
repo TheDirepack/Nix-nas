@@ -60,7 +60,7 @@ class V2SystemdProjectionTests(unittest.TestCase):
             proxy = files[output / "units" / activation.proxy_unit(service, route)].decode()
             self.assertIn(f'"127.0.0.1:{port}"', proxy)
             self.assertIn(str(activation.socket_path(service, route)), caddyfile)
-            escaped_service = service.replace("-", "\\\\-")
+            escaped_service = service.replace("-", "[-]")
             self.assertIn(f"application[.]{escaped_service}[.]access", caddyfile)
 
     @classmethod

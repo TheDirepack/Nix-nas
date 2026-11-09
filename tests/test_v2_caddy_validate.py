@@ -101,6 +101,69 @@ class ManagedServicesV2RealCaddyTests(unittest.TestCase):
                 process.terminate()
                 process.wait(timeout=5)
 
+    def test_hyphenated_capability_grants_are_enforced_by_real_caddy(self):
+        assert self.caddy_bin is not None
+        listeners = []
+        for _ in range(2):
+            listener = socket.socket()
+            listener.bind(("127.0.0.1", 0))
+            listeners.append(listener)
+        port, auth_port = [listener.getsockname()[1] for listener in listeners]
+        for listener in listeners:
+            listener.close()
+        lines = []
+        caddy._render_identity_auth(
+            lines,
+            service_id="vm-oci-probe",
+            route_id="web",
+            required_capability="application.vm-oci-probe.access",
+            authentik_upstream=f"127.0.0.1:{auth_port}",
+            authentik_path="/identity/",
+            indent="  ",
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            config = pathlib.Path(raw) / "Caddyfile"
+            config.write_text(
+                "{\n admin off\n}\n"
+                + f"http://127.0.0.1:{auth_port} {{\n"
+                + " header X-Authentik-Username baseline\n"
+                + ' header X-Authentik-Groups "{http.request.header.X-Test-Groups}"\n respond 200\n}\n'
+                + f"http://127.0.0.1:{port} {{\n route {{\n"
+                + "\n".join(lines)
+                + '\n respond "application" 200\n }\n}\n'
+            )
+            process = subprocess.Popen(
+                [self.caddy_bin, "run", "--config", str(config), "--adapter", "caddyfile"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                for _ in range(100):
+                    try:
+                        with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                            break
+                    except OSError:
+                        time.sleep(0.02)
+                for groups, status in (
+                    ("nas_user", 403),
+                    ("application.vm-oci-probe.access", 200),
+                    ("nas_user|application.vm-oci-probe.access", 200),
+                    ("application.vm-oci-probe.access-extra", 403),
+                    ("nas_admin", 200),
+                ):
+                    with self.subTest(groups=groups):
+                        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+                        connection.request(
+                            "GET", "/", headers={"X-Test-Groups": groups, "X-Authentik-Groups": "nas_admin"}
+                        )
+                        response = connection.getresponse()
+                        self.assertEqual(response.status, status)
+                        self.assertEqual(response.read(), b"application" if status == 200 else b"")
+                        connection.close()
+            finally:
+                process.terminate()
+                process.wait(timeout=5)
+
     def test_empty_projection_is_accepted_by_real_caddy(self):
         effective = self.compile({})
         caddy.validate_caddyfile(caddy.generate_caddyfile(effective), caddy_bin=self.caddy_bin)
