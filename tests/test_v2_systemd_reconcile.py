@@ -469,6 +469,59 @@ class V2SystemdReconcileTests(unittest.TestCase):
             self.assertFalse(result["noop"])
             self.assertTrue(state.is_file())
 
+    def test_readiness_runs_after_runtime_and_failure_preserves_state_for_retry(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            projection = root / "projection"
+            projection.mkdir()
+            owner = "nas-v2-vm-demo.service"
+            ready = "nas-v2-ready-vm-demo.service"
+            source = projection / owner
+            source.write_text("[Service]\nExecStart=/bin/true\n")
+            gate = projection / ready
+            gate.write_text(f"[Unit]\nRequires={owner}\nAfter={owner}\n[Service]\nType=oneshot\nExecStart=/bin/true\n")
+            manifest = projection / "manifest.json"
+            self.write_manifest(manifest, source)
+            value = json.loads(manifest.read_text().replace("nas-v2-demo", "nas-v2-vm-demo"))
+            value["links"].append({"target": ready, "source": str(gate)})
+            value["ownedUnits"].append(ready)
+            value["startUnits"].append(ready)
+            value["readinessUnits"] = [ready]
+            value["fingerprints"][ready] = "unchanged-probe"
+            manifest.write_text(json.dumps(value))
+            runtime = root / "systemd"
+            runtime.mkdir()
+            systemctl, log = self.make_systemctl(root)
+            state = root / "state.json"
+            kwargs = dict(
+                manifest=manifest, projection=projection, runtime=runtime, state=state, systemctl=systemctl, log=log
+            )
+            self.run_reconcile(**kwargs)
+            commands = log.read_text()
+            self.assertLess(commands.index("restart " + owner), commands.index("restart " + ready))
+            previous = state.read_bytes()
+            log.write_text("")
+            self.assertTrue(self.run_reconcile(**kwargs)["noop"])
+            self.assertEqual(log.read_text(), "")
+            manifest.write_text(json.dumps({**value, "readinessUnits": ["not-started.service"]}))
+            with self.assertRaisesRegex(reconcile.SystemdReconcileError, "readinessUnits"):
+                self.run_reconcile(**kwargs)
+            self.assertEqual(log.read_text(), "")
+            value["fingerprints"][owner] = "unhealthy-runtime"
+            manifest.write_text(json.dumps(value))
+            self.make_systemctl(root, fail_on={"restart " + ready})
+            with self.assertRaisesRegex(reconcile.SystemdReconcileError, ready):
+                self.run_reconcile(**kwargs)
+            self.assertEqual(state.read_bytes(), previous)
+            commands = log.read_text()
+            self.assertLess(commands.index("restart " + owner), commands.index("restart " + ready))
+            self.make_systemctl(root)
+            log.write_text("")
+            self.run_reconcile(**kwargs)
+            self.assertEqual(json.loads(state.read_text())["fingerprints"][owner], "unhealthy-runtime")
+            commands = log.read_text()
+            self.assertLess(commands.index("restart " + owner), commands.index("restart " + ready))
+
     def test_identical_second_reconcile_is_a_true_noop(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)

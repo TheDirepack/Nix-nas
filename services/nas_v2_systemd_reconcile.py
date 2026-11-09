@@ -367,12 +367,16 @@ def reconcile(
 
     owned = _string_set("ownedUnits", manifest)
     start = _string_set("startUnits", manifest)
+    readiness = _string_set("readinessUnits", manifest)
     stop = _string_set("stopUnits", manifest)
     if not start <= owned or not stop <= owned:
         raise SystemdReconcileError("startUnits and stopUnits must be owned units")
+    if not readiness <= start:
+        raise SystemdReconcileError("readinessUnits must be started owned units")
 
     previous_owned = _string_set("ownedUnits", previous) if previous else set()
     previous_start = _string_set("startUnits", previous) if previous else set()
+    previous_readiness = _string_set("readinessUnits", previous) if previous else set()
     previous_stop = _string_set("stopUnits", previous) if previous else set()
     previous_links_raw = previous.get("links", {}) if previous else {}
     previous_quadlet_links_raw = previous.get("quadletLinks", {}) if previous else {}
@@ -417,7 +421,9 @@ def reconcile(
         or link_drift
         or quadlet_drift
     )
-    lifecycle_changed = owned != previous_owned or start != previous_start or stop != previous_stop
+    lifecycle_changed = (
+        owned != previous_owned or start != previous_start or stop != previous_stop or readiness != previous_readiness
+    )
     fingerprint_changed = fingerprints != previous_fingerprints
     if previous and not topology_changed and not lifecycle_changed and not fingerprint_changed:
         return {"stopped": [], "changed": [], "started": [], "noop": True}
@@ -532,7 +538,7 @@ def reconcile(
             _run_systemctl(systemctl, "daemon-reload")
 
         restarted: set[str] = set()
-        for unit in sorted(changed_units & owned):
+        for unit in sorted((changed_units & owned) - readiness):
             if unit in changed_sessions:
                 # A stopped transient must not be restarted with stale args.
                 continue
@@ -542,9 +548,15 @@ def reconcile(
             else:
                 _run_systemctl(systemctl, "try-restart", unit)
 
-        units_to_start = (start - previous_start) - restarted
+        units_to_start = (start - previous_start) - restarted - readiness
         for unit in sorted(units_to_start):
             _run_systemctl(systemctl, "start", unit)
+
+        # A probe definition may be unchanged while its candidate runtime changes.
+        # Run persistent gates after owner activation and before recording success.
+        for unit in sorted(readiness):
+            _run_systemctl(systemctl, "restart", unit)
+            restarted.add(unit)
 
         state = {
             "schemaVersion": 1,
@@ -554,6 +566,7 @@ def reconcile(
             "quadletHashes": current_quadlet_hashes,
             "ownedUnits": sorted(owned),
             "startUnits": sorted(start),
+            "readinessUnits": sorted(readiness),
             "stopUnits": sorted(stop),
             "fingerprints": fingerprints,
         }

@@ -258,6 +258,33 @@ class V2SystemdProjectionTests(unittest.TestCase):
         self.assertNotIn("nas-v2-demo.service", manifest["startUnits"])
         self.assertFalse(any("nas-v2-lease-" in unit or "nas-v2-idle-" in unit for unit in manifest["ownedUnits"]))
 
+    def test_persistent_daemon_apply_includes_declared_readiness_gate(self):
+        for runtime in (
+            {"type": "oci", "image": "example.invalid/demo:1"},
+            {"type": "systemd", "unit": "demo.service"},
+        ):
+            for enabled, lifecycle_mode in ((True, "persistent"), (False, "persistent"), (True, "on-demand")):
+                with self.subTest(runtime=runtime, enabled=enabled, lifecycle_mode=lifecycle_mode):
+                    service = {
+                        "name": "Demo",
+                        "enabled": enabled,
+                        "workload": {"kind": "daemon", "activation": lifecycle_mode},
+                        "runtime": runtime,
+                        "readiness": {"probes": [{"type": "tcp", "port": 8080}]},
+                        "routes": self.route(),
+                    }
+                    if lifecycle_mode == "on-demand":
+                        service["workload"]["idleSeconds"] = 90
+                    _, manifest = self.generate(self.compile({"demo": service}), pathlib.Path("/projection"))
+                    self.assertEqual(
+                        "nas-v2-ready-demo.service" in manifest["startUnits"],
+                        enabled and lifecycle_mode == "persistent",
+                    )
+                    self.assertEqual(
+                        manifest["readinessUnits"],
+                        ["nas-v2-ready-demo.service"] if enabled and lifecycle_mode == "persistent" else [],
+                    )
+
     def test_ready_dependency_uses_transient_gate(self):
         effective = self.compile(
             {
