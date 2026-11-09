@@ -468,6 +468,19 @@ fail() { echo "$*" >&2; exit 1; }
         assert plan is not None
         self.assertEqual(plan.group(1), configured.group(1))
 
+    def test_encrypted_api_success_uses_a_separate_fresh_guest_sequentially(self) -> None:
+        fixture = (ROOT / "tests/nixos/encrypted.nix").read_text(encoding="utf-8")
+        self.assertIn("machine = encryptedNode;", fixture)
+        self.assertIn("api = encryptedNode;", fixture)
+        self.assertLess(fixture.index("machine.shutdown()"), fixture.index('api.wait_for_unit("multi-user.target")'))
+        self.assertIn("nas-vm-encrypted-guest-test /dev/vdb api", fixture)
+        guest = ENCRYPTED_GUEST_TEST.read_text(encoding="utf-8")
+        self.assertIn('if [[ "$SETUP_ENTRYPOINT" == api ]]; then', guest)
+        self.assertIn('make_setup_api_payload "$plan_digest"', guest)
+        self.assertIn('[[ "$job_status" == complete ]]', guest)
+        self.assertIn(".storage.encrypted == true", guest)
+        self.assertIn("--secret-payload-stdin --encrypt-storage", guest)
+
     def test_source_refresh_waits_for_boot_repository_materialization(self) -> None:
         source = QEMU.read_text(encoding="utf-8")
         refresh = source.split("sync_source_to_guest() {", 1)[1].split("\n}", 1)[0]

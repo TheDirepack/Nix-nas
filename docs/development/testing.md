@@ -482,10 +482,14 @@ installed guest starts without that file or a KeePass database. Its browser
 creates the plan from discovered disks, reviews it, confirms erasure and submits
 setup. It then verifies the permanent administrator and exercises the account
 CLI for ordinary users. It does not restart the proxy outpost to make login work.
-The encrypted native guest creates its plan through `nas-setup
-create-first-start-plan` and completes `first-run --secret-payload-stdin` through
-the existing authorized-root integration, with preflight enabled. Both retain
-locked-boot, storage, identity, secret and service assertions.
+Encrypted native qualification uses two fresh guests sequentially. Each creates
+its custom plan through `nas-setup create-first-start-plan` and rejects stale
+digests through both the API and CLI. One completes `first-run
+--secret-payload-stdin` through the authorized-root integration; the other
+submits a matching encrypted API request and waits for the detached job. Both
+require preflight, encrypted storage and the remaining locked-boot, identity,
+secret and service assertions. The CLI guest shuts down before the API guest
+starts to keep the memory budget bounded.
 
 Run the wizard interaction tests with `npm --prefix cockpit run test:browser --
 first-run-wizard.spec.mjs`. These use

@@ -77,7 +77,7 @@ class SetupPlanCreationTests(unittest.TestCase):
 
         with mock.patch.object(setup, "fsync_directory", side_effect=sync):
             self.create()
-        self.assertEqual(synced, [self.path.parent])
+        self.assertTrue(synced)
 
     def test_directory_sync_failure_cannot_report_success(self):
         with (
@@ -86,6 +86,33 @@ class SetupPlanCreationTests(unittest.TestCase):
         ):
             self.create()
         self.assertTrue(self.path.is_file())
+
+    def test_review_retries_custom_plan_directory_sync_and_fails_closed(self):
+        self.path = self.root / "custom-plans" / "first-run.json"
+        self.create()
+        with (
+            mock.patch.object(setup, "fsync_directory", side_effect=OSError("sync failed")) as sync,
+            mock.patch.object(setup, "pool_exists", return_value=False),
+            mock.patch.object(setup, "publish_first_start_status") as publish,
+            self.assertRaisesRegex(OSError, "sync failed"),
+        ):
+            setup.prepare_first_start(str(self.path))
+        sync.assert_called_once_with(self.path.parent)
+        publish.assert_not_called()
+
+    def test_direct_execution_syncs_plan_before_storage_or_secret_work(self):
+        self.create()
+        args = setup.argparse.Namespace(config=str(self.path), encrypt_storage=False)
+        with (
+            mock.patch.object(setup, "fsync_directory", side_effect=OSError("sync failed")),
+            mock.patch.object(setup, "require_confirmed_plan", return_value="a" * 64),
+            mock.patch.object(setup, "validate_storage_request") as storage,
+            mock.patch.object(setup, "read_keepass_password") as password,
+            self.assertRaisesRegex(OSError, "sync failed"),
+        ):
+            setup._first_run_locked(args)
+        storage.assert_not_called()
+        password.assert_not_called()
 
     def test_started_or_completed_setup_blocks_plan_creation(self):
         for path in (setup.STATE_PATH, setup.JOURNAL_PATH):
@@ -171,6 +198,36 @@ class SetupPlanCreationTests(unittest.TestCase):
         self.assertFalse(by_path["/dev/vda"]["available"])
         self.assertTrue(by_path["/dev/vdb"]["available"])
         self.assertFalse(by_path["/dev/vdc"]["available"])
+
+    def test_inventory_rejects_descendants_of_in_use_devices(self):
+        for properties in ({"mountpoints": ["/data"]}, {"ro": True}, {"type": "crypt"}):
+            with self.subTest(properties=properties):
+                inventory = {
+                    "blockdevices": [
+                        {
+                            "path": "/dev/vda",
+                            "maj:min": "8:0",
+                            "type": "disk",
+                            "mountpoints": [None],
+                            "ro": False,
+                            **properties,
+                            "children": [
+                                {"path": "/dev/vda1", "maj:min": "8:1", "type": "part", "mountpoints": [None]}
+                            ],
+                        }
+                    ]
+                }
+
+                def command(argv, **kwargs):
+                    return setup.Completed(
+                        tuple(argv),
+                        json.dumps(inventory) if argv[0] == "lsblk" else "Filename Type Size Used Priority\n",
+                        "",
+                    )
+
+                with mock.patch.object(setup, "run_storage_host", side_effect=command):
+                    devices = setup.storage_device_inventory()
+                self.assertTrue(all(not device["available"] for device in devices))
 
 
 if __name__ == "__main__":

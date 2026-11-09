@@ -410,7 +410,7 @@ def storage_device_inventory() -> list[dict[str, Any]]:
         unsafe: set[str] = set()
         rows: list[dict[str, Any]] = []
 
-        def visit(node: Any, parents: tuple[str, ...]) -> None:
+        def visit(node: Any, parents: tuple[str, ...], ancestor_in_use: bool = False) -> None:
             if not isinstance(node, dict):
                 raise ValueError("invalid block device")
             identity = node["maj:min"]
@@ -433,16 +433,18 @@ def storage_device_inventory() -> list[dict[str, Any]]:
             )
             # Parents of mounted partitions/mappers are also in use. Refuse
             # live mapper/RAID holders even when they have no mounted filesystem.
-            if (
-                any(mounts)
+            in_use = (
+                ancestor_in_use
+                or any(mounts)
                 or path in swaps
                 or identity in swap_devices
                 or node.get("ro", False)
                 or node["type"] not in {"disk", "part", "loop"}
-            ):
+            )
+            if in_use:
                 unsafe.update(chain)
             for child in node.get("children", []):
-                visit(child, chain)
+                visit(child, chain, in_use)
 
         for root in roots:
             visit(root, ())
@@ -1564,6 +1566,8 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
         raise SetupError("This system build does not include KeePassXC-backed ZFS encryption support")
     config = normalize_config(read_json_source(args.config))
     confirmed_plan_digest = require_confirmed_plan(config, getattr(args, "confirm_plan_digest", None))
+    if args.config != "-":
+        fsync_directory(pathlib.Path(args.config).parent)
     with maintained_sudo_authorization():
         validate_storage_request(config["storage"], args.confirm_storage_device, args.allow_destructive_storage)
         validate_service_request(config["services"])
@@ -2050,6 +2054,8 @@ def publish_first_start_status(status: Mapping[str, Any]) -> None:
 
 def prepare_first_start(config_source: str) -> dict[str, Any]:
     status = first_start_status(config_source)
+    if status.get("status") == "ready":
+        fsync_directory(pathlib.Path(config_source).parent)
     publish_first_start_status(status)
     return status
 
