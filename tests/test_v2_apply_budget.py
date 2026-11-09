@@ -114,7 +114,7 @@ class ApplyBudgetTests(unittest.TestCase):
             packet.write_text(json.dumps({"desiredSha256": hashlib.sha256(desired.read_bytes()).hexdigest()}))
             newer = '{"schemaVersion":3,"generation":2,"services":{}}'
             desired.write_text(newer)
-            overrides = {
+            overrides: dict[str, str | None] = {
                 key: str(root / "run" / key)
                 for key in (
                     "NAS_V2_EFFECTIVE",
