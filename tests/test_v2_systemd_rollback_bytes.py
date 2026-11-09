@@ -78,6 +78,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 "query",
                 "reset",
                 "commit",
+                "commit-existing-failure",
                 "publish",
                 "durability",
             )
@@ -180,8 +181,17 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     state.write_bytes(previous_state)
                     running["version"] = "healthy" if initially_active else None
                     running["fail_restore"] = fail_restore
-                    running["gate_state"] = "failed" if failure_stage == "readiness-existing-failure" else "inactive"
-                    running["allow_candidate"] = failure_stage in {"commit", "publish", "durability"}
+                    running["gate_state"] = (
+                        "failed"
+                        if failure_stage in {"readiness-existing-failure", "commit-existing-failure"}
+                        else "inactive"
+                    )
+                    running["allow_candidate"] = failure_stage in {
+                        "commit",
+                        "commit-existing-failure",
+                        "publish",
+                        "durability",
+                    }
                     projection.unlink()
                     projection.symlink_to(manifests["candidate"].parent)
                     message = (
@@ -189,7 +199,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                         if fail_restore or failure_stage in {"durability", "reset", "query"}
                         else (
                             "No space left"
-                            if failure_stage in {"commit", "publish", "durability"}
+                            if failure_stage in {"commit", "commit-existing-failure", "publish", "durability"}
                             else owner
                             if failure_stage == "restart"
                             else ready
@@ -212,12 +222,15 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                             reconcile,
                             "_atomic_json",
                             side_effect=OSError(28, "No space left on device")
-                            if failure_stage == "commit"
+                            if failure_stage in {"commit", "commit-existing-failure"}
                             else write_state,
                         ),
-                        self.assertRaisesRegex(reconcile.SystemdReconcileError, message),
+                        self.assertRaisesRegex(reconcile.SystemdReconcileError, message) as rejected,
                     ):
                         apply(manifests["candidate"])
+                    if failure_stage == "commit-existing-failure":
+                        self.assertIn("readiness units already failed before apply", str(rejected.exception))
+                        self.assertIn(ready, str(rejected.exception))
                     self.assertEqual(state.read_bytes(), previous_state)
                     self.assertEqual((quadlet / "nas-v2-demo.container").resolve(), sources["healthy"])
                     for version, source in sources.items():
@@ -248,6 +261,8 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
             (0, "", False),
             (1, "inactive", False),
             (3, "garbled", False),
+            (3, "activating", False),
+            (3, "deactivating", False),
             (0, "active", True),
             (3, "inactive", True),
             (3, "failed", True),

@@ -36,6 +36,7 @@ _QUADLET_DIRECT_NETWORK = re.compile(r"^nas-v2-net-([a-z][a-z0-9-]{0,63})\.netwo
 _QUADLET_SESSION_NETWORK = re.compile(r"^nas-v2-snet-([a-z][a-z0-9-]{0,63})\.network$")
 _QUADLET = re.compile(r"^nas-v2-[A-Za-z0-9_.@:-]+\.(?:container|pod|network|volume|kube|image|build)$")
 _SYSTEMCTL_TIMEOUT_SECONDS = 180
+_TRANSITIONAL_UNIT_STATES = frozenset({"activating", "deactivating"})
 _UNIT_QUERY_STATES = {
     0: frozenset({"active", "reloading", "refreshing"}),
     3: frozenset({"inactive", "failed", "activating", "deactivating", "maintenance"}),
@@ -486,13 +487,15 @@ def reconcile(
 
     def is_active(unit: str) -> bool | None:
         state = unit_state(unit)
-        return None if state is None else state in _UNIT_QUERY_STATES[0]
+        return None if state is None or state in _TRANSITIONAL_UNIT_STATES else state in _UNIT_QUERY_STATES[0]
 
     all_units = previous_owned | owned | previous_start | start | stop | units_to_stop | changed_units
     state_snapshot = {unit: unit_state(unit) for unit in sorted(all_units)}
-    unknown_units = [unit for unit, state in state_snapshot.items() if state is None]
-    if unknown_units:
-        raise SystemdReconcileError(f"unable to snapshot systemd state: {', '.join(unknown_units)}")
+    unstable_units = [
+        unit for unit, state in state_snapshot.items() if state is None or state in _TRANSITIONAL_UNIT_STATES
+    ]
+    if unstable_units:
+        raise SystemdReconcileError(f"unable to snapshot stable systemd state: {', '.join(unstable_units)}")
     active_snapshot = {unit: state in _UNIT_QUERY_STATES[0] for unit, state in state_snapshot.items()}
     # An interrupted or partially recorded apply can leave a target active with
     # no installed link. Stop it before installing the changed descriptor.
@@ -681,20 +684,24 @@ def reconcile(
             except Exception as state_exc:  # noqa: BLE001
                 rollback_errors.append(f"unable to restore reconcile state: {state_exc}")
         rollback_error = "; ".join(rollback_errors)
+        prior_failures = sorted(unit for unit in attempted_readiness if state_snapshot.get(unit) == "failed")
+        failure_detail = str(exc)
+        if prior_failures:
+            failure_detail += f"; readiness units already failed before apply: {', '.join(prior_failures)}"
         if disrupted_sessions:
             details = ", ".join(sorted(disrupted_sessions))
             rollback_detail = f"; native rollback failed: {rollback_error}" if rollback_error else ""
             raise SystemdReconcileError(
-                f"systemd reconcile failed: {exc}{rollback_detail}; transient instances may have been "
+                f"systemd reconcile failed: {failure_detail}{rollback_detail}; transient instances may have been "
                 f"terminated under {details} and cannot be recreated by target restart; manual recovery required"
             ) from exc
         if rollback_error:
             raise SystemdReconcileError(
-                f"systemd reconcile failed: {exc}; rollback failed: {rollback_error}; manual recovery required"
+                f"systemd reconcile failed: {failure_detail}; rollback failed: {rollback_error}; manual recovery required"
             ) from exc
-        if isinstance(exc, SystemdReconcileError):
+        if isinstance(exc, SystemdReconcileError) and not prior_failures:
             raise
-        raise SystemdReconcileError(str(exc)) from exc
+        raise SystemdReconcileError(failure_detail) from exc
 
 
 def build_parser() -> argparse.ArgumentParser:
