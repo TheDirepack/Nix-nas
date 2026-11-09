@@ -45,7 +45,12 @@ let
       keepassxc
       nodejs
       openssh
-      (python3.withPackages (pythonPackages: [ pythonPackages.hypothesis pythonPackages.selenium ]))
+      (python3.withPackages (pythonPackages: with pythonPackages; [
+        hypothesis
+        jsonschema
+        ruamel-yaml
+        selenium
+      ]))
       procps
       systemd
       util-linux

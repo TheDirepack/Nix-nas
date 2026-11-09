@@ -77,6 +77,9 @@ class OciPersistenceTests(unittest.TestCase):
             "pids",
             "cpu",
             "route",
+            "upstream",
+            "proxy",
+            "auth",
         ):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as raw:
                 probe = load_probe()
@@ -86,14 +89,18 @@ class OciPersistenceTests(unittest.TestCase):
                 probe.DATA.write_text("nas-v2-persistent-data\n")
                 probe.BASELINE = root / "baseline.json"
                 probe.CADDY = root / "caddy.conf"
-                probe.CADDY.write_text("/vm-oci-persist/")
-                value = {
-                    "revision": "a" * 64,
-                    "document": {
-                        "services": {probe.SERVICE: {"runtime": {"image": "v2"}}},
-                        "storageResources": {probe.RESOURCE: {"path": str(probe.DATA.parent)}},
-                    },
-                }
+                desired = probe.fixture_document()
+                desired["storageResources"][probe.RESOURCE]["path"] = "/tank/vm-oci-persist"
+                value = {"revision": "a" * 64, "document": desired}
+                route = "\n".join(
+                    probe.expected_route(
+                        {
+                            "service": desired["services"][probe.SERVICE],
+                            "resource": desired["storageResources"][probe.RESOURCE],
+                        }
+                    )
+                )
+                probe.CADDY.write_text(route.replace("_path_0", "_path_9"))
                 with mock.patch.object(probe, "document", return_value=value):
                     probe.record()
                 changed = copy.deepcopy(value)
@@ -109,6 +116,13 @@ class OciPersistenceTests(unittest.TestCase):
                     probe.DATA.chmod(0o400)
                 elif fault == "route":
                     probe.CADDY.write_text("unrelated route")
+
+                if fault == "upstream":
+                    probe.CADDY.write_text(route.replace("127.0.0.1:18089", "127.0.0.1:18090"))
+                elif fault == "proxy":
+                    probe.CADDY.write_text(route.replace('/vm-oci-persist"', '/wrong"'))
+                elif fault == "auth":
+                    probe.CADDY.write_text(route.replace("forward_auth", "reverse_proxy"))
 
                 calls = []
 
@@ -143,6 +157,95 @@ class OciPersistenceTests(unittest.TestCase):
                         probe.verify("test reboot")
                 self.assertEqual(probe.BASELINE.read_bytes(), before)
                 self.assertFalse(any("start" in call or "restart" in call for call in calls))
+
+    def test_creation_collisions_do_not_mutate_the_guest(self):
+        for collision in ("service", "resource", "baseline", "data"):
+            with self.subTest(collision=collision), tempfile.TemporaryDirectory() as raw:
+                probe = load_probe()
+                root = pathlib.Path(raw)
+                probe.DATA = root / "data/sentinel"
+                probe.BASELINE = root / "baseline"
+                desired = {"services": {}, "storageResources": {}}
+                if collision == "service":
+                    desired["services"][probe.SERVICE] = {"name": "existing"}
+                elif collision == "resource":
+                    desired["storageResources"][probe.RESOURCE] = {"path": "/tank/existing"}
+                elif collision == "baseline":
+                    probe.BASELINE.touch()
+                else:
+                    probe.DATA.parent.mkdir()
+                with (
+                    mock.patch.object(probe, "document", return_value={"document": desired}),
+                    mock.patch.object(probe, "command") as command,
+                    self.assertRaisesRegex(RuntimeError, "already exists"),
+                ):
+                    probe.create()
+                command.assert_not_called()
+
+    def test_failed_creation_compensates_only_its_own_resources(self):
+        for failure in ("zfs", "replace", "sentinel", "snapshot", "record", "verify", "cleanup"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as raw:
+                probe = load_probe()
+                root = pathlib.Path(raw)
+                probe.DATA = root / "data/sentinel"
+                probe.BASELINE = root / "baseline"
+                original = {"services": {"unrelated": {"enabled": True}}, "storageResources": {}}
+                live = {"document": copy.deepcopy(original), "revision": "a" * 64}
+                destroyed = []
+
+                def command(*argv, input_text=None):
+                    if argv[:2] == ("zfs", "create"):
+                        if failure == "zfs":
+                            raise RuntimeError("fixture failure")
+                        probe.DATA.parent.mkdir()
+                    elif "replace-json-document" in argv:
+                        if input_text is None:
+                            self.fail("replacement did not send desired state on stdin")
+                        desired = json.loads(input_text)
+                        if probe.SERVICE in desired["services"]:
+                            live["document"] = desired
+                            if failure == "replace":
+                                raise RuntimeError("fixture failure")
+                        elif failure == "cleanup":
+                            raise RuntimeError("cleanup failure")
+                        else:
+                            live["document"] = desired
+                    elif argv[:2] == ("podman", "exec") and failure == "sentinel":
+                        raise RuntimeError("fixture failure")
+                    elif argv[:2] == ("zfs", "snapshot") and failure == "snapshot":
+                        raise RuntimeError("fixture failure")
+                    elif argv[:2] == ("zfs", "destroy"):
+                        destroyed.append(argv[-1])
+                        probe.DATA.parent.rmdir()
+                    return ""
+
+                def record():
+                    probe.BASELINE.write_text("recorded")
+                    if failure == "record":
+                        raise RuntimeError("fixture failure")
+
+                with (
+                    mock.patch.object(probe, "document", side_effect=lambda: copy.deepcopy(live)),
+                    mock.patch.object(probe, "command", side_effect=command),
+                    mock.patch.object(probe, "record", side_effect=record),
+                    mock.patch.object(
+                        probe,
+                        "verify",
+                        side_effect=RuntimeError("fixture failure") if failure in {"verify", "cleanup"} else None,
+                    ),
+                    self.assertRaisesRegex(
+                        RuntimeError, "manual recovery required" if failure == "cleanup" else "fixture failure"
+                    ),
+                ):
+                    probe.create()
+                if failure == "cleanup":
+                    self.assertTrue(probe.DATA.parent.exists())
+                    self.assertFalse(destroyed)
+                else:
+                    self.assertEqual(live["document"], original)
+                    self.assertFalse(probe.BASELINE.exists())
+                    self.assertFalse(probe.DATA.parent.exists())
+                    self.assertEqual(destroyed, [] if failure == "zfs" else ["tank/nas/vm-oci-persist"])
 
     def test_readiness_retries_read_only_until_ready_and_times_out(self):
         probe = load_probe()
@@ -236,13 +339,17 @@ class OciPersistenceTests(unittest.TestCase):
                     mock.patch.object(
                         probe.urllib.request,
                         "urlopen",
-                        return_value=io.BytesIO(json.dumps({"results": groups}).encode()),
+                        side_effect=lambda *args, **kwargs: io.BytesIO(json.dumps({"results": groups}).encode()),
                     ),
                 ):
                     if fault:
                         with self.assertRaises(RuntimeError):
                             probe.remove()
                     else:
+                        probe.remove()
+                        probe.remove()
+                    if fault in {"projection", "symlink"}:
+                        probe.PROJECTIONS[0].unlink()
                         probe.remove()
                 self.assertEqual(
                     replacements,

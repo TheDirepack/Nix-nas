@@ -52,13 +52,8 @@ def data_state() -> dict:
     }
 
 
-def create() -> None:
-    require(not BASELINE.exists() and not DATA.parent.exists(), "OCI persistence fixture already exists")
-    command("zfs", "create", "-o", f"mountpoint={DATA.parent}", "tank/nas/vm-oci-persist")
-    value = document()
-    desired = value["document"]
-    require(SERVICE not in desired["services"], "OCI persistence service already exists")
-    require(RESOURCE not in desired.get("storageResources", {}), "OCI persistence resource already exists")
+def fixture_document() -> dict:
+    desired = {"schemaVersion": 3, "services": {}}
     desired.setdefault("storageResources", {})[RESOURCE] = {
         "path": str(DATA.parent),
         "dataset": "tank/nas/vm-oci-persist",
@@ -85,13 +80,63 @@ def create() -> None:
             }
         },
     }
-    command(
-        "nas-managed-services-control", "replace-json-document", "-", value["revision"], input_text=json.dumps(desired)
-    )
-    command("podman", "exec", CONTAINER, "sh", "-c", "umask 077; printf '%s\n' nas-v2-persistent-data > /data/sentinel")
-    command("zfs", "snapshot", "tank/nas/vm-oci-persist@qualification")
-    record()
-    verify("creation")
+    return desired
+
+
+def remove_declarations(expected: dict | None = None) -> None:
+    value = document()
+    desired = value["document"]
+    changed = False
+    for section, key in (("services", SERVICE), ("storageResources", RESOURCE)):
+        entries = desired.get(section, {})
+        if key not in entries:
+            continue
+        if expected is not None:
+            require(entries[key] == expected[section][key], f"fixture declaration changed during cleanup: {key}")
+        del entries[key]
+        changed = True
+    if changed:
+        command(
+            "nas-managed-services-control",
+            "replace-json-document",
+            "-",
+            value["revision"],
+            input_text=json.dumps(desired),
+        )
+
+
+def create() -> None:
+    require(not BASELINE.exists() and not DATA.parent.exists(), "OCI persistence fixture already exists")
+    value = document()
+    desired = value["document"]
+    require(SERVICE not in desired["services"], "OCI persistence service already exists")
+    require(RESOURCE not in desired.get("storageResources", {}), "OCI persistence resource already exists")
+    fixture = fixture_document()
+    for section in ("services", "storageResources"):
+        desired.setdefault(section, {}).update(fixture[section])
+    command("zfs", "create", "-o", f"mountpoint={DATA.parent}", "tank/nas/vm-oci-persist")
+    try:
+        command(
+            "nas-managed-services-control",
+            "replace-json-document",
+            "-",
+            value["revision"],
+            input_text=json.dumps(desired),
+        )
+        command(
+            "podman", "exec", CONTAINER, "sh", "-c", "umask 077; printf '%s\n' nas-v2-persistent-data > /data/sentinel"
+        )
+        command("zfs", "snapshot", "tank/nas/vm-oci-persist@qualification")
+        record()
+        verify("creation")
+    except Exception as error:
+        try:
+            remove_declarations(fixture)
+            command("zfs", "destroy", "-r", "tank/nas/vm-oci-persist")
+            BASELINE.unlink(missing_ok=True)
+        except Exception as cleanup_error:
+            raise RuntimeError(f"{error}; fixture cleanup failed: {cleanup_error}; manual recovery required") from error
+        raise
 
 
 def record() -> None:
@@ -122,6 +167,38 @@ def wait_ready(stage: str, timeout: float = 60.0) -> None:
             if time.monotonic() >= deadline:
                 raise RuntimeError(f"OCI did not become ready after {stage}") from error
             time.sleep(1)
+
+
+def expected_route(baseline: dict) -> list[str]:
+    root = pathlib.Path(__file__).resolve().parents[2]
+    if str(root / "services") not in sys.path:
+        sys.path.insert(0, str(root / "services"))
+    from nas_v2_caddy import generate_caddyfile
+    from nas_v2_spec import compile_document, load_schema
+
+    desired = {
+        "schemaVersion": 3,
+        "services": {SERVICE: baseline["service"]},
+        "storageResources": {RESOURCE: baseline["resource"]},
+    }
+    effective = compile_document(desired, load_schema(root / "schemas/managed-services-v3.schema.json"))
+    lines = generate_caddyfile(effective).splitlines()
+    first = next(index for index, line in enumerate(lines) if line.startswith("  @"))
+    return lines[first:-1]
+
+
+def verify_route(baseline: dict, stage: str) -> None:
+    expected = expected_route(baseline)
+    matcher, patterns = expected[0].split(" path ", 1)
+    actual = CADDY.read_text().splitlines()
+    for index, line in enumerate(actual):
+        candidate, separator, paths = line.partition(" path ")
+        if separator and paths == patterns:
+            # The renderer assigns path indexes across all applications.
+            block = "\n".join(expected).replace(matcher.strip(), candidate.strip())
+            if "\n".join(actual[index : index + len(expected)]) == block:
+                return
+    raise RuntimeError(f"OCI route target, authentication or proxy changed after {stage}")
 
 
 def verify(stage: str) -> None:
@@ -163,8 +240,7 @@ def verify(stage: str) -> None:
     )
     quota, period = map(int, command("podman", "exec", CONTAINER, "cat", "/sys/fs/cgroup/cpu.max").split())
     require(quota > 0 and period > 0 and quota * 4 == period, "OCI CPU limit is not enforced")
-    route = CADDY.read_text()
-    require("/vm-oci-persist/" in route, f"OCI route missing after {stage}")
+    verify_route(baseline, stage)
     print(f"PASS: OCI revision, image, HTTP, ZFS data, ownership and cgroup limits after {stage}", flush=True)
 
 
@@ -181,13 +257,7 @@ def locked() -> None:
 
 
 def remove() -> None:
-    value = document()
-    desired = value["document"]
-    del desired["services"][SERVICE]
-    del desired["storageResources"][RESOURCE]
-    command(
-        "nas-managed-services-control", "replace-json-document", "-", value["revision"], input_text=json.dumps(desired)
-    )
+    remove_declarations()
     require(
         command("systemctl", "show", UNIT, "--property=ActiveState", "--value") == "inactive", "removed OCI is active"
     )

@@ -71,8 +71,8 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
     def test_rejected_apply_restores_live_owner_as_well_as_links(self) -> None:
         for failure_stage, initially_active, fail_restore in (
             (stage, active, restore)
-            for stage in ("readiness", "commit")
-            for active, restore in ((True, False), (False, False), (True, True))
+            for stage in ("restart", "readiness", "commit", "publish", "durability")
+            for active, restore in ((True, False), (False, False), (True, True), (False, True))
         ):
             with (
                 self.subTest(stage=failure_stage, active=initially_active, fail_restore=fail_restore),
@@ -131,10 +131,15 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                             code = 1
                         else:
                             running["version"] = desired
+                            if desired == "candidate" and failure_stage == "restart":
+                                code = 1
                     elif operation == "restart" and units[0] == ready:
                         code = int(running["version"] == "candidate" and not running["allow_candidate"])
                     elif operation == "stop" and units[0] == owner:
-                        running["version"] = None
+                        if running["fail_restore"]:
+                            code = 1
+                        else:
+                            running["version"] = None
                     if code and check:
                         raise reconcile.SystemdReconcileError(f"systemctl {operation} {' '.join(units)} failed")
                     return subprocess.CompletedProcess([], code, output, "")
@@ -151,19 +156,37 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
 
                 with mock.patch.object(reconcile, "_run_systemctl", side_effect=systemctl):
                     apply(manifests["healthy"])
-                    previous_state = state.read_bytes()
+                    previous_state = state.read_bytes() + b"\n "
+                    state.write_bytes(previous_state)
                     running["version"] = "healthy" if initially_active else None
                     running["fail_restore"] = fail_restore
-                    running["allow_candidate"] = failure_stage == "commit"
+                    running["allow_candidate"] = failure_stage in {"commit", "publish", "durability"}
                     projection.unlink()
                     projection.symlink_to(manifests["candidate"].parent)
                     message = (
                         "manual recovery required"
-                        if fail_restore
-                        else ("No space left" if failure_stage == "commit" else ready)
+                        if fail_restore or failure_stage == "durability"
+                        else (
+                            "No space left"
+                            if failure_stage in {"commit", "publish", "durability"}
+                            else owner
+                            if failure_stage == "restart"
+                            else ready
+                        )
                     )
                     write_state = reconcile._atomic_json
+                    sync_directory = reconcile._fsync_directory
+                    sync_calls = 0
+
+                    def sync(path):
+                        nonlocal sync_calls
+                        sync_calls += 1
+                        if failure_stage == "durability" or failure_stage == "publish" and sync_calls == 1:
+                            raise OSError(28, "No space left on device")
+                        sync_directory(path)
+
                     with (
+                        mock.patch.object(reconcile, "_fsync_directory", side_effect=sync),
                         mock.patch.object(
                             reconcile,
                             "_atomic_json",
@@ -178,7 +201,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     self.assertEqual((quadlet / "nas-v2-demo.container").resolve(), sources["healthy"])
                     for version, source in sources.items():
                         self.assertEqual(source.read_text(), f"[Container]\nImage={version}\n")
-                    if fail_restore:
+                    if fail_restore or failure_stage == "durability":
                         continue
                     self.assertEqual(running["version"], "healthy" if initially_active else None)
                     projection.unlink()
@@ -190,8 +213,48 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     projection.unlink()
                     projection.symlink_to(manifests["candidate"].parent)
                     running["allow_candidate"] = True
+                    failure_stage = "retry"
                     apply(manifests["candidate"])
                     self.assertEqual(running["version"], "candidate")
+
+    def test_failed_first_state_publication_restores_absence(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            projection = root / "projection"
+            projection.mkdir()
+            source = projection / "nas-v2-demo.service"
+            source.write_text("[Service]\nExecStart=/bin/true\n")
+            manifest = projection / "manifest.json"
+            self._manifest(manifest, source)
+            state = root / "state.json"
+            active = set()
+
+            def systemctl(_binary, operation, *units, check=True):
+                if operation in {"start", "restart"}:
+                    active.add(units[0])
+                elif operation == "stop":
+                    active.discard(units[0])
+                output = "active" if units and units[0] in active else "inactive"
+                return subprocess.CompletedProcess([], 0, output, "")
+
+            sync = reconcile._fsync_directory
+            with (
+                mock.patch.object(reconcile, "_run_systemctl", side_effect=systemctl),
+                mock.patch.object(reconcile, "_fsync_directory", side_effect=[OSError("sync failed"), None]),
+                self.assertRaisesRegex(reconcile.SystemdReconcileError, "sync failed"),
+            ):
+                reconcile.reconcile(
+                    manifest_path=manifest,
+                    projection_root=projection,
+                    systemd_runtime_dir=root / "runtime",
+                    quadlet_runtime_dir=root / "quadlets",
+                    state_path=state,
+                    systemctl="systemctl",
+                )
+            self.assertFalse(state.exists())
+            self.assertFalse(active)
+            self.assertFalse((root / "runtime" / source.name).exists())
+            sync(root)
 
     def test_restart_failure_restores_runtime_link_without_mutating_generations(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

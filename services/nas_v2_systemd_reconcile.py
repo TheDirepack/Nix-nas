@@ -41,18 +41,19 @@ _SYSTEMCTL_TIMEOUT_SECONDS = 180
 _ALREADY_STOPPED_STATUSES = ("not found", "could not be found", "not loaded", "masked")
 
 
-def _read_json(path: pathlib.Path, *, required: bool) -> dict[str, Any]:
+def _read_json(path: pathlib.Path, *, required: bool) -> tuple[dict[str, Any], bytes | None]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+        value = json.loads(raw.decode("utf-8"))
     except FileNotFoundError:
         if not required:
-            return {}
+            return {}, None
         raise SystemdReconcileError(f"required state file does not exist: {path}") from None
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
         raise SystemdReconcileError(f"unable to read state file {path}: {exc}") from exc
     if not isinstance(value, dict):
         raise SystemdReconcileError(f"state file {path} must contain an object")
-    return value
+    return value, raw
 
 
 def _safe_target(root: pathlib.Path, relative: str) -> tuple[pathlib.Path, str]:
@@ -104,14 +105,13 @@ def _hash_file(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
-def _atomic_json(path: pathlib.Path, value: dict[str, Any]) -> None:
+def _atomic_bytes(path: pathlib.Path, value: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, raw_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temp = pathlib.Path(raw_name)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, indent=2, sort_keys=True)
-            handle.write("\n")
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(value)
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temp, 0o600)
@@ -119,6 +119,10 @@ def _atomic_json(path: pathlib.Path, value: dict[str, Any]) -> None:
         _fsync_directory(path.parent)
     finally:
         temp.unlink(missing_ok=True)
+
+
+def _atomic_json(path: pathlib.Path, value: dict[str, Any]) -> None:
+    _atomic_bytes(path, (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8"))
 
 
 def _projection_roots(projection_root: pathlib.Path) -> tuple[pathlib.Path, ...]:
@@ -345,8 +349,8 @@ def reconcile(
     systemctl: str,
 ) -> dict[str, Any]:
     """Apply native topology transactionally; lost transient sessions require manual recovery."""
-    manifest = _read_json(manifest_path, required=True)
-    previous = _read_json(state_path, required=False)
+    manifest, _ = _read_json(manifest_path, required=True)
+    previous, previous_bytes = _read_json(state_path, required=False)
     if manifest.get("schemaVersion") != 1:
         raise SystemdReconcileError("unsupported systemd projection manifest version")
 
@@ -513,20 +517,29 @@ def reconcile(
 
     disrupted_sessions: set[str] = set()
 
-    def rollback_active_state() -> None:
+    def rollback_active_state(*, links_restored: bool) -> list[str]:
+        errors: list[str] = []
         for unit, was_active in active_snapshot.items():
-            if was_active is None or unit in disrupted_sessions:
+            if unit in disrupted_sessions:
                 # Starting this target cannot recreate its lost transient instances.
                 continue
             now_active = is_active(unit)
-            if now_active is None or now_active == was_active:
+            if was_active is None or now_active is None:
+                errors.append(f"unable to verify rollback active state for {unit}")
+                continue
+            if now_active == was_active:
+                continue
+            if was_active and not links_restored:
+                errors.append(f"cannot safely start {unit} without restored links")
                 continue
             try:
                 _run_systemctl(systemctl, "start" if was_active else "stop", unit)
-            except SystemdReconcileError:
-                continue
+            except SystemdReconcileError as error:
+                errors.append(str(error))
+        return errors
 
     activated_units: set[str] = set()
+    state_commit_attempted = False
     try:
         for unit in sorted(units_to_stop):
             if _SESSION_TARGET.fullmatch(unit) and unit not in previous_links_raw and unit not in current_links:
@@ -560,17 +573,17 @@ def reconcile(
             if unit in changed_sessions:
                 # A stopped transient must not be restarted with stale args.
                 continue
+            activated_units.add(unit)
             if unit in start:
                 _run_systemctl(systemctl, "restart", unit)
                 restarted.add(unit)
             else:
                 _run_systemctl(systemctl, "try-restart", unit)
-            activated_units.add(unit)
 
         units_to_start = (start - previous_start) - restarted - readiness
         for unit in sorted(units_to_start):
-            _run_systemctl(systemctl, "start", unit)
             activated_units.add(unit)
+            _run_systemctl(systemctl, "start", unit)
 
         # Unchanged probes still gate an activated owner, but unrelated applies
         # must not be rejected by a workload they did not change or activate.
@@ -599,6 +612,7 @@ def reconcile(
             "stopUnits": sorted(stop),
             "fingerprints": fingerprints,
         }
+        state_commit_attempted = True
         _atomic_json(state_path, state)
         return {
             "stopped": sorted(units_to_stop),
@@ -607,23 +621,38 @@ def reconcile(
             "noop": False,
         }
     except Exception as exc:
-        rollback_error: Exception | None = None
+        rollback_errors: list[str] = []
+        links_restored = False
         try:
             rollback_links()
-            restart_errors: list[str] = []
+        except Exception as rollback_exc:  # noqa: BLE001
+            rollback_errors.append(str(rollback_exc))
+        else:
+            links_restored = True
             # Restoring links cannot replace a still-active candidate process,
-            # including when readiness succeeded but the state commit failed.
-            for unit in sorted(activated_units & previous_owned):
+            # including when activation or the state commit reports failure.
+            for unit in sorted(activated_units):
                 if active_snapshot.get(unit) is True and unit not in disrupted_sessions:
                     try:
                         _run_systemctl(systemctl, "restart", unit)
                     except SystemdReconcileError as restart_exc:
-                        restart_errors.append(str(restart_exc))
-            rollback_active_state()
-            if restart_errors:
-                raise SystemdReconcileError("; ".join(restart_errors))
-        except Exception as rollback_exc:  # noqa: BLE001
-            rollback_error = rollback_exc
+                        rollback_errors.append(str(restart_exc))
+        rollback_errors.extend(rollback_active_state(links_restored=links_restored))
+        if state_commit_attempted:
+            try:
+                try:
+                    published = state_path.read_bytes()
+                except FileNotFoundError:
+                    published = None
+                if published != previous_bytes:
+                    if previous_bytes is None:
+                        state_path.unlink(missing_ok=True)
+                        _fsync_directory(state_path.parent)
+                    else:
+                        _atomic_bytes(state_path, previous_bytes)
+            except Exception as state_exc:  # noqa: BLE001
+                rollback_errors.append(f"unable to restore reconcile state: {state_exc}")
+        rollback_error = "; ".join(rollback_errors)
         if disrupted_sessions:
             details = ", ".join(sorted(disrupted_sessions))
             rollback_detail = f"; native rollback failed: {rollback_error}" if rollback_error else ""
@@ -631,7 +660,7 @@ def reconcile(
                 f"systemd reconcile failed: {exc}{rollback_detail}; transient instances may have been "
                 f"terminated under {details} and cannot be recreated by target restart; manual recovery required"
             ) from exc
-        if rollback_error is not None:
+        if rollback_error:
             raise SystemdReconcileError(
                 f"systemd reconcile failed: {exc}; rollback failed: {rollback_error}; manual recovery required"
             ) from exc
