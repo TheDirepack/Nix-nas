@@ -31,7 +31,9 @@ from nas_v2_generation import (
     publish_generation,
     prune_generations,
 )
-from nas_v2_history import ensure_bootstrap_applied, record_desired
+from nas_v2_history import ensure_bootstrap_applied, record_desired, record_desired_locked
+from nas_v2_editor import authority_lock
+from nas_v2_apply_budget import verify_budget_revision
 
 
 def _relative(runtime_root: pathlib.Path, path: pathlib.Path) -> pathlib.PurePosixPath:
@@ -155,7 +157,12 @@ def main(*, overrides: dict[str, str | None] | None = None) -> int:
         # published until apply() reports the same revision, so retry a bounded
         # number of times instead of ever exposing a mixed generation.
         for _attempt in range(3):
-            history = record_desired(authority=desired, repository=history_repository, git_bin=git_bin)
+            if os.environ.get("NAS_V2_APPLY_BUDGET"):
+                with authority_lock(desired):
+                    verify_budget_revision(desired.read_bytes())
+                    history = record_desired_locked(authority=desired, repository=history_repository, git_bin=git_bin)
+            else:
+                history = record_desired(authority=desired, repository=history_repository, git_bin=git_bin)
             revision = str(history["head"])
             generation = allocate_generation(generation_root, revision)
             published = False

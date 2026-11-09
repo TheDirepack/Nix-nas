@@ -23,6 +23,7 @@ from nas_v2_accelerator import enabled_capabilities, load_platform_inventory, re
 from nas_v2_backup import compile_backup_projection
 from nas_v2_caddy import generate_caddyfile, portal_bytes, validate_caddyfile
 from nas_v2_editor import authority_lock
+from nas_v2_apply_budget import verify_budget_revision
 from nas_v2_history import record_desired_locked
 from nas_v2_network import PodmanNetworkProjectionError, requires_firewalld
 from nas_v2_network import materialize_projection as materialize_firewalld_projection
@@ -322,11 +323,7 @@ def _compile_document_with_platform(
 def _compile_paths_inner(paths: ApplyPaths) -> tuple[dict[str, Any], dict[str, Any]]:
     schema = load_schema(paths.schema)
     desired_bytes = paths.desired.read_bytes()
-    budget_file = os.environ.get("NAS_V2_APPLY_BUDGET")
-    if budget_file:
-        budget = json.loads(pathlib.Path(budget_file).read_text())
-        if budget.get("desiredSha256") != hashlib.sha256(desired_bytes).hexdigest():
-            raise SystemdProjectionError("desired state changed after apply budgeting; retry reconciliation")
+    verify_budget_revision(desired_bytes)
     effective = _compile_document_with_platform(
         parse_yaml_text(desired_bytes.decode("utf-8"), source=str(paths.desired)),
         schema,
@@ -507,6 +504,8 @@ def apply(
     with authority_lock(paths.desired):
         if paths.unpublished_generation and paths.history_repository is None:
             raise SystemdProjectionError("unpublished generation requires guarded history authority")
+        if os.environ.get("NAS_V2_APPLY_BUDGET"):
+            verify_budget_revision(paths.desired.read_bytes())
         desired_revision: str | None = None
         if paths.history_repository is not None:
             history = record_desired_locked(

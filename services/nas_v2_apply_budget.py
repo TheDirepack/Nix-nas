@@ -81,6 +81,14 @@ def client_timeout() -> int:
         return 330
 
 
+def verify_budget_revision(raw: bytes) -> None:
+    packet = os.environ.get("NAS_V2_APPLY_BUDGET")
+    if packet:
+        value = json.loads(pathlib.Path(packet).read_text())
+        if value.get("desiredSha256") != hashlib.sha256(raw).hexdigest():
+            raise ValueError("desired state changed after apply budgeting; retry reconciliation")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--desired", type=pathlib.Path, required=True)

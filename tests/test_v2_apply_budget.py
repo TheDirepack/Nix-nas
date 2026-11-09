@@ -15,8 +15,8 @@ sys.path.insert(0, str(ROOT / "services"))
 
 import nas_v2_apply_budget as budget  # noqa: E402
 import nas_v2_systemd_reconcile as reconcile  # noqa: E402
-from nas_v2_apply import ApplyPaths, compile_paths  # noqa: E402
-from nas_v2_systemd_native import SystemdProjectionError  # noqa: E402
+import nas_v2_entry as entry  # noqa: E402
+from nas_v2_apply import ApplyPaths, apply, compile_paths  # noqa: E402
 
 
 class ApplyBudgetTests(unittest.TestCase):
@@ -87,12 +87,61 @@ class ApplyBudgetTests(unittest.TestCase):
             packet = root / "budget.json"
             packet.write_text(json.dumps({"desiredSha256": "0" * 64}))
             with mock.patch.dict("os.environ", {"NAS_V2_APPLY_BUDGET": str(packet)}):
-                with self.assertRaisesRegex(SystemdProjectionError, "changed after apply budgeting"):
+                with self.assertRaisesRegex(ValueError, "changed after apply budgeting"):
                     compile_paths(
                         ApplyPaths(
                             desired=desired, schema=ROOT / "schemas/managed-services-v3.schema.json", platform=None
                         )
                     )
+                packet.write_text(json.dumps({"desiredSha256": hashlib.sha256(desired.read_bytes()).hexdigest()}))
+                effective, _ = compile_paths(
+                    ApplyPaths(desired=desired, schema=ROOT / "schemas/managed-services-v3.schema.json", platform=None)
+                )
+                self.assertEqual(
+                    effective["provenance"]["desiredSha256"], hashlib.sha256(desired.read_bytes()).hexdigest()
+                )
+
+    def test_budget_race_preserves_newer_authority_and_history(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            desired = root / "services.yaml"
+            desired.write_text('{"schemaVersion":3,"services":{}}')
+            repository = root / "history.git"
+            entry.ensure_bootstrap_applied(authority=desired, repository=repository, git_bin="git")
+            command = ["git", "--git-dir", str(repository), "rev-parse", "HEAD"]
+            old_head = subprocess.check_output(command, text=True)
+            packet = root / "budget.json"
+            packet.write_text(json.dumps({"desiredSha256": hashlib.sha256(desired.read_bytes()).hexdigest()}))
+            newer = '{"schemaVersion":3,"generation":2,"services":{}}'
+            desired.write_text(newer)
+            overrides = {
+                key: str(root / "run" / key)
+                for key in (
+                    "NAS_V2_EFFECTIVE",
+                    "NAS_V2_PLAN",
+                    "NAS_V2_PORTAL",
+                    "NAS_V2_CADDY",
+                    "NAS_V2_SYSTEMD",
+                    "NAS_V2_BACKUP_INVENTORY",
+                    "NAS_V2_RESTIC_PATHS",
+                    "NAS_V2_FIREWALLD",
+                )
+            }
+            overrides.update(
+                {"NAS_V2_DESIRED": str(desired), "NAS_V2_HISTORY_REPOSITORY": str(repository), "NAS_V2_PLATFORM": ""}
+            )
+            with (
+                mock.patch.dict("os.environ", {"NAS_V2_APPLY_BUDGET": str(packet)}),
+                mock.patch.object(entry, "record_desired_locked", wraps=entry.record_desired_locked) as record,
+                mock.patch.object(sys, "stderr", new_callable=io.StringIO) as errors,
+            ):
+                self.assertEqual(entry.main(overrides=overrides), 1)
+                self.assertIn("changed after apply budgeting", errors.getvalue())
+                record.assert_not_called()
+                with self.assertRaisesRegex(ValueError, "changed after apply budgeting"):
+                    apply(ApplyPaths(desired=desired, history_repository=repository))
+            self.assertEqual(desired.read_text(), newer)
+            self.assertEqual(subprocess.check_output(command, text=True), old_head)
 
     def test_guard_preparation_cli_emits_revision_bound_finite_budget(self):
         with tempfile.TemporaryDirectory() as raw:
