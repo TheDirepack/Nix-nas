@@ -23,6 +23,8 @@ Use [Accounts and access](accounts.md) for the guarded NAS account CLI and [Acco
 
 ## Service token
 
-The bootstrap token exists only to initialize Authentik. After bootstrap, create a narrower service-account token, store it with `nas-secrets set-authentik-token`, and verify it before removing the bootstrap credential. Cockpit warns while the normal API-token entry still contains the bootstrap value.
+Successful first-start setup provisions and verifies a scoped runtime service-account token, stores it in KeePassXC, and retires the bootstrap authority. Routine post-setup token replacement is not required.
+
+Run `sudo nas-secrets status` to inspect the runtime token warning. If recovery from an incomplete or older setup leaves the bootstrap token in use, create a scoped service-account token in Authentik and store it with `sudo nas-secrets set-authentik-token`. Activate secrets again with `sudo nas-secrets activate`, then run `sudo nas-secrets check-authentik-token` to confirm it differs from the bootstrap credential and `sudo nas-identity-sync verify-token` to verify runtime API access before retiring any remaining bootstrap credential. Enter secrets only at the commands' prompts; do not put them in arguments or environment variables. For interrupted first-start setup, follow [First start](first-run.md) and its journal recovery procedure before resuming.
 
 CopyParty paths, ACLs, quotas, flags, and native share links do not belong in Authentik; configure them in CopyParty.

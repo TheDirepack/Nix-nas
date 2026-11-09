@@ -288,7 +288,7 @@ memberships while preserving unrelated Authentik groups. Accounts carry the
 `deactivateMissingManagedAccounts` mode can disable accounts removed from the
 file without touching manually managed Authentik accounts.
 
-The initial runtime Authentik API token remains the bootstrap token until the
-administrator creates a narrower service-account token and stores it with
-`nas-secrets set-authentik-token`. Complete that post-bootstrap hardening step
-before production use.
+Successful setup provisions and verifies a scoped runtime Authentik token and
+retires the bootstrap authority. Routine post-setup token replacement is not
+required. If an incomplete or older setup leaves a runtime-token warning, use
+the [Authentik service-token recovery guidance](authentik.md#service-token).
