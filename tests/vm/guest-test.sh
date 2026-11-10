@@ -1657,8 +1657,8 @@ protected_restart_worker_finished() {
 # that window is correctly refused, so wait for them before each launch.
 wait_operation_lock_idle() {
   local deadline=$((SECONDS + TEST_TIMEOUT))
-  until nas-cockpit-api operations | jq -e '.active == []' >/dev/null; do
-    ((SECONDS < deadline)) || fail "privileged operations did not go idle: $(nas-cockpit-api operations | jq -c '.active')"
+  until nas-cockpit-api operations | jq -e '.active == [] and (has("error") | not)' >/dev/null; do
+    ((SECONDS < deadline)) || fail "privileged operations did not go idle: $(nas-cockpit-api operations | jq -c '{active, error}')"
     sleep 2
   done
 }
@@ -1688,7 +1688,9 @@ wait "$protected_restart_holder"
 protected_restart_holder=""
 grep -F 'Another privileged operation conflicts with protected-restart' /tmp/nas-protected-restart-busy.err >/dev/null ||
   fail "busy protected restart did not report the conflicting operation"
-[[ -z "$(protected_restart_job_results "$restart_cursor")" ]] || fail "busy protected restart started its worker"
+restart_results="$(protected_restart_job_results "$restart_cursor")" ||
+  fail "could not read protected restart job results"
+[[ -z "$restart_results" ]] || fail "busy protected restart started its worker"
 [[ "$(systemctl show copyparty.service --property=InvocationID --value)" == "$copyparty_invocation" ]] ||
   fail "busy protected restart restarted protected services"
 pass "Cockpit protected restart refuses a conflicting privileged operation before starting its worker"
@@ -1702,7 +1704,7 @@ protected_restart_worker_finished "$restart_cursor"
 [[ "$(systemctl show copyparty.service --property=InvocationID --value)" != "$copyparty_invocation" ]] ||
   fail "protected restart did not restart CopyParty"
 protected_restart_ready
-nas-cockpit-api operations | jq -e 'all(.active[]; .action != "protected-restart")' >/dev/null ||
+nas-cockpit-api operations | jq -e '(has("error") | not) and all(.active[]; .action != "protected-restart")' >/dev/null ||
   fail "protected-restart worker still owns the operation lock after finishing"
 pass "Cockpit API protected restart runs under the systemd worker's operation lock and releases it"
 
