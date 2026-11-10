@@ -122,11 +122,15 @@ let
       guard_unit="$(${pkgs.util-linux}/bin/flock -s "$guard_file.lock" ${pkgs.coreutils}/bin/cat "$guard_file" 2>/dev/null || true)"
     fi
     if [ -n "$guard_unit" ]; then
+      recovery_timeout=600
+      if [ -r ${lib.escapeShellArg budgetFile} ]; then
+        recovery_timeout="$(${pkgs.jq}/bin/jq -er '.transactionSeconds + 30 | if . < 600 then 600 else . end' ${lib.escapeShellArg budgetFile})"
+      fi
       if ${v2Python}/bin/python ${v2Source}/nas_guarded_apply.py \
         --state-dir ${lib.escapeShellArg guardStateDir} \
         --systemctl ${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"} \
         --unit "$guard_unit" \
-        fired -- ${rollbackToApplied}; then
+        fired --rollback-timeout "$recovery_timeout" -- ${rollbackToApplied}; then
         ${clearGuardCurrent} "$guard_unit"
         exit 0
       else

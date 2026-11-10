@@ -3,6 +3,7 @@ from __future__ import annotations
 import pathlib
 import fcntl
 import re
+import select
 import shlex
 import shutil
 import stat
@@ -47,6 +48,33 @@ def _systemd_run(root: pathlib.Path, log: pathlib.Path) -> pathlib.Path:
 
 
 class GuardedApplyTests(unittest.TestCase):
+    def test_timer_retains_recovery_budget_without_armed_record_and_reports_timeout(self) -> None:
+        for times_out in (False, True):
+            with self.subTest(times_out=times_out), tempfile.TemporaryDirectory() as raw:
+                state = pathlib.Path(raw)
+                argv = guarded._fired_wrapper(
+                    unit="nas-test-rollback",
+                    state_dir=str(state),
+                    systemctl="systemctl",
+                    rollback=["/rollback"],
+                    timeout=1800,
+                )[2:]
+
+                def run(command, **kwargs):
+                    claimed = guarded._read_state(guarded._state_path("nas-test-rollback", state))
+                    self.assertEqual(claimed["rollbackTimeoutSeconds"], 1830)
+                    self.assertEqual(kwargs["timeout"], 1830)
+                    if times_out:
+                        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+                    return subprocess.CompletedProcess(command, 0, "restored", "")
+
+                with mock.patch.object(guarded.subprocess, "run", side_effect=run):
+                    self.assertEqual(guarded.main(argv), int(times_out))
+                result = guarded._read_state(guarded._state_path("nas-test-rollback", state))
+                self.assertEqual(result["exitCode"], 124 if times_out else 0)
+                if times_out:
+                    self.assertIn("rollback timed out after 1830s", result["outputTail"])
+
     def test_recovery_supervision_covers_the_armed_transaction_budget(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
@@ -74,22 +102,46 @@ class GuardedApplyTests(unittest.TestCase):
 
     def test_old_recovery_cannot_remove_a_newer_guard_marker(self) -> None:
         source = (ROOT / "modules/nas/config/managed-services-transactions.nix").read_text()
-        script = source.split("pkgs.writeShellScript \"nas-v2-clear-current-guard\" ''", 1)[1].split("  '';", 1)[0]
+        match = re.search(
+            r"pkgs\.writeShellScript\s+\"nas-v2-clear-current-guard\"\s*''(.*?)^\s*'';",
+            source,
+            re.DOTALL | re.MULTILINE,
+        )
+        if match is None:
+            self.fail("production guard-marker cleanup script was not found")
+        script = match.group(1)
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
             marker = root / "current"
             marker.write_text("old-guard")
             script = script.replace("${lib.escapeShellArg guardCurrentFile}", shlex.quote(str(marker)))
-            script = script.replace("${pkgs.util-linux}/bin/flock", shlex.quote(shutil.which("flock") or "flock"))
+            flock = shlex.quote(shutil.which("flock") or "flock")
+            observer = self.executable(
+                root / "observed-flock",
+                f"if {flock} -xn 9; then exit 77; fi\nprintf 'contended\\n'\nexec {flock} -x 9\n",
+            )
+            script = script.replace("${pkgs.util-linux}/bin/flock", shlex.quote(str(observer)))
             for tool in ("cat", "rm"):
                 script = script.replace(f"${{pkgs.coreutils}}/bin/{tool}", shlex.quote(shutil.which(tool) or tool))
             with pathlib.Path(str(marker) + ".lock").open("w") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX)
-                with subprocess.Popen(["bash", "-c", script, "clear-guard", "old-guard"]) as cleanup:
-                    marker.write_text("new-guard")
-                    fcntl.flock(lock, fcntl.LOCK_UN)
+                with subprocess.Popen(
+                    ["bash", "-c", script, "clear-guard", "old-guard"], stdout=subprocess.PIPE, text=True
+                ) as cleanup:
+                    try:
+                        assert cleanup.stdout
+                        self.assertTrue(
+                            select.select([cleanup.stdout], [], [], 5)[0], "cleanup never attempted the lock"
+                        )
+                        self.assertEqual(cleanup.stdout.readline(), "contended\n")
+                        self.assertIsNone(cleanup.poll())
+                        marker.write_text("new-guard")
+                    finally:
+                        fcntl.flock(lock, fcntl.LOCK_UN)
                     self.assertEqual(cleanup.wait(timeout=5), 0)
             self.assertEqual(marker.read_text(), "new-guard")
+            script = script.replace(shlex.quote(str(observer)), flock)
+            self.assertNotIn("${", script)
             subprocess.run(["bash", "-c", script, "clear-guard", "new-guard"], check=True, timeout=5)
             self.assertFalse(marker.exists())
 
@@ -113,7 +165,7 @@ class GuardedApplyTests(unittest.TestCase):
         rendered = rendered.replace(
             '${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"}', "/run/current-system/sw/bin/systemctl"
         )
-        rendered = rendered.replace('"$guard_unit"', "nas-test-rollback")
+        rendered = rendered.replace('"$guard_unit"', "nas-test-rollback").replace('"$recovery_timeout"', "1830")
         argv = shlex.split(rendered) + ["--", "/nix/store/rollback"]
 
         with mock.patch.object(guarded, "fired", return_value={"ok": True, "state": guarded.COMPLETED}) as fired:
@@ -121,6 +173,7 @@ class GuardedApplyTests(unittest.TestCase):
 
         fired.assert_called_once_with(
             ["/nix/store/rollback"],
+            rollback_timeout_seconds=1830,
             unit="nas-test-rollback",
             systemctl="/run/current-system/sw/bin/systemctl",
             state_dir="/tmp/guard-state",
