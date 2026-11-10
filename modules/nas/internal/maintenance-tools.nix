@@ -130,6 +130,10 @@ CURL_CONFIG
     '';
   };
 
+  # Empty means unconfigured; nas-update then refuses persistent deployment.
+  updateExternalProbeJson =
+    lib.optionalString (cfg.update.externalProbeCommand != [ ]) (builtins.toJSON cfg.update.externalProbeCommand);
+
   nasUpdate = pkgs.writeShellApplication {
     name = "nas-update";
     excludeShellChecks = [ "SC1007" "SC2086" ];
@@ -164,6 +168,7 @@ CURL_CONFIG
       export NAS_FIREWALL_ZONE=${lib.escapeShellArg cfg.networking.firewall.zone}
       export NAS_LAN_HOST=${lib.escapeShellArg lanHost}
       export NAS_TRUSTED_INTERFACES=${lib.escapeShellArg (lib.concatStringsSep " " cfg.trustedInterfaces)}
+      export NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON=${lib.escapeShellArg updateExternalProbeJson}
       ${builtins.readFile ../../../scripts/update-nas.sh}
     '';
   };
@@ -177,5 +182,6 @@ in
     nasAlert
     nasPreflight
     nasUpdate
+    updateExternalProbeJson
   ;
 }

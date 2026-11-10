@@ -11,6 +11,7 @@ import {
   safeInternalPath,
   setupModel,
   staticLinks,
+  updateApplyModel,
   visibleOperations,
 } from "../../cockpit/src/view-model.js";
 
@@ -136,4 +137,29 @@ test("backend link destinations remain same-origin root-relative paths", () => {
   ]) {
     assert.equal(safeInternalPath(value), null, String(value));
   }
+});
+
+test("update apply availability renders nas-update admission and fails closed", () => {
+  assert.deepEqual(updateApplyModel({applyBlockers: []}), {available: true, reasons: []});
+  assert.deepEqual(
+    updateApplyModel({
+      applyBlockers: [
+        {
+          code: "external-probe-unconfigured",
+          message: "Set nas.update.externalProbeCommand.",
+        },
+        {code: "external-probe-invalid"},
+      ],
+    }),
+    {
+      available: false,
+      reasons: ["Set nas.update.externalProbeCommand.", "external-probe-invalid"],
+    },
+  );
+  for (const unavailable of [undefined, null, [], {}, {applyBlockers: "none"}]) {
+    assert.equal(updateApplyModel(unavailable).available, false);
+  }
+  assert.deepEqual(updateApplyModel({ok: false, error: "nas-update failed"}).reasons, [
+    "nas-update failed",
+  ]);
 });

@@ -6,6 +6,7 @@ from pathlib import Path
 import shlex
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -55,7 +56,7 @@ class UpdateRuntimeTests(unittest.TestCase):
         )
         source = text("scripts/update-nas.sh")
         self.functions = (
-            "listener_present() {" + source.split("listener_present() {", 1)[1].split("restart_protected() {", 1)[0]
+            "listener_present() {" + source.split("listener_present() {", 1)[1].split("\ninside_git=false\n", 1)[0]
         )
         # The dangling-profile guard and the old_profile computation it depends on
         # are executed verbatim from the updater rather than re-derived here.
@@ -231,6 +232,133 @@ class UpdateRuntimeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("WARNING: persisting after local-only management checks by explicit override", result.stderr)
         self.assertFalse(self.trace.exists())
+
+    SUBSTRATE_UNITS = (
+        "sshd.service",
+        "postgresql.service",
+        "authentik-worker.service",
+        "authentik.service",
+        "nas-cockpit-sso.socket",
+        "nas-cockpit-sso.service",
+        "caddy.service",
+    )
+
+    def protected_health(self, start_units, active, *, copyparty_socket: bool = False, raw_state: str | None = None):
+        """Run the unchanged health_check against a fake V2 start set and live units."""
+        if not (self.package_bin("pkgs.jq") / "jq").exists():
+            self.link_tool("pkgs.jq", "jq")
+        self.stub(
+            "pkgs.systemd",
+            "systemctl",
+            'if [[ $1 == is-active ]]; then unit="${!#}"; [[ " $ACTIVE_UNITS " == *" $unit "* ]]; fi\n',
+        )
+        self.stub(
+            "pkgs.iproute2",
+            "ss",
+            "printf 'LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\\nLISTEN 0 128 0.0.0.0:443 0.0.0.0:*\\n'\n",
+        )
+        self.stub(
+            "pkgs.curl", "curl", 'for argument; do [[ $argument == "%{http_code}" ]] && printf 200; done; exit 0\n'
+        )
+        sockets = self.root / "sockets"
+        sockets.mkdir(exist_ok=True)
+        cockpit = sockets / "cockpit.sock"
+        copyparty = sockets / "copyparty.sock"
+        bound = []
+        for path, wanted in ((cockpit, True), (copyparty, copyparty_socket)):
+            if wanted and not path.exists():
+                listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                listener.bind(str(path))
+                bound.append(listener)
+        for listener in bound:
+            self.addCleanup(listener.close)
+        state = self.root / "systemd-reconciled.json"
+        state.write_text(raw_state if raw_state is not None else json.dumps({"startUnits": start_units}))
+        ca = self.root / "ca.crt"
+        ca.write_text("fixture CA\n")
+        prelude = (
+            "protected_was_active=true\n"
+            f"v2_systemd_state={shlex.quote(str(state))}\n"
+            f"copyparty_socket={shlex.quote(str(copyparty))}\n"
+            f"cockpit_socket={shlex.quote(str(cockpit))}\n"
+            f"caddy_ca_file={shlex.quote(str(ca))}\n"
+            "lan_host=fixture.invalid\nauthentik_port=9000\nauthentik_path=/identity/\n"
+        )
+        return self.run_function(prelude + "health_check", ACTIVE_UNITS=" ".join(active), FIREWALL_ENABLED="0")
+
+    def is_active_queries(self) -> list[str]:
+        return [
+            line.split()[-1]
+            for line in self.trace.read_text().splitlines()
+            if line.startswith("pkgs.systemd:systemctl is-active")
+        ]
+
+    def test_v2_disabled_copyparty_is_not_required_after_update(self):
+        units = ["syncthing.service", "nas-v2-timer-identity-sync-0.timer"]
+        result = self.protected_health(units, [*self.SUBSTRATE_UNITS, *units])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("copyparty", self.trace.read_text())
+        self.assertEqual(self.is_active_queries()[-2:], units)
+
+    def test_v2_enabled_copyparty_that_is_inactive_fails_health(self):
+        units = ["copyparty.service", "syncthing.service"]
+        result = self.protected_health(units, [*self.SUBSTRATE_UNITS, "syncthing.service"], copyparty_socket=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "Managed Services V2 expects these units to run, but they are not active: copyparty.service", result.stderr
+        )
+        self.assertNotIn("--unix-socket", self.trace.read_text())
+
+    def test_v2_enabled_copyparty_requires_its_listener_and_http_answer(self):
+        units = ["copyparty.service"]
+        missing = self.protected_health(units, [*self.SUBSTRATE_UNITS, *units])
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("CopyParty Unix listener is missing", missing.stderr)
+        self.trace.unlink()
+        present = self.protected_health(units, [*self.SUBSTRATE_UNITS, *units], copyparty_socket=True)
+        self.assertEqual(present.returncode, 0, present.stdout + present.stderr)
+        self.assertIn(str(self.root / "sockets" / "copyparty.sock"), self.trace.read_text())
+
+    def test_failed_custom_application_expected_by_v2_fails_health(self):
+        units = ["nas-v2-photos.service", "nas-v2-activation-wiki-web.socket"]
+        result = self.protected_health(units, [*self.SUBSTRATE_UNITS, "nas-v2-activation-wiki-web.socket"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not active: nas-v2-photos.service", result.stderr)
+
+    def test_fixed_substrate_is_still_required_with_an_empty_v2_start_set(self):
+        result = self.protected_health([], self.SUBSTRATE_UNITS)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for unit in self.SUBSTRATE_UNITS[1:]:
+            with self.subTest(unit=unit):
+                self.trace.unlink()
+                failed = self.protected_health([], [item for item in self.SUBSTRATE_UNITS if item != unit])
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn(f"{unit} is not active", failed.stderr)
+
+    def test_unavailable_or_malformed_v2_state_fails_closed_before_application_queries(self):
+        cases = {
+            "invalid-json": "{",
+            "not-object": "[]",
+            "missing": "{}",
+            "non-array": '{"startUnits": "copyparty.service"}',
+            "non-string": '{"startUnits": [3]}',
+            "option": '{"startUnits": ["--all.service"]}',
+            "shell": '{"startUnits": ["a;b.service"]}',
+            "not-a-unit": '{"startUnits": ["copyparty"]}',
+        }
+        for name, raw in cases.items():
+            with self.subTest(case=name):
+                self.trace.unlink(missing_ok=True)
+                result = self.protected_health([], self.SUBSTRATE_UNITS, raw_state=raw)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Managed Services V2 start state", result.stderr)
+                self.assertEqual(self.is_active_queries(), list(self.SUBSTRATE_UNITS))
+        (self.root / "systemd-reconciled.json").unlink()
+        self.trace.unlink(missing_ok=True)
+        prelude = f"protected_was_active=true\nv2_systemd_state={shlex.quote(str(self.root / 'absent.json'))}\n"
+        absent = self.run_function(prelude + "application_health")
+        self.assertNotEqual(absent.returncode, 0)
+        self.assertIn("start state is unavailable", absent.stderr)
 
     def test_persistent_profile_rollback_uses_symlink_target_changes(self):
         # A switch that fails without moving the profile must not step the
