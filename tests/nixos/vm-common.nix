@@ -26,6 +26,29 @@ let
   testOciImageV2 = testOciImage "v2" "nas-v2-oci-v2";
 
   guestTestSource = builtins.readFile ../vm/guest-test.sh;
+  ociSnapshotConfig = pkgs.writeTextDir "sanoid.conf" ''
+    [tank/nas/vm-oci-persist]
+    use_template = production
+    recursive = no
+
+    [template_production]
+    ${lib.generators.toKeyValue {
+      mkKeyValue = key: value:
+        "${key} = ${if lib.isBool value then (if value then "yes" else "no") else toString value}";
+    } config.services.sanoid.templates.production}
+  '';
+  initializeOciSnapshots = pkgs.writeShellApplication {
+    name = "nas-vm-initialize-oci-snapshots";
+    runtimeInputs = [ pkgs.sanoid ];
+    text = ''
+      # Parent-recursive snapshots predate this late-created test dataset.
+      # Bootstrap its real policy snapshots without changing the parent policy.
+      sanoid --take-snapshots --force-update --configdir ${ociSnapshotConfig} \
+        --cache-dir /var/cache/nas-vm-oci-sanoid --run-dir /run/nas-vm-oci-sanoid
+      sanoid --monitor-snapshots --force-update --configdir ${ociSnapshotConfig} \
+        --cache-dir /var/cache/nas-vm-oci-sanoid --run-dir /run/nas-vm-oci-sanoid
+    '';
+  };
 
   guestTest = pkgs.writeShellApplication {
     name = "nas-vm-guest-test";
@@ -104,12 +127,12 @@ let
   };
   reconfigureTest = pkgs.writeShellApplication {
     name = "nas-vm-reconfigure-test";
-    runtimeInputs = with pkgs; [
+    runtimeInputs = [ initializeOciSnapshots ] ++ (with pkgs; [
       coreutils
       gnugrep
       python3
       systemd
-    ];
+    ]);
     text = ''
       ${builtins.readFile ../vm/timeout-budget.sh}
       ${builtins.readFile ../vm/reconfigure-system.sh}
@@ -221,6 +244,7 @@ in
   };
 
   environment.systemPackages = [
+    initializeOciSnapshots
     guestTest
     secretAdversarialTest
     encryptedGuestTest

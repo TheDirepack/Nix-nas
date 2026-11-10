@@ -232,6 +232,7 @@ pkgs.testers.runNixOSTest {
     machine.succeed("NAS_INSTALLED_FUZZ_SMOKE=1 timeout --signal=TERM --kill-after=${toString outerKillAfter}s ${toString timeoutBudget.timeouts.installedSmoke}s python3 /var/lib/nas-test/repo/tests/vm/adversarial-installed.py >/tmp/nas-installed-command-smoke.json")
     machine.succeed("jq -e '.ok == true and .smoke == true and .commands > 0' /tmp/nas-installed-command-smoke.json >/dev/null")
     machine.succeed("nas-vm-guest-test --oci-probe verify --stage native-final")
+    machine.succeed("nas-vm-initialize-oci-snapshots")
     machine.succeed(f"systemctl is-active --quiet '{oci_mount}'")
     machine.succeed("nas-vm-guest-test --oci-probe remove")
   '';

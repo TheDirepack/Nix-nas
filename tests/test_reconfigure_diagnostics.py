@@ -83,6 +83,10 @@ class RebuildFailureDiagnosticsTests(unittest.TestCase):
         self.assertIn("systemctl reset-failed nas-zfs-snapshot-health.service", prerequisite)
         self.assertIn("systemctl start nas-zfs-snapshot-health.service", prerequisite)
         self.assertLess(
+            prerequisite.index("nas-vm-initialize-oci-snapshots"),
+            prerequisite.index("systemctl start nas-zfs-snapshot-health.service"),
+        )
+        self.assertLess(
             prerequisite.index("systemctl start nas-zfs-manual-snapshot.service"),
             prerequisite.index("systemctl start nas-zfs-snapshot-health.service"),
         )
