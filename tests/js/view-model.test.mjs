@@ -143,7 +143,13 @@ test("backup rows render CLI observations and never infer success", () => {
   const rows = backupRows({
     backup: {
       rows: [
-        {id: "repository", label: "Restic repository", state: "attention", summary: "Same pool", detail: "x"},
+        {
+          id: "repository",
+          label: "Restic repository",
+          state: "attention",
+          summary: "Same pool",
+          detail: "x",
+        },
         {id: "last-backup", label: "Last backup", state: "succeeded", summary: "Succeeded"},
         null,
         {label: "missing id"},
@@ -157,10 +163,18 @@ test("backup rows render CLI observations and never infer success", () => {
       ["last-backup", "unavailable"],
     ],
   );
-  for (const data of [{}, {backup: null}, {backup: {rows: []}}, {backup: {ok: false, error: "Policy missing", rows: []}}]) {
+  for (const data of [
+    {},
+    {backup: null},
+    {backup: {rows: []}},
+    {backup: {ok: false, error: "Policy missing", rows: []}},
+  ]) {
     const [row] = backupRows(data);
     assert.equal(row.state, "unavailable");
     assert.equal(row.summary, "Status unavailable");
   }
-  assert.equal(backupRows({backup: {error: "Policy missing", rows: []}})[0].detail, "Policy missing");
+  assert.equal(
+    backupRows({backup: {error: "Policy missing", rows: []}})[0].detail,
+    "Policy missing",
+  );
 });
