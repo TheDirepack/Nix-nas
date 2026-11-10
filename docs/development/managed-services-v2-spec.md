@@ -414,11 +414,13 @@ workload that fails to start is a V2 status failure, not a secret-activation
 failure.
 
 Generated workload owners (exec, Python, OCI/Quadlet, VM, and Compose
-aggregates) are protected services. Each has
+aggregates) and managed job timers are protected services. Each has
 `PartOf=nas-protected-services.target` and
 `ConditionPathExists=/run/nas-secrets/ready`. They stop with the target and
-never start while locked. Before secrets are moved or removed, secret stop and
-swap wait for every member of the target (systemd `ConsistsOf`), because the
+never start while locked. A timer left running could otherwise start its job,
+and with it the job's dependencies, after the member stops completed. Recovery
+restores expected timers like any other start unit. Before secrets are moved
+or removed, secret stop and swap wait for every member of the target (systemd `ConsistsOf`), because the
 target's own stop job can complete before its members finish stopping. These
 stop jobs are irreversible (`--job-mode=replace-irreversibly`), so a start
 queued meanwhile by a timer, an `OnFailure=` handler or any other caller is

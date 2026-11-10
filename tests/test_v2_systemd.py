@@ -381,6 +381,21 @@ class V2SystemdProjectionTests(unittest.TestCase):
             unit = files[output / "units" / owner].decode().split("[Service]", 1)[0]
             for line in scope:
                 self.assertIn(line, unit, owner)
+        # A timer left running would start its job, and the job's dependencies,
+        # after a secret transaction's member stops completed.
+        timer = files[output / "units/nas-v2-timer-job-0.timer"].decode().split("[Timer]", 1)[0]
+        for line in scope:
+            self.assertIn(line, timer)
+        # No V2 owner restores an unmanaged timer after unlock, so it keeps its NixOS lifecycle.
+        _name, unmanaged = systemd._timer_unit(
+            "job",
+            "native-job.service",
+            0,
+            {"calendar": "daily", "persistent": False, "randomizedDelaySeconds": 0},
+            protected=False,
+        )
+        for line in scope:
+            self.assertNotIn(line, unmanaged.decode())
         # Nix owns native units' lifecycle declarations; V2 adds only policy.
         dropin = files[output / "units/native.service.d/50-nas-v2.conf"].decode()
         self.assertNotIn("PartOf=", dropin)

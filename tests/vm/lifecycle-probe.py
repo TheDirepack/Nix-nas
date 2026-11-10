@@ -143,6 +143,8 @@ def locked() -> None:
     for name in (HEALTHY, FLAKY):
         state = show(UNITS[name], "ActiveState")
         require(state == "inactive", f"{UNITS[name]} remained {state} after nas-secrets stop returned")
+    state = show(TIMER, "ActiveState")
+    require(state == "inactive", f"{TIMER} remained {state} and could start its job while locked")
     require(not pathlib.Path("/run/nas-secrets").exists(), "secrets remain after stop")
     result = subprocess.run(["systemctl", "start", UNITS[HEALTHY]], capture_output=True, timeout=60, check=False)
     require(result.returncode == 0, "condition-skipped start should not fail")
@@ -171,7 +173,7 @@ def recovered(*, flaky_failed: bool) -> None:
         "healthy readiness gate",
         lambda: completed_starts(GATE, since_us=since) >= 1 and show(GATE, "ActiveState") == "inactive",
     )
-    require(show(TIMER, "ActiveState") == "active", "job timer is not active after recovery")
+    wait_for("job timer recovery", lambda: show(TIMER, "ActiveState") == "active")
     require(completed_starts(UNITS[JOB]) == 1, "completed job was replayed")
     require(show(UNITS[OFF], "ActiveState") == "inactive", "off daemon was started")
     require(not start_jobs(UNITS[OFF]), "off daemon received a start job")

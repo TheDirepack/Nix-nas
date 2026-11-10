@@ -40,9 +40,11 @@ _SAFE_IDENTITY = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_.-]{0,63}|[0-9]{1,10})$")
 APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
 # Individual probes stay bounded; activation budgets also cover dependencies.
 PERSISTENT_READINESS_TIMEOUT_MAX = 150
-# Generated workloads are protected services: they stop with the protected
-# target when secrets are removed or swapped and are skipped while locked.
-# The target-wanted V2 reconcile restores the expected ones after activation.
+# Generated workloads and their timers are protected services: they stop with
+# the protected target when secrets are removed or swapped and are skipped while
+# locked. A timer outside the target could otherwise start its job, and the job's
+# dependencies, after the transaction's member stops completed. The target-wanted
+# V2 reconcile restores the expected ones after activation.
 PROTECTED_STACK_LINES = (
     "PartOf=nas-protected-services.target",
     "ConditionPathExists=/run/nas-secrets/ready",
@@ -540,11 +542,14 @@ def _activation_units(
     return result
 
 
-def _timer_unit(service_id: str, owner: str, index: int, schedule: dict[str, Any]) -> tuple[str, bytes]:
+def _timer_unit(
+    service_id: str, owner: str, index: int, schedule: dict[str, Any], *, protected: bool
+) -> tuple[str, bytes]:
     unit = f"nas-v2-timer-{service_id}-{index}.timer"
     lines = [
         "[Unit]",
         f"Description=Managed Services V2 schedule {index} for {service_id}",
+        *(PROTECTED_STACK_LINES if protected else ()),
         "",
         "[Timer]",
         f"Unit={owner}",
@@ -843,7 +848,7 @@ def generate_projection(
 
         if service["workload"]["kind"] == "job":
             for index, schedule in enumerate(service["workload"]["schedules"]):
-                timer, content = _timer_unit(service_id, owner, index, schedule)
+                timer, content = _timer_unit(service_id, owner, index, schedule, protected=managed)
                 tpath = unit_dir / timer
                 files[tpath] = content
                 links[timer] = str(tpath)

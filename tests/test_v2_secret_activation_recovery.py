@@ -36,7 +36,7 @@ OUTPOST = "nas-authentik-proxy-outpost.service"
 # Units the protected target starts itself (Requires/Wants in the Nix graph).
 CORE = ("postgresql.service", "authentik.service", "authentik-worker.service", "caddy.service", OUTPOST)
 # The outpost stops with Authentik through Requires=.
-PART_OF_TARGET = (*CORE, COPYPARTY, APP, BROKEN)
+PART_OF_TARGET = (*CORE, COPYPARTY, APP, BROKEN, TIMER)
 
 FAKE_SYSTEMCTL = textwrap.dedent(
     """\
@@ -145,7 +145,7 @@ class SecretActivationRecoveryTests(unittest.TestCase):
             GATE: f"[Unit]\nRequires={APP}\nAfter={APP}\n[Service]\nType=oneshot\nExecStart=/bin/true\n",
             BROKEN: "[Unit]\nPartOf=nas-protected-services.target\n[Service]\nExecStart=/bin/false\n",
             JOB: "[Service]\nType=oneshot\nExecStart=/bin/true\n",
-            TIMER: f"[Timer]\nUnit={JOB}\nOnCalendar=daily\n",
+            TIMER: f"[Unit]\nPartOf=nas-protected-services.target\n[Timer]\nUnit={JOB}\nOnCalendar=daily\n",
             OFF: "[Service]\nExecStart=/bin/sleep infinity\n",
         }
         links = []
@@ -287,6 +287,7 @@ class SecretActivationRecoveryTests(unittest.TestCase):
         self.assertFalse(any(OFF in line for line in log if "start" in line))
         self.assertIn(f"--no-block start {APP} {GATE}", log)
         self.assertIn(f"--no-block start {COPYPARTY}", log)
+        self.assertIn(f"--no-block start {TIMER}", log)
         member_stop = f"stop --job-mode=replace-irreversibly -- {' '.join(PART_OF_TARGET)}"
         self.assertIn(member_stop, log)
 
@@ -295,9 +296,9 @@ class SecretActivationRecoveryTests(unittest.TestCase):
         # nas-secrets stop: readiness is revoked, then the target stops.
         (self.secret_root / "ready").unlink()
         self.systemctl_run("stop", TARGET)
-        for unit in (COPYPARTY, APP):
+        # The timer stops too, so it cannot start its job over the swap.
+        for unit in (COPYPARTY, APP, TIMER):
             self.assertEqual(self.units()[unit], "inactive")
-        self.assertEqual(self.units()[TIMER], "active")
         for child in self.secret_root.iterdir():
             child.unlink()
         self.secret_root.rmdir()
