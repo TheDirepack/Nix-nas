@@ -222,25 +222,60 @@ def configured_repository(policy: dict[str, Any], *, mountinfo: str | None) -> d
     return {"source": source, **classified}
 
 
-def _record_path(policy: dict[str, Any], name: str) -> pathlib.Path:
+def _record_path(policy: dict[str, Any], name: str, *, attempt: bool = False) -> pathlib.Path:
     if name not in RECORD_NAMES:
         raise BackupStatusError(f"Unknown backup record: {name}")
-    return pathlib.Path(policy["recordDirectory"]) / f"{name}.json"
+    return pathlib.Path(policy["recordDirectory"]) / (f"{name}.attempt.json" if attempt else f"{name}.json")
 
 
-def read_record(policy: dict[str, Any], name: str) -> dict[str, Any] | None:
-    text = _read_optional_text(_record_path(policy, name))
+def _read_json_object(path: pathlib.Path, timestamp: str) -> dict[str, Any] | None:
+    text = _read_optional_text(path)
     if text is None:
         return None
     try:
         value = json.loads(text)
     except json.JSONDecodeError:
         return None
-    if not isinstance(value, dict) or not isinstance(value.get("result"), str):
-        return None
-    if not isinstance(value.get("finishedAt"), str):
+    if not isinstance(value, dict) or not isinstance(value.get(timestamp), str):
         return None
     return value
+
+
+def read_record(policy: dict[str, Any], name: str) -> dict[str, Any] | None:
+    value = _read_json_object(_record_path(policy, name), "finishedAt")
+    if value is None or not isinstance(value.get("result"), str):
+        return None
+    return value
+
+
+def read_attempt(policy: dict[str, Any], name: str) -> dict[str, Any] | None:
+    return _read_json_object(_record_path(policy, name, attempt=True), "startedAt")
+
+
+def _write_private_json(path: pathlib.Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+        fsync_directory(path.parent)
+    finally:
+        pathlib.Path(temporary).unlink(missing_ok=True)
+
+
+def write_attempt(policy: dict[str, Any], name: str, *, now: datetime | None = None) -> dict[str, Any]:
+    """Record a starting run and the repository it is about to use (ExecStartPre)."""
+    attempt = {
+        "startedAt": (now or datetime.now(timezone.utc)).isoformat(timespec="seconds"),
+        "repository": repository_fingerprint(policy),
+    }
+    _write_private_json(_record_path(policy, name, attempt=True), attempt)
+    return attempt
 
 
 def write_record(
@@ -250,31 +285,26 @@ def write_record(
     *,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Persist systemd's ExecStopPost result for one backup unit run."""
+    """Persist systemd's ExecStopPost result for one backup unit run.
+
+    The repository fingerprint comes from the attempt captured at start, so a
+    repository file replaced during the run does not relabel its result.
+    """
     result = environment.get("SERVICE_RESULT", "")
     if not re.fullmatch(r"[a-z][a-z-]{0,63}", result):
         raise BackupStatusError("SERVICE_RESULT is missing; run this from ExecStopPost")
+    attempt = read_attempt(policy, name)
+    fingerprint = attempt.get("repository") if attempt is not None else repository_fingerprint(policy)
     record = {
         "result": result,
         "exitCode": environment.get("EXIT_CODE", "")[:64],
         "exitStatus": environment.get("EXIT_STATUS", "")[:64],
+        "startedAt": attempt["startedAt"] if attempt is not None else None,
         "finishedAt": (now or datetime.now(timezone.utc)).isoformat(timespec="seconds"),
-        "repository": repository_fingerprint(policy),
+        "repository": fingerprint if isinstance(fingerprint, str) else None,
     }
-    path = _record_path(policy, name)
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(record, handle, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
-        fsync_directory(path.parent)
-    finally:
-        pathlib.Path(temporary).unlink(missing_ok=True)
+    _write_private_json(_record_path(policy, name), record)
+    _record_path(policy, name, attempt=True).unlink(missing_ok=True)
     return record
 
 
@@ -323,17 +353,48 @@ def _current_record(policy: dict[str, Any], name: str, fingerprint: str | None) 
     return record
 
 
-def _finished(record: dict[str, Any]) -> datetime | None:
+def _timestamp(value: dict[str, Any], key: str) -> datetime | None:
     try:
-        value = datetime.fromisoformat(record["finishedAt"])
-    except ValueError:
+        parsed = datetime.fromisoformat(value[key])
+    except (KeyError, TypeError, ValueError):
         return None
-    return value if value.tzinfo is not None else None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def _finished(record: dict[str, Any]) -> datetime | None:
+    return _timestamp(record, "finishedAt")
+
+
+def _unrecorded_attempt(policy: dict[str, Any], name: str) -> dict[str, Any] | None:
+    """Return a started run that has no result newer than its start."""
+    attempt = read_attempt(policy, name)
+    if attempt is None:
+        return None
+    record = read_record(policy, name)
+    started, finished = _timestamp(attempt, "startedAt"), (None if record is None else _finished(record))
+    if record is not None and started is not None and finished is not None and finished >= started:
+        return None
+    return attempt
 
 
 def _run_row(
-    row_id: str, label: str, record: dict[str, Any] | None, success_text: str, *, caveat: str = ""
+    row_id: str,
+    label: str,
+    record: dict[str, Any] | None,
+    success_text: str,
+    *,
+    caveat: str = "",
+    pending: dict[str, Any] | None = None,
 ) -> dict[str, str]:
+    if pending is not None:
+        return _row(
+            row_id,
+            label,
+            "unavailable",
+            "Not recorded",
+            f"A run started at {pending['startedAt']} has no recorded result. It is still running, or its "
+            "result could not be recorded; check the unit status and journal.",
+        )
     if record is None:
         return _row(
             row_id,
@@ -394,10 +455,14 @@ def backup_status(policy: dict[str, Any], *, mountinfo: str | None) -> dict[str,
         )
     fingerprint = repository_fingerprint(policy) if policy["enabled"] else None
     last_backup = _current_record(policy, "backup", fingerprint) if policy["enabled"] else None
+    backup_pending = _unrecorded_attempt(policy, "backup") if policy["enabled"] else None
     if policy["enabled"]:
-        rows.append(_run_row("last-backup", "Last backup", last_backup, "The last backup completed at"))
+        rows.append(
+            _run_row("last-backup", "Last backup", last_backup, "The last backup completed at", pending=backup_pending)
+        )
     last_verify = _current_record(policy, "restore-verify", fingerprint) if policy["restoreVerification"] else None
     if policy["restoreVerification"]:
+        verify_pending = _unrecorded_attempt(policy, "restore-verify")
         caveat = ""
         if last_verify is not None and last_backup is not None and last_backup["result"] == "success":
             backup_time, verify_time = _finished(last_backup), _finished(last_verify)
@@ -411,6 +476,7 @@ def backup_status(policy: dict[str, Any], *, mountinfo: str | None) -> dict[str,
                 "The snapshot that was latest when verification started was restored and validated in "
                 "scratch storage on this host; verification finished at",
                 caveat=caveat,
+                pending=verify_pending,
             )
         )
     elif policy["enabled"]:
@@ -434,7 +500,9 @@ def backup_status(policy: dict[str, Any], *, mountinfo: str | None) -> dict[str,
         )
     )
     return {
-        "ok": bool(independent and last_backup is not None and last_backup["result"] == "success"),
+        "ok": bool(
+            independent and backup_pending is None and last_backup is not None and last_backup["result"] == "success"
+        ),
         "enabled": policy["enabled"],
         "independentCopyConfigured": independent,
         "repository": repository,
@@ -482,6 +550,8 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status", help="Print backup status as JSON")
     commands.add_parser("check-readiness", help="Fail unless an off-pool copy is configured")
+    start = commands.add_parser("start", help="Record a starting backup unit run from ExecStartPre")
+    start.add_argument("name", choices=RECORD_NAMES)
     record = commands.add_parser("record", help="Record a backup unit result from ExecStopPost")
     record.add_argument("name", choices=RECORD_NAMES)
     return parser
@@ -491,6 +561,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         policy = load_policy(args.policy)
+        if args.command == "start":
+            write_attempt(policy, args.name)
+            return 0
         if args.command == "record":
             write_record(policy, args.name, dict(os.environ))
             return 0

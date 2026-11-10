@@ -210,6 +210,52 @@ class BackupStatusTests(unittest.TestCase):
         )
         self.assertIsNone(json.loads(fixture.main("status")[1])["lastBackup"])
 
+    def test_result_is_bound_to_the_repository_captured_when_the_run_started(self) -> None:
+        fixture = PolicyFixture(self.root)
+        fixture.repository("rclone:old:nas-backup")
+        self.assertEqual(fixture.main("start", "backup")[0], 0)
+        attempt = self.root / "records" / "backup.attempt.json"
+        self.assertEqual(stat.S_IMODE(attempt.stat().st_mode), 0o600)
+        # The operator replaces the repository while the old run is still going.
+        fixture.repository("rclone:new:nas-backup")
+        self.assertEqual(fixture.main("record", "backup", env={"SERVICE_RESULT": "success"})[0], 0)
+        self.assertFalse(attempt.exists())
+        value = json.loads(fixture.main("status")[1])
+        self.assertIsNone(value["lastBackup"], "the old repository's success must not label the new one")
+        self.assertEqual(self.rows(value)["last-backup"]["summary"], "No run recorded")
+
+    def test_a_started_run_without_a_result_hides_the_previous_success(self) -> None:
+        fixture = PolicyFixture(self.root)
+        fixture.repository("b2:bucket:nas")
+        early = datetime(2026, 11, 8, 3, 0, tzinfo=timezone.utc)
+        late = datetime(2026, 11, 9, 3, 0, tzinfo=timezone.utc)
+        status.write_attempt(fixture.policy, "backup", now=early)
+        status.write_record(fixture.policy, "backup", {"SERVICE_RESULT": "success"}, now=early)
+        self.assertTrue(json.loads(fixture.main("status")[1])["ok"])
+
+        # A later run starts, then fails without being able to record its result.
+        status.write_attempt(fixture.policy, "backup", now=late)
+        value = json.loads(fixture.main("status")[1])
+        row = self.rows(value)["last-backup"]
+        self.assertFalse(value["ok"])
+        self.assertEqual((row["state"], row["summary"]), ("unavailable", "Not recorded"))
+        self.assertIn("2026-11-09T03:00:00+00:00", row["detail"])
+
+        # Recording the run clears the attempt and reports its real result.
+        status.write_record(fixture.policy, "backup", {"SERVICE_RESULT": "exit-code"}, now=late)
+        row = self.rows(json.loads(fixture.main("status")[1]))["last-backup"]
+        self.assertEqual(row["summary"], "Failed")
+
+        # A leftover attempt older than the recorded result is not pending.
+        status.write_attempt(fixture.policy, "restore-verify", now=early)
+        status.write_record(fixture.policy, "restore-verify", {"SERVICE_RESULT": "success"}, now=late)
+        status._write_private_json(
+            self.root / "records" / "restore-verify.attempt.json",
+            {"startedAt": early.isoformat(timespec="seconds"), "repository": None},
+        )
+        row = self.rows(json.loads(fixture.main("status")[1]))["restore-verification"]
+        self.assertEqual(row["summary"], "Succeeded")
+
     def test_restore_verification_older_than_the_last_backup_says_so(self) -> None:
         fixture = PolicyFixture(self.root)
         fixture.repository("s3:host/bucket")
@@ -492,8 +538,12 @@ class NixWiringTests(unittest.TestCase):
         )[0]
         verify_unit = storage.split("systemd.services.nas-backup-restore-verify =", 1)[1].split("script = ''", 1)[0]
         # The leading dash keeps a recording failure from changing the run result.
-        self.assertIn('"-${nasBackupStatus}/bin/nas-backup-status record backup"', backup_unit)
-        self.assertIn('"-${nasBackupStatus}/bin/nas-backup-status record restore-verify"', verify_unit)
+        for name, unit in (("backup", backup_unit), ("restore-verify", verify_unit)):
+            for hook, command in (("ExecStartPre", "start"), ("ExecStopPost", "record")):
+                with self.subTest(unit=name, hook=hook):
+                    self.assertRegex(
+                        unit, rf'{hook} = \[ "-\$\{{nasBackupStatus\}}/bin/nas-backup-status {command} {name}" \];'
+                    )
         self.assertIn("${nasInternal.nasBackupStatus}/bin/nas-backup-status check-readiness", readiness)
         self.assertNotIn("backup.remote", storage + readiness)
         self.assertEqual(set(status.RECORD_NAMES), {"backup", "restore-verify"})

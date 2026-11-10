@@ -51,7 +51,7 @@ A top-level `backup.remote` block in `services.yaml` was never applied. A block 
 The **Backup** card on the Cockpit overview shows what `nas-backup-status status` reports, as separate observations:
 
 - **Restic repository**: where the configured repository is. *Off-pool* means a network backend or a local path outside the managed pool. *Same pool* is rollback storage only. *System disk* means the path is on the root filesystem; check that its intended disk is mounted. *Volatile* means a memory-backed filesystem such as `/run`. The repository string itself is never displayed.
-- **Last backup**: the result systemd recorded for the last `nas-boot-system` run against the current repository. A result recorded for a previous repository is not shown.
+- **Last backup**: the result systemd recorded for the last `nas-boot-system` run against the current repository. A result recorded for a previous repository is not shown. *Not recorded* means a run started and has no result yet: it is still running, or its result could not be written.
 - **Restore verification**: the last isolated restore and validation, on this host, of the snapshot that was latest when verification started. The card says when later backups are not yet verified.
 - **Independent restore**: always *Not proven*. Only the boot-device replacement drill in the [Recovery runbook](../reference/project-RECOVERY.md) proves it.
 

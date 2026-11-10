@@ -4,10 +4,11 @@ let
   policy = builtins.fromJSON config.environment.etc."nas-control/backup-policy.json".text;
   backupUnit = config.systemd.services.restic-backups-nas-boot-system;
   verifyUnit = config.systemd.services.nas-backup-restore-verify;
-  records = name: unit:
+  hooked = hook: verb: name: unit:
     lib.any
-      (command: lib.hasPrefix "-" command && lib.hasSuffix "/bin/nas-backup-status record ${name}" command)
-      (map toString (lib.toList (unit.serviceConfig.ExecStopPost or [ ])));
+      (command: lib.hasPrefix "-" command && lib.hasSuffix "/bin/nas-backup-status ${verb} ${name}" command)
+      (map toString (lib.toList (unit.serviceConfig.${hook} or [ ])));
+  records = name: unit: hooked "ExecStartPre" "start" name unit && hooked "ExecStopPost" "record" name unit;
 in
 {
   nas.backup = {
@@ -46,7 +47,7 @@ in
     }
     {
       assertion = records "backup" backupUnit && records "restore-verify" verifyUnit;
-      message = "backup fixture: both Restic units must record their result for nas-backup-status.";
+      message = "backup fixture: both Restic units must record their attempt and result for nas-backup-status.";
     }
   ];
 }

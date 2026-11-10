@@ -237,8 +237,9 @@ in
       };
       path = lib.mkIf rcloneRequired [ pkgs.rclone ];
       environment = rcloneEnvironment;
-      # Durable result for nas-backup-status; a recording failure must not
-      # change the backup result.
+      # Durable attempt/result for nas-backup-status; a recording failure must
+      # not change the backup result.
+      serviceConfig.ExecStartPre = [ "-${nasBackupStatus}/bin/nas-backup-status start backup" ];
       serviceConfig.ExecStopPost = [ "-${nasBackupStatus}/bin/nas-backup-status record backup" ];
     };
 
@@ -291,6 +292,7 @@ in
         IOSchedulingClass = "idle";
         TimeoutStartSec = "6h";
         UMask = "0077";
+        ExecStartPre = [ "-${nasBackupStatus}/bin/nas-backup-status start restore-verify" ];
         ExecStopPost = [ "-${nasBackupStatus}/bin/nas-backup-status record restore-verify" ];
       };
       path = [ pkgs.coreutils ] ++ lib.optional rcloneRequired pkgs.rclone;
