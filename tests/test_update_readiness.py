@@ -141,7 +141,7 @@ class UpdateApplyAdmissionTests(unittest.TestCase):
         # The stubbed nix proves admission passed; no activation phase was entered.
         self.assertEqual(result.returncode, 99, result.stdout + result.stderr)
         self.assertIn("nix", self.calls())
-        self.assertNotIn("systemctl is-active --quiet -- copyparty.service", self.calls())
+        self.assertFalse([call for call in self.calls() if "copyparty" in call], self.calls())
         self.assertNotIn("nixos-rebuild", self.calls())
         self.assertFalse(self.marker.exists())
 

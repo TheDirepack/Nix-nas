@@ -130,9 +130,9 @@ storage, trusted interfaces, PostgreSQL, Authentik, Caddy, Cockpit and the
 management route. It also checks every unit that Managed Services V2 last
 committed to start. An application turned off in Managed Services is not
 required to run. Restarted applications may still be starting, so the check
-waits up to five minutes for Managed Services reconciliation to settle and for
-each unit to become active. A unit that fails, or is still not active at the
-deadline, fails the check. A readiness gate, which runs once and then stops,
+waits up to five minutes in total, one shared deadline, for Managed Services
+reconciliation to settle and for each unit to become active. A unit that fails,
+or is still not active at the deadline, fails the check. A readiness gate, which runs once and then stops,
 only has to finish without failing.
 The same application check runs before building. If an enabled application is
 already down, or a Managed Services reconciliation is still pending or running,
