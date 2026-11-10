@@ -245,7 +245,7 @@ class SecretActivationRecoveryTests(unittest.TestCase):
         script = textwrap.dedent(
             f"""\
             set -Eeuo pipefail
-            export NAS_SECRET_TX_PRIVILEGE=
+            export NAS_SECRET_TX_PRIVILEGE= NAS_SECRET_TX_LOGGER=
             sudo() {{ "$@"; }}
             setup_activation=false
             source {LIBRARY}

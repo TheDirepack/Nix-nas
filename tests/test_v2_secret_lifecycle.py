@@ -23,7 +23,7 @@ class V2SecretLifecycleTests(unittest.TestCase):
         # The target stop returns while its PartOf member is still stopping;
         # only the member's own stop job observes that it is down.
         script = (
-            'set -euo pipefail\nsecret_root="$1"\nlog="$2"\nstuck="$3"\n'
+            'set -euo pipefail\nsecret_root="$1"\nlog="$2"\nstuck="$3"\nNAS_SECRET_TX_LOGGER=\n'
             "acquire_lock() { :; }\n"
             "sudo() {\n"
             '  if [[ "$1" == systemctl ]]; then\n'

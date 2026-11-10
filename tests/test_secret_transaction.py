@@ -127,6 +127,7 @@ class SecretTransactionShellTests(unittest.TestCase):
                 set -Eeuo pipefail
                 export PATH={work / "bin"}:$PATH
                 export NAS_SECRET_TX_PRIVILEGE={privilege!s}
+                export NAS_SECRET_TX_LOGGER=
                 export NAS_SECRET_TX_SYSTEMCTL={systemctl!s}
                 export NAS_TX_LOG={work / "systemctl.log"!s}
                 export NAS_TX_MV_COUNT={work / "mv.count"!s}

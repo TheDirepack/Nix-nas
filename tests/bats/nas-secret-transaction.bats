@@ -16,6 +16,7 @@ esac
 SH
   chmod +x "$work/bin/systemctl"
   export NAS_SECRET_TX_PRIVILEGE=""
+  export NAS_SECRET_TX_LOGGER=""
   export NAS_SECRET_TX_SYSTEMCTL="$work/bin/systemctl"
   export NAS_TX_LOG="$work/systemctl.log"
   source "$BATS_TEST_DIRNAME/../../scripts/lib/nas-secret-transaction.sh"
@@ -84,6 +85,7 @@ SH
 #!/usr/bin/env bash
 set -Eeuo pipefail
 export NAS_SECRET_TX_PRIVILEGE=""
+export NAS_SECRET_TX_LOGGER=""
 export NAS_SECRET_TX_SYSTEMCTL="$work/bin/systemctl"
 export NAS_TX_LOG="$NAS_TX_LOG"
 source "$BATS_TEST_DIRNAME/../../scripts/lib/nas-secret-transaction.sh"

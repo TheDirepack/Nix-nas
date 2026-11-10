@@ -13,26 +13,38 @@ nas_secret_tx_systemctl() {
   nas_secret_tx_privileged "${NAS_SECRET_TX_SYSTEMCTL:-systemctl}" "$@"
 }
 
+# Callers that hide stderr (setup's protected-stdin runner) still need stop
+# diagnostics; they name units and states only, never secret material.
+nas_secret_tx_report() {
+  local logger="${NAS_SECRET_TX_LOGGER-logger}"
+  printf 'nas-secret-transaction: %s\n' "$1" >&2
+  if [[ -n "$logger" ]] && command -v "$logger" >/dev/null 2>&1; then
+    "$logger" --tag nas-secret-transaction --priority user.err -- "$1" 2>/dev/null || true
+  fi
+}
+
 nas_secret_tx_unit_stopped() {
-  local state
+  local state status=0
   # Only an exact stopped state proves a unit released its secrets; a failed
   # query or a non-zero is-active exit (e.g. deactivating) does not.
-  if ! state="$(nas_secret_tx_systemctl show --property=ActiveState --value -- "$1")"; then
-    printf 'nas-secret-transaction: unable to read the state of %s\n' "$1" >&2
+  state="$(nas_secret_tx_systemctl show --property=ActiveState --value -- "$1")" || status=$?
+  if ((status)); then
+    nas_secret_tx_report "unable to read the state of $1 (exit $status)"
     return 1
   fi
   case "$state" in
     inactive | failed) return 0 ;;
   esac
-  printf 'nas-secret-transaction: protected unit is %s, not stopped: %s\n' "${state:-unknown}" "$1" >&2
+  nas_secret_tx_report "protected unit is ${state:-unknown}, not stopped: $1"
   return 1
 }
 
 nas_secret_tx_stop_members() {
-  local output unit stop_status=0 stopped=true
+  local output unit stop_status=0 stopped=true status=0
   local -a members=()
-  if ! output="$(nas_secret_tx_systemctl show --property=ConsistsOf --value -- "$NAS_SECRET_TX_TARGET")"; then
-    printf 'nas-secret-transaction: unable to list members of %s\n' "$NAS_SECRET_TX_TARGET" >&2
+  output="$(nas_secret_tx_systemctl show --property=ConsistsOf --value -- "$NAS_SECRET_TX_TARGET")" || status=$?
+  if ((status)); then
+    nas_secret_tx_report "unable to list members of $NAS_SECRET_TX_TARGET (exit $status)"
     return 1
   fi
   # read -a splits on whitespace without pathname expansion.
@@ -40,7 +52,7 @@ nas_secret_tx_stop_members() {
   for unit in "${members[@]}"; do
     # systemd escapes unit names to this alphabet, e.g. \x2d for '-' in paths.
     [[ "$unit" =~ ^[A-Za-z0-9_.@:\\-]+$ && "$unit" != -* ]] || {
-      printf 'nas-secret-transaction: invalid protected member unit: %q\n' "$unit" >&2
+      nas_secret_tx_report "invalid protected member unit: $(printf '%q' "$unit")"
       return 1
     }
   done
@@ -52,7 +64,7 @@ nas_secret_tx_stop_members() {
     nas_secret_tx_unit_stopped "$unit" || stopped=false
   done
   if ! "$stopped"; then
-    [[ $stop_status -eq 0 ]] || printf 'nas-secret-transaction: stopping protected members exited %s\n' "$stop_status" >&2
+    ((stop_status == 0)) || nas_secret_tx_report "stopping protected members exited $stop_status"
     return 1
   fi
 }
