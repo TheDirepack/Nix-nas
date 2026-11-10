@@ -558,20 +558,17 @@ def reconcile_first_start(request: dict[str, Any]) -> dict[str, Any]:
     return value if isinstance(value, dict) else {"ok": True}
 
 
-@contextlib.contextmanager
-def operation_guard(action: str, conflicts: tuple[str, ...]):
-    try:
-        with acquire_operation(action, conflicts):
-            yield
-    except OperationBusyError as exc:
-        raise ApiError(str(exc)) from exc
-
-
 def run_action(name: str) -> dict[str, Any]:
     if name == "protected-restart":
+        # nas-protected-restart.service owns the flock for the restart's whole
+        # lifetime. Holding it here across the synchronous start would make the
+        # tokenless systemd worker fail as busy; admission is advisory only.
+        try:
+            reserve_operation(name, PROTECTED_RESTART_CONFLICTS)
+        except OperationBusyError as exc:
+            raise ApiError(str(exc)) from exc
         command = ("systemctl", "start", "nas-protected-restart.service")
         timeout_seconds = 300
-        guard = operation_guard(name, PROTECTED_RESTART_CONFLICTS)
     else:
         if not SERVICE_ID_RE.fullmatch(name):
             raise ApiError("Unknown action: invalid V2 job identifier")
@@ -590,11 +587,9 @@ def run_action(name: str) -> dict[str, Any]:
             raise ApiError(f"V2 job {name} has no compiled owner unit")
         command = ("systemctl", "start", owner)
         timeout_seconds = 21600
-        guard = contextlib.nullcontext()
-    with guard:
-        result = run(command, check=False, timeout_seconds=timeout_seconds)
-        if result.returncode != 0:
-            raise operation_error(command, result)
+    result = run(command, check=False, timeout_seconds=timeout_seconds)
+    if result.returncode != 0:
+        raise operation_error(command, result)
     return {
         "ok": True,
         "action": name,

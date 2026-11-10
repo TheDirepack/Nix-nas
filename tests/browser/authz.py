@@ -5,6 +5,7 @@ import argparse
 import http.client
 import json
 import os
+import re
 import shutil
 import socket
 import ssl
@@ -601,6 +602,84 @@ def verify_cockpit_react_interactions(origin: str, username: str, password: str)
         close_browser(driver)
 
 
+PROTECTED_RESTART_LABEL = "Restart protected services"
+PROTECTED_RESTART_API_FAILURES = ("Operation failed (reference", "conflicts with", "nas-cockpit-api:")
+# Caddy is part of the restarted target, so the Cockpit transport carrying the
+# request may close before the synchronous result arrives.
+COCKPIT_TRANSPORT_CLOSED = (
+    "Server has closed the connection",
+    "Your session has been terminated",
+    "Connection has timed out",
+    "disconnected",
+)
+PROTECTED_READY_RE = re.compile(r"Protected services:\s*ready")
+
+
+def protected_restart_outcome(text: str) -> str | None:
+    if any(marker in text for marker in PROTECTED_RESTART_API_FAILURES):
+        raise RuntimeError("Cockpit reported a protected-restart API failure")
+    if "Operation completed." in text and '"action": "protected-restart"' in text:
+        return "completed"
+    if "Operation failed" in text and any(marker in text for marker in COCKPIT_TRANSPORT_CLOSED):
+        return "transport-closed"
+    return None
+
+
+def open_cockpit_nas_page(driver: webdriver.Chrome, origin: str) -> None:
+    driver.get(origin.rstrip("/") + "/console/cockpit/@localhost/nas/index.html")
+    wait = WebDriverWait(driver, 90)
+    wait_for_page_text(driver, wait, "NAS Overview", "Cockpit NAS page")
+    wait_for_page_text(driver, wait, "Protected services:", "Cockpit NAS page")
+
+
+def run_cockpit_protected_restart(
+    origin: str, username: str, password: str, *, outcome_seconds: int = 300, recovery_seconds: int = 600
+) -> str:
+    outcome: str | None = None
+    driver = browser()
+    try:
+        browser_step(driver, f"Cockpit login ({username})", lambda: cockpit_login(driver, origin, username, password))
+        browser_step(driver, "Cockpit NAS page", lambda: open_cockpit_nas_page(driver, origin))
+
+        def confirm_restart() -> None:
+            nonlocal outcome
+            wait = WebDriverWait(driver, 90)
+            wait.until(lambda current: current.find_element(By.CSS_SELECTOR, "a[href='#/operations']")).click()
+            wait_for_page_text(driver, wait, "Operation coordinator", "Cockpit operations page")
+            wait.until(lambda current: button_with_text(current, PROTECTED_RESTART_LABEL)).click()
+            wait.until(lambda current: "Confirm maintenance action" in current.page_source)
+            wait.until(lambda current: button_with_text(current, "Confirm")).click()
+            outcome = WebDriverWait(driver, outcome_seconds, poll_frequency=2).until(
+                lambda current: protected_restart_outcome(rendered_text(current))
+            )
+
+        browser_step(driver, "Cockpit protected restart", confirm_restart)
+    finally:
+        close_browser(driver)
+    assert outcome is not None
+
+    deadline = time.monotonic() + recovery_seconds
+    while True:
+        driver = browser()
+        try:
+            cockpit_login(driver, origin, username, password)
+            open_cockpit_nas_page(driver, origin)
+            WebDriverWait(driver, 90, poll_frequency=2).until(
+                lambda current: PROTECTED_READY_RE.search(rendered_text(current)) is not None
+            )
+            return outcome
+        except Exception as error:
+            if time.monotonic() >= deadline:
+                details = json.dumps(browser_diagnostics(driver), default=str, indent=2, sort_keys=True)
+                raise RuntimeError(f"Cockpit did not recover after protected restart:\n{details}") from error
+            print(
+                f"VM-BROWSER-RECOVERY: Cockpit not ready after protected restart: {error}", file=sys.stderr, flush=True
+            )
+        finally:
+            close_browser(driver)
+        time.sleep(5)
+
+
 def fetch_status(driver: webdriver.Chrome, path: str) -> dict[str, Any]:
     return driver.execute_async_script(
         """
@@ -1119,7 +1198,19 @@ def main() -> int:
     parser.add_argument("--bootstrap-only", action="store_true")
     parser.add_argument("--identity-xss-only", action="store_true")
     parser.add_argument("--syncthing-admin-only", action="store_true")
+    parser.add_argument(
+        "--cockpit-protected-restart-only",
+        action="store_true",
+        help="Click Restart protected services in Cockpit; this restarts the appliance's protected stack.",
+    )
     args = parser.parse_args()
+    if args.cockpit_protected_restart_only:
+        if args.administrator_password_file is None:
+            parser.error("--cockpit-protected-restart-only requires --administrator-password-file")
+        password = read_secret(args.administrator_password_file)
+        outcome = run_cockpit_protected_restart(args.origin, "nasadmin", password)
+        print(f"Cockpit protected restart outcome: {outcome}; Cockpit recovered with protected services ready")
+        return 0
     if args.bootstrap_only:
         if args.bootstrap_password_file is None:
             parser.error("--bootstrap-only requires --bootstrap-password-file")
