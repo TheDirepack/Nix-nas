@@ -39,6 +39,11 @@ nas_secret_tx_unit_stopped() {
   return 1
 }
 
+# A start job queued by a timer, OnFailure= handler or any other caller while
+# these stops are pending would otherwise replace them and restart members over
+# the secrets being swapped; irreversible stop jobs make systemd refuse it.
+NAS_SECRET_TX_STOP_MODE=--job-mode=replace-irreversibly
+
 nas_secret_tx_stop_members() {
   local output unit stop_status=0 stopped=true status=0
   # Passed verbatim to the regex engine: inline backslashes in [[ =~ ]] are
@@ -72,7 +77,7 @@ nas_secret_tx_stop_members() {
   ((${#members[@]})) || return 0
   # A target's stop job completes before PartOf members finish stopping.
   # Joining their stop jobs keeps secrets in place until every member is down.
-  nas_secret_tx_systemctl stop -- "${members[@]}" || stop_status=$?
+  nas_secret_tx_systemctl stop "$NAS_SECRET_TX_STOP_MODE" -- "${members[@]}" || stop_status=$?
   for unit in "${members[@]}"; do
     nas_secret_tx_unit_stopped "$unit" || stopped=false
   done
@@ -83,7 +88,7 @@ nas_secret_tx_stop_members() {
 }
 
 nas_secret_tx_stop_target() {
-  if ! nas_secret_tx_systemctl stop "$NAS_SECRET_TX_TARGET"; then
+  if ! nas_secret_tx_systemctl stop "$NAS_SECRET_TX_STOP_MODE" "$NAS_SECRET_TX_TARGET"; then
     nas_secret_tx_unit_stopped "$NAS_SECRET_TX_TARGET" || return 1
   fi
   nas_secret_tx_stop_members

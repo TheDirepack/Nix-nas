@@ -57,9 +57,9 @@ class V2SecretLifecycleTests(unittest.TestCase):
         self.assertEqual(
             log.splitlines(),
             [
-                "stop nas-protected-services.target",
+                "stop --job-mode=replace-irreversibly nas-protected-services.target",
                 "show --property=ConsistsOf --value -- nas-protected-services.target",
-                "stop -- nas-v2-app.service copyparty.service",
+                "stop --job-mode=replace-irreversibly -- nas-v2-app.service copyparty.service",
                 "show --property=ActiveState --value -- nas-v2-app.service",
                 "show --property=ActiveState --value -- copyparty.service",
             ],

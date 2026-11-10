@@ -287,7 +287,7 @@ class SecretActivationRecoveryTests(unittest.TestCase):
         self.assertFalse(any(OFF in line for line in log if "start" in line))
         self.assertIn(f"--no-block start {APP} {GATE}", log)
         self.assertIn(f"--no-block start {COPYPARTY}", log)
-        member_stop = f"stop -- {' '.join(PART_OF_TARGET)}"
+        member_stop = f"stop --job-mode=replace-irreversibly -- {' '.join(PART_OF_TARGET)}"
         self.assertIn(member_stop, log)
 
     def test_same_boot_stop_then_activate_restores_expected_v2_units(self) -> None:

@@ -57,11 +57,22 @@ class SecretTransactionShellTests(unittest.TestCase):
                           fi
                           exit 0
                         fi
-                        [[ "${NAS_TX_MEMBER_STUCK:-0}" == 1 ]] && printf '%s\n' "${NAS_TX_MEMBER_STATE:-active}" \
-                          || printf 'inactive\n'
+                        if [[ -e "$NAS_TX_RESTARTED" ]]; then
+                          printf 'active\n'
+                        elif [[ "${NAS_TX_MEMBER_STUCK:-0}" == 1 ]]; then
+                          printf '%s\n' "${NAS_TX_MEMBER_STATE:-active}"
+                        else
+                          printf 'inactive\n'
+                        fi
                         ;;
                       stop)
-                        if [[ "${2:-}" == -- ]]; then
+                        if [[ "${3:-}" == -- ]]; then
+                          if [[ "${NAS_TX_CONCURRENT_START:-0}" == 1 && "$2" != --job-mode=replace-irreversibly ]]; then
+                            # systemd lets a concurrent start replace reversible
+                            # stop jobs: the stop is canceled and members run on.
+                            touch "$NAS_TX_RESTARTED"
+                            exit 1
+                          fi
                           [[ "${NAS_TX_MEMBER_STUCK:-0}" != 1 && "${NAS_TX_MEMBER_STOP_FAIL:-0}" != 1 ]] || exit 1
                           touch "$NAS_TX_MEMBERS_STOPPED"
                           exit 0
@@ -134,6 +145,7 @@ class SecretTransactionShellTests(unittest.TestCase):
                 export NAS_TX_PRIV_LOG={work / "priv.log"!s}
                 export NAS_TX_INACTIVE_MARKER={work / "inactive-after-stop"!s}
                 export NAS_TX_MEMBERS_STOPPED={work / "members-stopped"!s}
+                export NAS_TX_RESTARTED={work / "members-restarted"!s}
                 export NAS_TX_MOVED_EARLY={work / "moved-early"!s}
                 {shell_export}
                 source {LIBRARY!s}
@@ -413,7 +425,22 @@ nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.
             nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
             nas_secret_tx_swap
             [[ -f root/new && -f previous/old && -e members-stopped && ! -e moved-early ]]
-            grep -qx 'stop -- copyparty.service nas-v2-app.service' systemctl.log
+            grep -qx 'stop --job-mode=replace-irreversibly -- copyparty.service nas-v2-app.service' systemctl.log
+            """
+        )
+        self.assert_ok(result)
+
+    def test_concurrent_start_cannot_restart_members_during_swap(self) -> None:
+        # A timer or OnFailure= start queued while member stops are pending
+        # replaces reversible stop jobs (verified on systemd 260+); irreversible
+        # stop jobs make systemd refuse that transaction instead.
+        result = self.run_scenario(
+            """
+            export NAS_TX_MEMBERS="authentik.service postgresql.service" NAS_TX_CONCURRENT_START=1
+            nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+            nas_secret_tx_swap
+            [[ -f root/new && -f previous/old && -e members-stopped && ! -e members-restarted ]]
+            grep -qx 'stop --job-mode=replace-irreversibly nas-protected-services.target' systemctl.log
             """
         )
         self.assert_ok(result)
@@ -442,7 +469,7 @@ nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.
             nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
             nas_secret_tx_swap
             [[ -f root/new && -e members-stopped && ! -e moved-early ]]
-            grep -qxF 'stop -- tank-vm\x2doci\x2dpersist.mount nas-v2-app.service' systemctl.log
+            grep -qxF 'stop --job-mode=replace-irreversibly -- tank-vm\x2doci\x2dpersist.mount nas-v2-app.service' systemctl.log
             """
         )
         self.assert_ok(result)
@@ -459,7 +486,7 @@ nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.
                     set -e
                     [[ $swap_rc -ne 0 && -f root/old && ! -e previous ]]
                     grep -q 'invalid protected member unit' swap.err
-                    ! grep -q -- '^stop -- ' systemctl.log
+                    ! grep -q -- '^stop --job-mode=replace-irreversibly -- ' systemctl.log
                     """
                 )
                 self.assert_ok(result)
@@ -488,7 +515,7 @@ nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.
             set -e
             [[ $swap_rc -ne 0 && -f root/old ]]
             grep -q 'invalid protected member unit' swap.err
-            ! grep -q -- '^stop -- ' systemctl.log
+            ! grep -q -- '^stop --job-mode=replace-irreversibly -- ' systemctl.log
             """
         )
         self.assert_ok(result)
