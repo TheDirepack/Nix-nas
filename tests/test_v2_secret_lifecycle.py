@@ -32,9 +32,10 @@ class V2SecretLifecycleTests(unittest.TestCase):
             '    [[ ! -e "$secret_root/ready" ]] || return 91\n'
             '    [[ -e "$secret_root/credential" ]] || return 92\n'
             '    case "$1" in\n'
-            "      show) echo nas-v2-app.service copyparty.service ;;\n"
+            '      show) if [[ "$2" == --property=ConsistsOf ]]; then echo nas-v2-app.service copyparty.service;\n'
+            '            elif [[ "$stuck" == 1 && "$*" == *nas-v2-app.service* ]]; then echo active;\n'
+            "            else echo inactive; fi ;;\n"
             '      stop) [[ "$*" != *nas-v2-app.service* || "$stuck" != 1 ]] ;;\n'
-            '      is-active) [[ "$stuck" == 1 && "$*" == *nas-v2-app.service* ]] ;;\n'
             "    esac\n"
             '  else "$@"; fi\n'
             "}\n"
@@ -59,13 +60,15 @@ class V2SecretLifecycleTests(unittest.TestCase):
                 "stop nas-protected-services.target",
                 "show --property=ConsistsOf --value -- nas-protected-services.target",
                 "stop -- nas-v2-app.service copyparty.service",
+                "show --property=ActiveState --value -- nas-v2-app.service",
+                "show --property=ActiveState --value -- copyparty.service",
             ],
         )
 
     def test_stop_keeps_secrets_while_a_protected_member_is_still_running(self) -> None:
         result, root, _log = self.run_stop(member_stuck=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("still active: nas-v2-app.service", result.stderr)
+        self.assertIn("protected unit is active, not stopped: nas-v2-app.service", result.stderr)
         self.assertTrue((root / "credential").exists())
         self.assertFalse((root / "ready").exists())
 

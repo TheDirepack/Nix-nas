@@ -40,10 +40,28 @@ class SecretTransactionShellTests(unittest.TestCase):
                           exit
                         fi
                         [[ "${NAS_TX_ACTIVE:-1}" == 1 && ! -e "$NAS_TX_INACTIVE_MARKER" ]] ;;
-                      show) printf '%s\n' "${NAS_TX_MEMBERS:-}" ;;
+                      show)
+                        if [[ "${2:-}" == --property=ConsistsOf ]]; then
+                          printf '%s\n' "${NAS_TX_MEMBERS:-}"
+                          exit 0
+                        fi
+                        if [[ "${5:-}" == nas-protected-services.target ]]; then
+                          [[ "${NAS_TX_TARGET_QUERY_FAIL:-0}" != 1 ]] || exit 1
+                          if [[ -n "${NAS_TX_TARGET_STATE:-}" ]]; then
+                            printf '%s\n' "$NAS_TX_TARGET_STATE"
+                          elif [[ "${NAS_TX_ACTIVE:-1}" == 1 && ! -e "$NAS_TX_INACTIVE_MARKER" ]]; then
+                            printf 'active\n'
+                          else
+                            printf 'inactive\n'
+                          fi
+                          exit 0
+                        fi
+                        [[ "${NAS_TX_MEMBER_STUCK:-0}" == 1 ]] && printf '%s\n' "${NAS_TX_MEMBER_STATE:-active}" \
+                          || printf 'inactive\n'
+                        ;;
                       stop)
                         if [[ "${2:-}" == -- ]]; then
-                          [[ "${NAS_TX_MEMBER_STUCK:-0}" != 1 ]] || exit 1
+                          [[ "${NAS_TX_MEMBER_STUCK:-0}" != 1 && "${NAS_TX_MEMBER_STOP_FAIL:-0}" != 1 ]] || exit 1
                           touch "$NAS_TX_MEMBERS_STOPPED"
                           exit 0
                         fi
@@ -407,7 +425,7 @@ nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.
             nas_secret_tx_swap 2>swap.err; swap_rc=$?
             set -e
             [[ $swap_rc -ne 0 && -f root/old && -f stage/new && ! -e previous ]]
-            grep -q 'still active: nas-v2-app.service' swap.err
+            grep -q 'protected unit is active, not stopped: nas-v2-app.service' swap.err
             """
         )
         self.assert_ok(result)
@@ -434,7 +452,51 @@ nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.
             nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
             nas_secret_tx_swap
             [[ -f root/new && -f previous/old ]]
-            grep -q '^is-active --quiet nas-protected-services.target$' systemctl.log
+            grep -qx 'show --property=ActiveState --value -- nas-protected-services.target' systemctl.log
+            """
+        )
+        self.assert_ok(result)
+
+    def test_nonzero_stop_requires_an_exact_stopped_target_state(self) -> None:
+        for state_setting, diagnostic in (
+            ("NAS_TX_TARGET_STATE=deactivating", "protected unit is deactivating, not stopped"),
+            ("NAS_TX_TARGET_QUERY_FAIL=1", "unable to read the state of nas-protected-services.target"),
+        ):
+            with self.subTest(state=state_setting):
+                result = self.run_scenario(
+                    f"""
+                    export NAS_TX_STOP_FAIL=1 NAS_TX_ACTIVE=0 {state_setting}
+                    nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+                    set +e
+                    nas_secret_tx_swap 2>swap.err; swap_rc=$?
+                    set -e
+                    [[ $swap_rc -ne 0 && -f root/old && ! -e previous ]]
+                    grep -q '{diagnostic}' swap.err
+                    """
+                )
+                self.assert_ok(result)
+
+    def test_member_stop_failure_is_accepted_only_for_exactly_stopped_members(self) -> None:
+        result = self.run_scenario(
+            """
+            export NAS_TX_MEMBERS="copyparty.service nas-v2-app.service" NAS_TX_MEMBER_STOP_FAIL=1
+            nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+            nas_secret_tx_swap
+            [[ -f root/new && -f previous/old ]]
+            grep -qx 'show --property=ActiveState --value -- nas-v2-app.service' systemctl.log
+            """
+        )
+        self.assert_ok(result)
+        result = self.run_scenario(
+            """
+            export NAS_TX_MEMBERS="nas-v2-app.service" NAS_TX_MEMBER_STUCK=1 NAS_TX_MEMBER_STATE=deactivating
+            nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+            set +e
+            nas_secret_tx_swap 2>swap.err; swap_rc=$?
+            set -e
+            [[ $swap_rc -ne 0 && -f root/old && ! -e previous ]]
+            grep -q 'protected unit is deactivating, not stopped: nas-v2-app.service' swap.err
+            grep -q 'stopping protected members exited 1' swap.err
             """
         )
         self.assert_ok(result)

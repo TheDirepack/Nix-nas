@@ -13,8 +13,23 @@ nas_secret_tx_systemctl() {
   nas_secret_tx_privileged "${NAS_SECRET_TX_SYSTEMCTL:-systemctl}" "$@"
 }
 
+nas_secret_tx_unit_stopped() {
+  local state
+  # Only an exact stopped state proves a unit released its secrets; a failed
+  # query or a non-zero is-active exit (e.g. deactivating) does not.
+  if ! state="$(nas_secret_tx_systemctl show --property=ActiveState --value -- "$1")"; then
+    printf 'nas-secret-transaction: unable to read the state of %s\n' "$1" >&2
+    return 1
+  fi
+  case "$state" in
+    inactive | failed) return 0 ;;
+  esac
+  printf 'nas-secret-transaction: protected unit is %s, not stopped: %s\n' "${state:-unknown}" "$1" >&2
+  return 1
+}
+
 nas_secret_tx_stop_members() {
-  local members unit
+  local members unit stop_status=0 stopped=true
   members="$(nas_secret_tx_systemctl show --property=ConsistsOf --value -- "$NAS_SECRET_TX_TARGET")" || return 1
   for unit in $members; do
     [[ "$unit" =~ ^[A-Za-z0-9_.@:-]+$ && "$unit" != -* ]] || {
@@ -26,19 +41,19 @@ nas_secret_tx_stop_members() {
   # A target's stop job completes before PartOf members finish stopping.
   # Joining their stop jobs keeps secrets in place until every member is down.
   # shellcheck disable=SC2086
-  nas_secret_tx_systemctl stop -- $members && return 0
+  nas_secret_tx_systemctl stop -- $members || stop_status=$?
   for unit in $members; do
-    if nas_secret_tx_systemctl is-active --quiet "$unit"; then
-      printf 'nas-secret-transaction: protected member is still active: %s\n' "$unit" >&2
-      return 1
-    fi
+    nas_secret_tx_unit_stopped "$unit" || stopped=false
   done
+  if ! "$stopped"; then
+    [[ $stop_status -eq 0 ]] || printf 'nas-secret-transaction: stopping protected members exited %s\n' "$stop_status" >&2
+    return 1
+  fi
 }
 
 nas_secret_tx_stop_target() {
-  if ! nas_secret_tx_systemctl stop "$NAS_SECRET_TX_TARGET" \
-    && nas_secret_tx_systemctl is-active --quiet "$NAS_SECRET_TX_TARGET"; then
-    return 1
+  if ! nas_secret_tx_systemctl stop "$NAS_SECRET_TX_TARGET"; then
+    nas_secret_tx_unit_stopped "$NAS_SECRET_TX_TARGET" || return 1
   fi
   nas_secret_tx_stop_members
 }

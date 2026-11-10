@@ -58,8 +58,11 @@ FAKE_SYSTEMCTL = textwrap.dedent(
     args = [a for a in args if a != "--no-block"]
     verb, names = args[0], args[1:]
     if verb == "show":
-        # ConsistsOf: the units that are PartOf the target.
-        print(" ".join(config["partOf"]) if names == [config["target"]] else "")
+        if "--property=ConsistsOf" in sys.argv:
+            # ConsistsOf: the units that are PartOf the target.
+            print(" ".join(config["partOf"]) if names == [config["target"]] else "")
+        else:
+            print(units.get(names[0], "inactive"))
         sys.exit(0)
     if verb == "is-active":
         state = units.get(names[0], "inactive")
