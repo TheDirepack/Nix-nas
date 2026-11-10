@@ -128,7 +128,7 @@
     {
       "id": "protected-restart",
       "label": "Cockpit protected-restart action",
-      "ordinaryWaits": 6,
+      "ordinaryWaits": 9,
       "fixedSeconds": 60,
       "timeoutKeys": [
         "protectedRestartBrowser"
