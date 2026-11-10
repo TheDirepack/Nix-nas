@@ -4,9 +4,14 @@ import copy
 import importlib.util
 import io
 import json
+import os
 import pathlib
+import shlex
+import signal
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from typing import Any
 from unittest import mock
@@ -23,6 +28,48 @@ def load_probe() -> Any:
 
 
 class OciPersistenceTests(unittest.TestCase):
+    def test_fixture_forwards_stop_reaps_server_and_preserves_server_failure(self):
+        probe = load_probe()
+        command = probe.fixture_document()["services"][probe.SERVICE]["runtime"]["command"]
+        self.assertEqual(command[:2], ["/bin/sh", "-c"])
+        for fails in (False, True):
+            with self.subTest(fails=fails), tempfile.TemporaryDirectory() as raw:
+                root = pathlib.Path(raw)
+                witness = root / "pid"
+                server = root / "server.py"
+                server.write_text(
+                    "import os,pathlib,sys,time\n"
+                    "target=pathlib.Path(sys.argv[1])\n"
+                    "target.with_suffix('.tmp').write_text(str(os.getpid()))\n"
+                    "target.with_suffix('.tmp').replace(target)\n"
+                    + ("sys.exit(7)\n" if fails else "while True: time.sleep(1)\n")
+                )
+                script = command[2].replace("/bin/httpd", shlex.join([sys.executable, str(server), str(witness)]))
+                with subprocess.Popen(
+                    [*command[:2], script],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True,
+                ) as process:
+                    try:
+                        deadline = time.monotonic() + 5
+                        while not witness.exists() and time.monotonic() < deadline:
+                            time.sleep(0.01)
+                        self.assertTrue(witness.exists(), "fixture server did not start")
+                        child = int(witness.read_text())
+                        if not fails:
+                            process.terminate()
+                        _, errors = process.communicate(timeout=5)
+                        self.assertEqual(process.returncode, 7 if fails else 0, errors)
+                        with self.assertRaises(ProcessLookupError):
+                            os.kill(child, 0)
+                    finally:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+
     def test_persistence_fixture_uses_the_canonical_schema_and_offline_image(self):
         from services import nas_v2_spec as spec
 

@@ -67,7 +67,19 @@ def fixture_document() -> dict:
         "name": "VM OCI persistence probe",
         "enabled": True,
         "workload": {"kind": "daemon", "activation": "persistent"},
-        "runtime": {"type": "oci", "image": "localhost/nas-v2-vm-probe:v2", "pull": "never"},
+        "runtime": {
+            "type": "oci",
+            "image": "localhost/nas-v2-vm-probe:v2",
+            "pull": "never",
+            # PID 1 needs a TERM handler that also reaps the HTTP server.
+            "command": [
+                "/bin/sh",
+                "-c",
+                'trap \'trap "" TERM INT; kill -TERM "$!" 2>/dev/null || true; '
+                'wait "$!" 2>/dev/null || true; exit 0\' TERM INT; '
+                '/bin/httpd -f -p 8080 -h /www & wait "$!"',
+            ],
+        },
         "storage": [{"resource": RESOURCE, "mountPath": "/data", "access": "write"}],
         "resources": {"cpuQuotaPercent": 25, "memoryMaxBytes": 134217728, "pidsMax": 64},
         "network": {"mode": "isolated"},
