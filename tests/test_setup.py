@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import os
@@ -964,6 +965,47 @@ class FirstStartStatusTests(unittest.TestCase):
                 result = self.status_with_journal(journal)
                 self.assertEqual(result["status"], "ready")
                 self.assertIsNone(result["setupJournal"])
+
+    def test_non_root_administrator_reads_the_root_only_journal_through_sudo(self) -> None:
+        journal = self.journal("manual-recovery-required", "identity-accounts")
+        denied = setup.JournalError("Invalid operation journal")
+        denied.__cause__ = PermissionError(13, "Permission denied")
+
+        def load(path: pathlib.Path) -> None:
+            if path == setup.JOURNAL_PATH:
+                raise denied
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            config = self.config_file(root)
+            common = (
+                mock.patch.object(setup, "STATE_PATH", root / "missing-state.json"),
+                mock.patch.object(setup, "load_json", side_effect=load),
+                mock.patch.object(setup.os, "geteuid", return_value=1000),
+                mock.patch.object(setup, "pool_exists", return_value=True),
+                mock.patch.object(setup, "validate_service_request"),
+            )
+            escalated = setup.Completed(("sudo",), json.dumps(journal), "", 0)
+            with contextlib.ExitStack() as stack:
+                for patch in common:
+                    stack.enter_context(patch)
+                privileged = stack.enter_context(
+                    mock.patch.object(setup, "run_root_noninteractive", return_value=escalated)
+                )
+                result = setup.first_start_status(str(config))
+            privileged.assert_called_once_with(["cat", "--", str(setup.JOURNAL_PATH)], check=False)
+            self.assertEqual(result["status"], "manual-recovery-required")
+            self.assertEqual(result["setupJournal"]["step"], "identity-accounts")
+
+            refused = setup.Completed(("sudo",), "", "sudo: a password is required", 1)
+            with contextlib.ExitStack() as stack:
+                for patch in common:
+                    stack.enter_context(patch)
+                stack.enter_context(mock.patch.object(setup, "run_root_noninteractive", return_value=refused))
+                unreadable = setup.first_start_status(str(config))
+        self.assertEqual(unreadable["status"], "journal-unreadable")
+        self.assertIn("a password is required", unreadable["message"])
+        self.assertNotIn("planDigest", unreadable)
 
     def test_recovery_outranks_a_missing_plan(self) -> None:
         result = self.status_with_journal(

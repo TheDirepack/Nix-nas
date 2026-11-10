@@ -1943,6 +1943,31 @@ SETUP_JOURNAL_STATUSES = frozenset(
 )
 
 
+class JournalUnreadableError(SetupError):
+    pass
+
+
+def load_setup_journal() -> dict[str, Any] | None:
+    """Read the root-only first-run journal, escalating only for a non-root local administrator."""
+    try:
+        return load_json(JOURNAL_PATH)
+    except JournalError as exc:
+        if os.geteuid() == 0 or not isinstance(exc.__cause__, PermissionError):
+            raise
+    completed = run_root_noninteractive(["cat", "--", str(JOURNAL_PATH)], check=False)
+    if completed.returncode != 0:
+        raise JournalUnreadableError(
+            completed.stderr.strip() or "privileged read of the first-run journal is unavailable"
+        )
+    try:
+        value = json.loads(completed.stdout) if completed.stdout.strip() else None
+    except json.JSONDecodeError as exc:
+        raise JournalError(f"Invalid operation journal: {JOURNAL_PATH}") from exc
+    if value is not None and not isinstance(value, dict):
+        raise JournalError(f"Operation journal is not a JSON object: {JOURNAL_PATH}")
+    return value
+
+
 def setup_journal_summary(journal: Mapping[str, Any] | None) -> dict[str, Any] | None:
     """Return non-secret journal state for an unfinished first-run; step errors stay in the journal."""
     if journal is None or journal.get("status") in {"complete", "cancelled"}:
@@ -1958,7 +1983,17 @@ def setup_journal_summary(journal: Mapping[str, Any] | None) -> dict[str, Any] |
     }
 
 
-def setup_journal_blocker(summary: Mapping[str, Any] | None) -> str | None:
+def storage_recovery_pending(summary: Mapping[str, Any] | None) -> bool:
+    return (
+        summary is not None
+        and summary["schemaVersion"] == 1
+        and summary["workflow"] == "first-run-v2"
+        and summary["status"] == "manual-recovery-required"
+        and summary["step"] == "storage"
+    )
+
+
+def setup_journal_blocker(summary: Mapping[str, Any] | None, *, storage_verified: bool | None = None) -> str | None:
     """Explain why a worker would refuse this journal, or None when submission can resume it."""
     if summary is None:
         return None
@@ -1968,9 +2003,11 @@ def setup_journal_blocker(summary: Mapping[str, Any] | None) -> str | None:
         return f"The first-run journal has an unrecognized status {summary['status']!r}."
     if summary["status"] != "manual-recovery-required":
         return None
-    # Status callers allow 60 seconds; an unproven storage step stays blocked.
-    if summary["step"] == "storage" and storage_ready(probe_timeout_seconds=STATUS_STORAGE_PROBE_SECONDS):
-        return None
+    if storage_recovery_pending(summary):
+        if storage_verified is None:
+            storage_verified = storage_ready(probe_timeout_seconds=STATUS_STORAGE_PROBE_SECONDS)
+        if storage_verified:
+            return None
     return f"Setup stopped at {summary['step'] or 'final verification'} and needs manual recovery."
 
 
@@ -2001,11 +2038,20 @@ def first_start_status(config_source: str) -> dict[str, Any]:
         }
     setup_complete = isinstance(state, dict) and state.get("status") in {"complete", "complete-unverified"}
     journal: dict[str, Any] | None = None
+    storage_verified = False
     if not setup_complete:
         # A journal the worker would refuse outranks plan problems: creating or
         # editing a plan cannot proceed until the recorded run is recovered.
         try:
-            journal = setup_journal_summary(load_json(JOURNAL_PATH))
+            journal = setup_journal_summary(load_setup_journal())
+        except JournalUnreadableError as exc:
+            return {
+                "schemaVersion": SCHEMA_VERSION,
+                "status": "journal-unreadable",
+                "configPath": config_source,
+                "message": f"The root-only first-run journal could not be read ({exc}). "
+                "Run this command as root or as the configured local administrator with sudo.",
+            }
         except JournalError as exc:
             return {
                 "schemaVersion": SCHEMA_VERSION,
@@ -2013,7 +2059,9 @@ def first_start_status(config_source: str) -> dict[str, Any]:
                 "configPath": config_source,
                 "message": f"{exc}. Repair it from the console or SSH before setup can continue.",
             }
-        blocker = setup_journal_blocker(journal)
+        if storage_recovery_pending(journal):
+            storage_verified = storage_ready(probe_timeout_seconds=STATUS_STORAGE_PROBE_SECONDS)
+        blocker = setup_journal_blocker(journal, storage_verified=storage_verified)
         if blocker is not None:
             return {
                 "schemaVersion": SCHEMA_VERSION,
@@ -2078,10 +2126,7 @@ def first_start_status(config_source: str) -> dict[str, Any]:
     devices = [str(item) for item in storage.get("devices", [])]
     # A verified storage recovery already proved the pool; probing again could
     # push the status call past its deadline.
-    storage_recovery_verified = (
-        journal is not None and journal["status"] == "manual-recovery-required" and journal["step"] == "storage"
-    )
-    pool_present = True if storage_recovery_verified else pool_exists()
+    pool_present = True if storage_verified else pool_exists()
     destructive = bool(not pool_present and storage.get("createPool"))
     return {
         "schemaVersion": SCHEMA_VERSION,
