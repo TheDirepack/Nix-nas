@@ -78,6 +78,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 "dependency",
                 "dependency-start-error",
                 "dependency-starting-error",
+                "dependency-ungated-error",
                 "readiness-existing-failure",
                 "query",
                 "reset",
@@ -87,19 +88,32 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 "durability",
             )
             for active, restore in ((True, False), (False, False), (True, True), (False, True))
-            if stage not in {"probe-only", "dependency", "dependency-start-error", "dependency-starting-error"}
+            if stage
+            not in {
+                "probe-only",
+                "dependency",
+                "dependency-start-error",
+                "dependency-starting-error",
+                "dependency-ungated-error",
+            }
             or (not active and not restore)
         ):
             with (
                 self.subTest(stage=failure_stage, active=initially_active, fail_restore=fail_restore),
                 tempfile.TemporaryDirectory() as raw,
             ):
-                dependency_only = failure_stage in {"dependency", "dependency-start-error", "dependency-starting-error"}
+                dependency_only = failure_stage in {
+                    "dependency",
+                    "dependency-start-error",
+                    "dependency-starting-error",
+                    "dependency-ungated-error",
+                }
                 probe_only = failure_stage in {
                     "probe-only",
                     "dependency",
                     "dependency-start-error",
                     "dependency-starting-error",
+                    "dependency-ungated-error",
                 }
                 root = pathlib.Path(raw)
                 control = root / "control"
@@ -139,6 +153,16 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     )
                     manifests[version] = manifest
                     sources[version] = source
+                if failure_stage == "dependency-ungated-error":
+                    for manifest in manifests.values():
+                        value = json.loads(manifest.read_text())
+                        value["links"] = []
+                        value["ownedUnits"] = [owner]
+                        value["startUnits"] = [owner]
+                        value["readinessUnits"] = []
+                        value["readinessOwners"] = {}
+                        value["fingerprints"].pop(ready)
+                        manifest.write_text(json.dumps(value))
                 if probe_only:
                     sources["candidate"].write_bytes(sources["healthy"].read_bytes())
                     candidate = json.loads(manifests["candidate"].read_text())
@@ -189,7 +213,11 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     elif operation in {"start", "restart"} and units[0] == "nas-v2-trigger.service":
                         running["trigger_active"] = True
                         running["version"] = "healthy"
-                        if failure_stage in {"dependency-start-error", "dependency-starting-error"}:
+                        if failure_stage in {
+                            "dependency-start-error",
+                            "dependency-starting-error",
+                            "dependency-ungated-error",
+                        }:
                             running["owner_starting"] = failure_stage == "dependency-starting-error"
                             code = 1
                     elif operation == "stop" and units[0] == "nas-v2-trigger.service":
@@ -259,7 +287,8 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                             "No space left"
                             if failure_stage in {"commit", "commit-existing-failure", "publish", "durability"}
                             else "nas-v2-trigger.service"
-                            if failure_stage in {"dependency-start-error", "dependency-starting-error"}
+                            if failure_stage
+                            in {"dependency-start-error", "dependency-starting-error", "dependency-ungated-error"}
                             else owner
                             if failure_stage == "restart"
                             else ready

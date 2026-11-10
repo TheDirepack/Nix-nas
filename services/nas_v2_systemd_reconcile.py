@@ -535,9 +535,9 @@ def reconcile(
     if unstable_units:
         raise SystemdReconcileError(f"unable to snapshot stable systemd state: {', '.join(unstable_units)}")
     active_snapshot = {unit: state in _UNIT_QUERY_STATES[0] for unit, state in state_snapshot.items()}
-    observed_readiness = dict(state_snapshot)
-    for unit in sorted((set(readiness_owners) | set(readiness_owners.values())) - set(observed_readiness)):
-        observed_readiness[unit] = unit_state(unit)
+    observed_units = dict(state_snapshot)
+    for unit in sorted(owned - set(observed_units)):
+        observed_units[unit] = unit_state(unit)
     # An interrupted or partially recorded apply can leave a target active with
     # no installed link. Stop it before installing the changed descriptor.
     active_unlinked_sessions = {
@@ -601,8 +601,8 @@ def reconcile(
     state_commit_attempted = False
 
     def discover_dependency_activations(*, include_readiness: bool) -> None:
-        for owner in sorted(set(readiness_owners.values()) - activated_units):
-            before = observed_readiness[owner]
+        for owner in sorted(owned - readiness - activated_units):
+            before = observed_units[owner]
             if before not in {"inactive", "failed", "unknown"}:
                 continue
             now = unit_state(owner)
@@ -620,7 +620,7 @@ def reconcile(
             for gate, gate_owner in readiness_owners.items():
                 if gate_owner != owner:
                     continue
-                prior = observed_readiness[gate]
+                prior = observed_units[gate]
                 if prior is None or prior in _TRANSITIONAL_UNIT_STATES:
                     raise SystemdReconcileError(f"unable to snapshot dependency readiness: {gate}")
                 state_snapshot[gate] = prior
