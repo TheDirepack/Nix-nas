@@ -1690,7 +1690,10 @@ protected_restart_worker_finished "$restart_cursor"
 [[ "$(systemctl show copyparty.service --property=InvocationID --value)" != "$copyparty_invocation" ]] ||
   fail "protected restart did not restart CopyParty"
 protected_restart_ready
-nas-operation-run --action vm-protected-restart-released --class runtime -- true
+# Restarted target members (for example nas-syncthing-sync) may legitimately
+# take the lock next; only the worker's ownership must have ended.
+nas-cockpit-api operations | jq -e 'all(.active[]; .action != "protected-restart")' >/dev/null ||
+  fail "protected-restart worker still owns the operation lock after finishing"
 pass "Cockpit API protected restart runs under the systemd worker's operation lock and releases it"
 
 copyparty_invocation="$(systemctl show copyparty.service --property=InvocationID --value)"
