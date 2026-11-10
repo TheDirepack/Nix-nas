@@ -373,6 +373,7 @@ def fired(
         raise GuardedApplyError("rollback command must not be empty")
     state_root = _validate_state_dir(state_dir)
     service = f"{unit}.service"
+    rollback_timeout = 600
     with _locked(unit, state_root):
         path = _state_path(unit, state_root)
         current = _read_state(path)
@@ -398,6 +399,10 @@ def fired(
                 return {"ok": True, "unit": unit, "state": state, "ranRollback": False}
             if state != ARMED:
                 raise _terminal_error(state, unit)
+            armed_timeout = current.get("timeoutSeconds", 0)
+            if not isinstance(armed_timeout, int) or isinstance(armed_timeout, bool) or armed_timeout < 0:
+                raise GuardedApplyError("invalid armed transaction timeout")
+            rollback_timeout = max(rollback_timeout, armed_timeout + 30)
             current.update({"state": CLAIMED, "updatedAt": _now(), "pid": os.getpid()})
             _write_state(path, current)
     try:
@@ -406,7 +411,7 @@ def fired(
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=rollback_timeout,
             check=False,
         )
         exit_code = completed.returncode

@@ -105,12 +105,21 @@ let
     # for a valid first transaction; leave all state untouched and fail closed.
     exit 1
   '';
+  clearGuardCurrent = pkgs.writeShellScript "nas-v2-clear-current-guard" ''
+    set -euo pipefail
+    guard_file=${lib.escapeShellArg guardCurrentFile}
+    exec 9>"$guard_file.lock"
+    ${pkgs.util-linux}/bin/flock -x 9
+    if [ -r "$guard_file" ] && [ "$(${pkgs.coreutils}/bin/cat "$guard_file")" = "$1" ]; then
+      ${pkgs.coreutils}/bin/rm -f "$guard_file"
+    fi
+  '';
   rollbackWithGuard = pkgs.writeShellScript "nas-v2-rollback-with-guard" ''
     set -euo pipefail
     guard_file=${lib.escapeShellArg guardCurrentFile}
     guard_unit=""
     if [ -r "$guard_file" ]; then
-      guard_unit="$(${pkgs.coreutils}/bin/cat "$guard_file" 2>/dev/null | ${pkgs.coreutils}/bin/tr -d '\n' || true)"
+      guard_unit="$(${pkgs.util-linux}/bin/flock -s "$guard_file.lock" ${pkgs.coreutils}/bin/cat "$guard_file" 2>/dev/null || true)"
     fi
     if [ -n "$guard_unit" ]; then
       if ${v2Python}/bin/python ${v2Source}/nas_guarded_apply.py \
@@ -118,11 +127,11 @@ let
         --systemctl ${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"} \
         --unit "$guard_unit" \
         fired -- ${rollbackToApplied}; then
-        ${pkgs.coreutils}/bin/rm -f "$guard_file"
+        ${clearGuardCurrent} "$guard_unit"
         exit 0
       else
         status=$?
-        ${pkgs.coreutils}/bin/rm -f "$guard_file"
+        ${clearGuardCurrent} "$guard_unit"
         exit $status
       fi
     fi
@@ -194,7 +203,10 @@ in
         --desired ${lib.escapeShellArg desiredPath} \
         --state ${lib.escapeShellArg systemdStatePath} > ${lib.escapeShellArg budgetFile}
       guard_timeout="$(${pkgs.jq}/bin/jq -er '.transactionSeconds' ${lib.escapeShellArg budgetFile})"
-      ${pkgs.coreutils}/bin/printf '%s' "$guard_unit" > ${lib.escapeShellArg guardCurrentFile}
+      (
+        ${pkgs.util-linux}/bin/flock -x 9
+        ${pkgs.coreutils}/bin/printf '%s' "$guard_unit" > ${lib.escapeShellArg guardCurrentFile}
+      ) 9>${lib.escapeShellArg "${guardCurrentFile}.lock"}
       ${v2Python}/bin/python ${v2Source}/nas_guarded_apply.py \
         --unit "$guard_unit" \
         --systemctl ${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"} \
@@ -267,7 +279,7 @@ in
         --systemctl ${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"} \
         --state-dir ${lib.escapeShellArg guardStateDir} \
         cancel
-      ${pkgs.coreutils}/bin/rm -f ${lib.escapeShellArg guardCurrentFile}
+      ${clearGuardCurrent} "$guard_unit"
       ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} clear-previous-applied
     '';
 

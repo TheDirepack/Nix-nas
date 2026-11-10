@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import pathlib
+import fcntl
 import re
 import shlex
+import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import threading
@@ -44,6 +47,52 @@ def _systemd_run(root: pathlib.Path, log: pathlib.Path) -> pathlib.Path:
 
 
 class GuardedApplyTests(unittest.TestCase):
+    def test_recovery_supervision_covers_the_armed_transaction_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            state_dir = root / "state"
+            idle = _idle_systemctl(root, root / "log")
+            runner = _systemd_run(root, root / "log")
+            guarded.arm(
+                ["/rollback"],
+                timeout_seconds=1800,
+                unit="nas-test-rollback",
+                systemd_run=str(runner),
+                systemctl=str(idle),
+                state_dir=state_dir,
+            )
+
+            def run(command, **kwargs):
+                if kwargs["timeout"] < 900:
+                    raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+                self.assertEqual(kwargs["timeout"], 1830)
+                return subprocess.CompletedProcess(command, 0, "restored", "")
+
+            with mock.patch.object(guarded.subprocess, "run", side_effect=run):
+                result = guarded.fired(["/rollback"], unit="nas-test-rollback", state_dir=state_dir)
+            self.assertEqual(result["state"], guarded.COMPLETED)
+
+    def test_old_recovery_cannot_remove_a_newer_guard_marker(self) -> None:
+        source = (ROOT / "modules/nas/config/managed-services-transactions.nix").read_text()
+        script = source.split("pkgs.writeShellScript \"nas-v2-clear-current-guard\" ''", 1)[1].split("  '';", 1)[0]
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            marker = root / "current"
+            marker.write_text("old-guard")
+            script = script.replace("${lib.escapeShellArg guardCurrentFile}", shlex.quote(str(marker)))
+            script = script.replace("${pkgs.util-linux}/bin/flock", shlex.quote(shutil.which("flock") or "flock"))
+            for tool in ("cat", "rm"):
+                script = script.replace(f"${{pkgs.coreutils}}/bin/{tool}", shlex.quote(shutil.which(tool) or tool))
+            with pathlib.Path(str(marker) + ".lock").open("w") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                with subprocess.Popen(["bash", "-c", script, "clear-guard", "old-guard"]) as cleanup:
+                    marker.write_text("new-guard")
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+                    self.assertEqual(cleanup.wait(timeout=5), 0)
+            self.assertEqual(marker.read_text(), "new-guard")
+            subprocess.run(["bash", "-c", script, "clear-guard", "new-guard"], check=True, timeout=5)
+            self.assertFalse(marker.exists())
+
     def executable(self, path: pathlib.Path, body: str) -> pathlib.Path:
         path.write_text("#!/bin/sh\nset -eu\n" + body, encoding="utf-8")
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
