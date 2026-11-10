@@ -220,7 +220,8 @@ v2_expected_units() {
     return 1
   }
   jq -r '
-    def unit_name: type == "string" and test("^[A-Za-z0-9_][A-Za-z0-9:_.@\\\\-]*[.](service|socket|timer|path|target)$");
+    # Same unit-name contract as nas_v2_systemd_reconcile; callers pass units after "--".
+    def unit_name: type == "string" and test("^[A-Za-z0-9_.@:-]+[.](service|socket|timer|path|target)$");
     if type == "object" and .schemaVersion == 1 and (.startUnits | type) == "array" and all(.startUnits[]; unit_name)
       and ((.readinessUnits // []) | type) == "array" and all((.readinessUnits // [])[]; unit_name)
     then (.readinessUnits // []) as $gates

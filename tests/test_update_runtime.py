@@ -450,6 +450,13 @@ class UpdateRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(settling.returncode, 0, settling.stdout + settling.stderr)
 
+    def test_unit_names_accepted_by_v2_are_queried_after_end_of_options(self):
+        units = [":leading-colon.service", "-.slice-like.target"]
+        result = self.protected_health(units, [*self.SUBSTRATE_UNITS, *units])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for unit in units:
+            self.assertIn(f"pkgs.systemd:systemctl is-active -- {unit}", self.trace.read_text())
+
     def test_v2_target_owner_units_are_accepted_and_required(self):
         units = ["nas-v2-wiki.target", "nas-v2-source-wiki.path"]
         result = self.protected_health(units, [*self.SUBSTRATE_UNITS, *units])
@@ -483,11 +490,12 @@ class UpdateRuntimeTests(unittest.TestCase):
             "wrong-version": '{"schemaVersion": 2, "startUnits": []}',
             "non-array": '{"schemaVersion": 1, "startUnits": "copyparty.service"}',
             "non-string": '{"schemaVersion": 1, "startUnits": [3]}',
-            "option": '{"schemaVersion": 1, "startUnits": ["--all.service"]}',
+            "space": '{"schemaVersion": 1, "startUnits": ["a b.service"]}',
+            "backslash": '{"schemaVersion": 1, "startUnits": ["a\\\\x2d.service"]}',
             "shell": '{"schemaVersion": 1, "startUnits": ["a;b.service"]}',
             "not-a-unit": '{"schemaVersion": 1, "startUnits": ["copyparty"]}',
             "bad-readiness": '{"schemaVersion": 1, "startUnits": [], "readinessUnits": "nas-v2-ready-x.service"}',
-            "unsafe-readiness": '{"schemaVersion": 1, "startUnits": [], "readinessUnits": ["-x.service"]}',
+            "unsafe-readiness": '{"schemaVersion": 1, "startUnits": [], "readinessUnits": ["a b.service"]}',
         }
         for name, raw in cases.items():
             with self.subTest(case=name):
