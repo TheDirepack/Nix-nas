@@ -16,10 +16,11 @@ let
     supportedHostSystems
     vmStoragePath
   ;
+  backupPolicy = import ../internal/backup-policy.nix { inherit lib; } cfg;
 in
 {
   config = {
-    assertions = [
+    assertions = backupPolicy.assertions ++ [
       {
         assertion = lib.hasPrefix "/" cfg.zfsRoot && cfg.zfsRoot != "/";
         message = "nas.zfsRoot must be an absolute non-root path.";
@@ -160,14 +161,6 @@ in
         message = "nas.secrets.keepassKeyFile must be null or an absolute path.";
       }
       {
-        assertion = !cfg.backup.enable || cfg.backup.passwordFile != "";
-        message = "Restic boot/system recovery backups require nas.backup.passwordFile.";
-      }
-      {
-        assertion = !cfg.backup.enable || cfg.backup.repositoryFile != "" || cfg.backup.allowSamePoolRepository;
-        message = "A same-pool Restic repository requires nas.backup.allowSamePoolRepository = true and is local rollback only.";
-      }
-      {
         assertion = !cfg.backup.enable || (lib.hasPrefix "/" cfg.backup.stagingPath && !lib.hasPrefix "/run/" cfg.backup.stagingPath);
         message = "nas.backup.stagingPath must be an absolute disk-backed path outside /run.";
       }
@@ -177,19 +170,6 @@ in
             && !lib.hasPrefix "/run/" cfg.backup.restoreVerification.targetPath
             && cfg.backup.restoreVerification.targetPath != cfg.backup.stagingPath);
         message = "Backup restore verification requires a distinct absolute disk-backed target outside /run.";
-      }
-      {
-        assertion = !cfg.installationReady || cfg.testing.installationReadyFixture || cfg.zfsReplication.enable || (cfg.backup.enable && cfg.backup.repositoryFile != "");
-        message = "installationReady requires an off-pool Restic repository or enabled ZFS replication.";
-      }
-      {
-        assertion =
-          !cfg.backup.enable
-          || (lib.hasPrefix "/" cfg.backup.passwordFile
-            && lib.hasPrefix "/" cfg.secrets.keepassDatabase
-            && (cfg.backup.repositoryFile == "" || lib.hasPrefix "/" cfg.backup.repositoryFile)
-            && (cfg.backup.localRepository == "" || lib.hasPrefix "/" cfg.backup.localRepository));
-        message = "Restic passwordFile, KDBX path, repositoryFile, and localRepository must be absolute paths when set.";
       }
       {
         assertion =
@@ -203,6 +183,17 @@ in
       {
         assertion = lib.all (argument: argument != "" && !(lib.hasInfix "\n" argument)) cfg.zfsReplication.extraArgs;
         message = "nas.zfsReplication.extraArgs may not contain empty strings or newlines.";
+      }
+      {
+        assertion =
+          cfg.update.externalProbeCommand == [ ]
+          || (lib.hasPrefix "/" (builtins.head cfg.update.externalProbeCommand)
+            && lib.all (argument: argument != "") cfg.update.externalProbeCommand);
+        message = "nas.update.externalProbeCommand must start with an absolute executable path and may not contain empty arguments.";
+      }
+      {
+        assertion = !(cfg.autoUpdate.enable && cfg.autoUpdate.apply) || cfg.update.externalProbeCommand != [ ];
+        message = "nas.autoUpdate.apply requires nas.update.externalProbeCommand; unattended activation cannot persist without an independent management probe.";
       }
       {
         assertion = !cfg.installationReady || cfg.trustedInterfaces != [ ];

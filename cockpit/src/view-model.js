@@ -59,6 +59,24 @@ export function revisionModel(update = {}) {
   };
 }
 
+// nas-update owns apply admission; this only renders what its status reported.
+// Missing or malformed status disables Apply because the API refuses it too.
+export function updateApplyModel(update = {}) {
+  update = update && typeof update === "object" && !Array.isArray(update) ? update : {};
+  if (!Array.isArray(update.applyBlockers)) {
+    return {
+      available: false,
+      reasons: [update.error || "nas-update did not report whether an update can be applied."],
+    };
+  }
+  const reasons = update.applyBlockers.map((blocker) =>
+    blocker && typeof blocker === "object"
+      ? String(blocker.message || blocker.code || "Unknown update blocker")
+      : String(blocker),
+  );
+  return {available: reasons.length === 0, reasons};
+}
+
 export function safeInternalPath(value) {
   if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) return null;
   if (value.includes("\\")) return null;
@@ -149,6 +167,35 @@ export function setupModel(data = {}) {
       setup.setupJournal && typeof setup.setupJournal === "object" ? setup.setupJournal : null,
     authorityHealth: firstStart.authorityHealth || null,
   };
+}
+
+const BACKUP_ROW_STATES = new Set(["ok", "attention", "unavailable"]);
+
+export function backupRows(data = {}) {
+  const backup = data?.backup;
+  if (!backup || typeof backup !== "object" || !Array.isArray(backup.rows) || !backup.rows.length) {
+    return [
+      {
+        id: "unavailable",
+        label: "Backup",
+        state: "unavailable",
+        summary: "Status unavailable",
+        detail:
+          typeof backup?.error === "string" && backup.error
+            ? backup.error
+            : "Backup status is unavailable. Refresh to retry.",
+      },
+    ];
+  }
+  return backup.rows
+    .filter((row) => row && typeof row === "object" && typeof row.id === "string")
+    .map((row) => ({
+      id: row.id,
+      label: typeof row.label === "string" ? row.label : row.id,
+      state: BACKUP_ROW_STATES.has(row.state) ? row.state : "unavailable",
+      summary: typeof row.summary === "string" ? row.summary : "Status unavailable",
+      detail: typeof row.detail === "string" ? row.detail : "",
+    }));
 }
 
 export function managedServiceUnitState(service = {}) {

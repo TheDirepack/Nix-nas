@@ -265,11 +265,5 @@ in
       ${pkgs.coreutils}/bin/rm -f ${lib.escapeShellArg guardCurrentFile}
       ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} clear-previous-applied
     '';
-
-    # Superseded by the generic transaction and direct native Caddy reload.
-    systemd.services.nas-v2-firewall-rollback.enable = lib.mkForce false;
-    systemd.timers.nas-v2-firewall-rollback.enable = lib.mkForce false;
-    systemd.services.nas-managed-services-caddy-reload.enable = lib.mkForce false;
-    systemd.paths.nas-managed-services-caddy-reload.enable = lib.mkForce false;
   };
 }

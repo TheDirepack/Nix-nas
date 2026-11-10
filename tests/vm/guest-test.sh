@@ -538,6 +538,11 @@ pass "locked first boot runs isolated Authentik and routes browser access throug
 json="$(nas-update --status --json)"
 jq -e '.configurationDir and .currentSystem' <<<"$json" >/dev/null
 pass "nas-update status reports the protected checkout"
+# The test configuration declares no independent probe, so the installed CLI
+# must report apply as unavailable instead of offering a guaranteed failure.
+jq -e '.externalProbe.configured == false and any(.applyBlockers[]; .code == "external-probe-unconfigured")' <<<"$json" >/dev/null \
+  || fail "nas-update status did not report the unconfigured external probe: $json"
+pass "nas-update status reports apply unavailable without an independent probe"
 
 nas-operation-run --action vm-operation-run-smoke --class runtime -- true
 pass "shared operation runner executes an installed child under coordinator ownership"
@@ -1175,6 +1180,14 @@ nas-managed-services-control document | jq -e '.document.services | type == "obj
 ! run_as_nasadmin nas-setup account apply --username 'operator;touch /tmp/nas-account-pwned' --disabled >>/tmp/nas-account-injection.log 2>&1 || fail "shell-like account username was accepted"
 [[ ! -e /tmp/nas-account-pwned ]] || fail "account username injection created an unexpected file"
 nas-cockpit-api overview | jq -e '.protectedReady == true and (.services | length > 0)' >/dev/null
+# The VM disables Restic, so status must say so and never claim a restore.
+nas-backup-status status >/tmp/nas-backup-status.json
+jq -e '.enabled == false and .ok == false and .independentRestoreProven == false
+  and ([.rows[] | select(.id == "repository")][0].summary == "Not configured")
+  and ([.rows[] | select(.id == "independent-restore")][0].summary == "Not proven")' \
+  /tmp/nas-backup-status.json >/dev/null || fail "backup status misreports the disabled VM backup"
+nas-cockpit-api overview | jq -e '.backup.rows | map(.id) | index("independent-restore") != null' >/dev/null || \
+  fail "Cockpit overview does not carry the CLI backup status"
 doctor_status=0
 nas-doctor --json >/tmp/nas-doctor.json || doctor_status=$?
 (( doctor_status <= 2 )) || fail "nas-doctor failed unexpectedly with status $doctor_status"

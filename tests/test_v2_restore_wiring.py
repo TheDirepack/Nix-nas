@@ -62,7 +62,9 @@ class V2RestoreWiringTests(unittest.TestCase):
     def test_remote_rclone_repository_does_not_require_the_local_restic_mount(self):
         storage = (ROOT / "modules/nas/config/storage-monitoring.nix").read_text(encoding="utf-8")
         block = storage.split("nas-backup-restore-verify", 1)[1].split("serviceConfig", 1)[0]
-        self.assertIn('lib.optional (cfg.backup.repositoryFile == "" && !remoteEnabled)', block)
+        self.assertIn("lib.optional usesLocalRepository localResticRepository", block)
+        self.assertIn("inherit (backupPolicy) usesLocalRepository;", storage)
+        self.assertNotIn("remoteEnabled", storage)
 
     def test_verifier_has_no_application_name_branches(self):
         verifier = (ROOT / "services/nas_v2_backup.py").read_text(encoding="utf-8")
@@ -96,18 +98,23 @@ class V2RestoreWiringTests(unittest.TestCase):
             self.assertEqual(failed.stderr, "")
 
     def test_remote_rclone_restore_environment_is_provisioned_and_fails_closed(self):
-        # restic needs rclone and RCLONE_CONFIG for an `rclone:` repository.
-        # A repositoryFile can select one without remote mode, so the unit keys
-        # rclone on the configured repository as well as the remote toggle. A
-        # host that still lacks rclone must fail before reporting success.
+        # restic needs rclone and RCLONE_CONFIG for an `rclone:` repository,
+        # which only nas.backup.repositoryFile can name. Both Restic units key
+        # rclone on that file. A host that still lacks rclone must fail before
+        # reporting success.
         storage = (ROOT / "modules/nas/config/storage-monitoring.nix").read_text(encoding="utf-8")
         unit = storage.split("systemd.services.nas-backup-restore-verify =", 1)[1].split(
             "systemd.services.nas-syncoid =", 1
         )[0]
-        self.assertIn('rcloneRequired = remoteEnabled || cfg.backup.repositoryFile != "";', storage)
+        self.assertIn("rcloneRequired = !usesLocalRepository;", storage)
+        self.assertIn("RCLONE_CONFIG = cfg.backup.rcloneConfigFile;", storage)
         self.assertIn("path = [ pkgs.coreutils ] ++ lib.optional rcloneRequired pkgs.rclone;", unit)
-        self.assertIn("RCLONE_CONFIG = cfg.backup.remote.rcloneConfigFile;", unit)
-        self.assertIn('lib.mkIf (rcloneRequired && cfg.backup.remote.rcloneConfigFile != "")', unit)
+        self.assertIn("environment = rcloneEnvironment;", unit)
+        backup_unit = storage.split("systemd.services.restic-backups-nas-boot-system =", 1)[1].split(
+            "systemd.services.", 1
+        )[0]
+        self.assertIn("path = lib.mkIf rcloneRequired [ pkgs.rclone ];", backup_unit)
+        self.assertIn("environment = rcloneEnvironment;", backup_unit)
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
             complete = root / "complete"

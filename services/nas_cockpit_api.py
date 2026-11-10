@@ -28,6 +28,7 @@ import sys
 import syslog
 from typing import Any, cast
 
+from nas_backup_status import status_from_environment as backup_status
 from nas_common import CommandResult, parse_systemd_show, run_command
 from nas_operation_lock import (
     OperationBusyError,
@@ -673,6 +674,7 @@ def overview() -> dict[str, Any]:
     probes: dict[str, Any] = {
         "setup": setup_status,
         "update": update_status,
+        "backup": backup_status,
         "services": lambda: service_states(units),
         "zpool": lambda: command_probe(["zpool", "status", "-x", ZFS_POOL]),
         "zfs": lambda: command_probe(["zfs", "list", "-H", "-o", "name,used,avail,refer,mountpoint", ZFS_DATASET]),
@@ -705,6 +707,7 @@ def overview() -> dict[str, Any]:
         "setup": results["setup"],
         "managedServices": managed,
         "update": results["update"],
+        "backup": results["backup"],
         "operations": operation_state(managed),
         "services": results["services"],
         "zfs": {
@@ -752,6 +755,27 @@ def source_control(request: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _require_apply_admission(status: dict[str, Any]) -> None:
+    """Refuse an apply launch that nas-update has already reported it would reject.
+
+    nas-update remains the authority: this only avoids starting a detached unit
+    whose configured failure is known, and it fails closed when status is unknown.
+    """
+
+    blockers = status.get("applyBlockers")
+    if not isinstance(blockers, list):
+        detail = (
+            status.get("error") if isinstance(status.get("error"), str) else "status did not report apply admission"
+        )
+        raise ApiError(f"Update apply is unavailable: nas-update status is unavailable ({detail})")
+    messages = [
+        str(item.get("message") or item.get("code") or "unknown blocker") if isinstance(item, dict) else str(item)
+        for item in blockers
+    ]
+    if messages:
+        raise ApiError("Update apply is unavailable: " + "; ".join(messages))
+
+
 def update_control(request: dict[str, Any]) -> dict[str, Any]:
     """Route every deployment activation through the guarded nas-update authority."""
 
@@ -760,6 +784,8 @@ def update_control(request: dict[str, Any]) -> dict[str, Any]:
         raise ApiError("Unsupported update operation")
     if not CONFIG_DIR.is_dir():
         raise ApiError(f"Configuration directory does not exist: {CONFIG_DIR}")
+    if operation == "apply":
+        _require_apply_admission(update_status())
     unit = UPDATE_UNITS[operation]
     # Asynchronous activation via the existing systemd units. The nas-update
     # script owns candidate preparation, state capture, health checks, rollback,

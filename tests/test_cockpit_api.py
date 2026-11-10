@@ -54,6 +54,32 @@ class CockpitApiTests(unittest.TestCase):
                 self.assertIsInstance(value["failedUnits"], list)
             self.assertTrue(value["failedUnitsStatus"]["checkedAt"])
 
+    def test_overview_reports_cli_backup_status_and_contains_its_failure(self):
+        backup = {"ok": False, "rows": [{"id": "repository", "state": "attention", "summary": "Same pool"}]}
+        common = (
+            mock.patch.object(api, "managed_services_status", return_value={"services": []}),
+            mock.patch.object(api, "shared_operation_state", return_value={}),
+            mock.patch.object(api, "setup_status", return_value={}),
+            mock.patch.object(api, "update_status", return_value={}),
+            mock.patch.object(api, "service_states", return_value={}),
+            mock.patch.object(api, "portal_entries", return_value=[]),
+            mock.patch.object(api, "read_optional_text", return_value=None),
+            mock.patch.object(api, "run", return_value=api.CommandResult(0, "", "")),
+        )
+        with contextlib.ExitStack() as stack:
+            for patch in common:
+                stack.enter_context(patch)
+            stack.enter_context(mock.patch.object(api, "backup_status", return_value=backup))
+            self.assertEqual(api.overview()["backup"], backup)
+        with contextlib.ExitStack() as stack:
+            for patch in common:
+                stack.enter_context(patch)
+            stack.enter_context(mock.patch.object(api, "backup_status", side_effect=OSError("boom")))
+            value = api.overview()
+        self.assertFalse(value["backup"]["ok"])
+        self.assertIn("reference", value["backup"]["error"])
+        self.assertNotIn("boom", value["backup"]["error"])
+
     def completed(self, *, returncode: int = 0, stdout: str = "", stderr: str = ""):
         return mock.Mock(returncode=returncode, stdout=stdout, stderr=stderr)
 

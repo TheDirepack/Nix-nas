@@ -24,6 +24,17 @@
         "tests/test_contract_operations.py"
       ]
     },
+    "nas-backup-status": {
+      "fuzzStrategy": "unknown-argv",
+      "sources": [
+        "services/nas_backup_status.py",
+        "modules/nas/internal/account-tools.nix"
+      ],
+      "systemTest": "tests/vm/guest-test.sh",
+      "tests": [
+        "tests/test_backup_status.py"
+      ]
+    },
     "nas-cockpit-api": {
       "fuzzStrategy": "unknown-argv",
       "sources": [
@@ -343,7 +354,11 @@
       "tests": [
         "tests/test_contract_operations.py",
         "tests/test_contract_tooling.py",
-        "tests/test_maintainer_scripts.py"
+        "tests/test_maintainer_scripts.py",
+        "tests/test_update_external_probe.py",
+        "tests/test_update_readiness.py",
+        "tests/test_update_runtime.py",
+        "tests/test_update_status.py"
       ]
     },
     "scripts/validate-cockpit-jsx.cjs": {
@@ -413,6 +428,9 @@
     }
   },
   "pythonModules": {
+    "services/nas_backup_status.py": [
+      "tests/test_backup_status.py"
+    ],
     "services/nas_cockpit_api.py": [
       "tests/test_adversarial_security.py",
       "tests/test_cockpit_api.py",

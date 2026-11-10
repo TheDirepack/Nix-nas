@@ -219,7 +219,7 @@ Before building closures, CI evaluates the appliance plus each reusable profile 
 nix develop .#qemu-test -c ./scripts/qemu-test.sh all
 ```
 
-The negative fixtures currently cover loopback/duplicate trusted interfaces, invalid ZFS dataset roots, privileged TFTP ports, same-dataset replication destinations, and firewall/networking contradictions. A fixture that evaluates successfully—or fails for some unrelated reason—is a test failure.
+The negative fixtures currently cover loopback/duplicate trusted interfaces, invalid ZFS dataset roots, privileged TFTP ports, same-dataset replication destinations, firewall/networking contradictions, retired `nas.backup.remote.*` options and unacknowledged local Restic repositories. A fixture that evaluates successfully—or fails for some unrelated reason—is a test failure. `tests/nixos/valid/` holds paired fixtures that must evaluate and whose own assertions check the generated Restic units and runtime backup policy. `tests/nixos/backup-policy-eval.nix` evaluates the pure backup policy and option migration as a positive/negative matrix.
 
 The heavyweight matrix deliberately uses different system lifecycle paths:
 

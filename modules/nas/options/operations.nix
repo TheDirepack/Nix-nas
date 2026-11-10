@@ -1,6 +1,28 @@
 { lib, ... }:
 
+let
+  retiredRemote = [ "nas" "backup" "remote" ];
+  remoteMigration = ''
+    Restic reads rclone and every other backend natively through
+    nas.backup.repositoryFile. Write the repository (for example
+    rclone:gdrive:nas-backup; the retired provider default was
+    rclone:<rcloneRemote>, or rclone:<provider>:nas-backup when rcloneRemote
+    was empty) to a root-owned 0600 file and set nas.backup.repositoryFile to
+    that file.
+  '';
+in
 {
+  imports = [
+    (lib.mkRemovedOptionModule (retiredRemote ++ [ "enable" ]) remoteMigration)
+    (lib.mkRemovedOptionModule (retiredRemote ++ [ "provider" ]) remoteMigration)
+    (lib.mkRemovedOptionModule (retiredRemote ++ [ "rcloneRemote" ]) remoteMigration)
+    (lib.mkRemovedOptionModule (retiredRemote ++ [ "scope" ]) ''
+      It never limited what was backed up: nas-boot-system always backs up its
+      complete profile to the configured repository. Remove the setting.
+    '')
+    (lib.mkRenamedOptionModule (retiredRemote ++ [ "rcloneConfigFile" ]) [ "nas" "backup" "rcloneConfigFile" ])
+  ];
+
   options.nas = {
     alerting.enable = lib.mkOption {
       type = lib.types.bool;
@@ -29,7 +51,20 @@
       repositoryFile = lib.mkOption {
         type = lib.types.str;
         default = "";
-        description = "Optional secret file containing an external Restic repository URL. When set, it overrides localRepository.";
+        example = "/run/secrets/restic-repository";
+        description = ''
+          Private file containing the Restic repository (Restic --repository-file).
+          This is the only way to configure an off-pool repository, including any
+          Restic backend such as sftp:, rest:, s3:, b2: or rclone:<remote>:<path>.
+          When set, it overrides localRepository. nas-backup-status rejects a file
+          that names a path on the managed pool as an independent repository.
+        '';
+      };
+      rcloneConfigFile = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        example = "/run/secrets/rclone.conf";
+        description = "Private rclone.conf used when nas.backup.repositoryFile names an rclone: repository. Empty uses rclone's default configuration location.";
       };
       passwordFile = lib.mkOption {
         type = lib.types.str;
@@ -68,34 +103,6 @@
           description = "Disk-backed scratch directory used only for isolated restore verification.";
         };
       };
-      remote = {
-        enable = lib.mkOption {
-          type = lib.types.bool;
-          default = false;
-          description = "Enable remote backup destination via rclone (Google Drive, iCloud, pCloud, S3, etc.). When disabled, backups stay local (or use repositoryFile).";
-        };
-        provider = lib.mkOption {
-          type = lib.types.enum [ "local" "gdrive" "icloud" "pcloud" "s3" "b2" "rclone" ];
-          default = "local";
-          description = "Remote provider for restic+rclone. Use gdrive/icloud/pcloud/s3/b2/rclone; local keeps restic on ZFS.";
-        };
-        scope = lib.mkOption {
-          type = lib.types.enum [ "config-only" "all" ];
-          default = "config-only";
-          description = "What to send to the remote. config-only = boot system + Caddy/Authentik/Syncthing/Keepass key material (needed for remote sign-in route recovery); all = also user app data via V2 storageResources.";
-        };
-        rcloneRemote = lib.mkOption {
-          type = lib.types.str;
-          default = "";
-          example = "gdrive:nas-backup";
-          description = "Rclone remote target (e.g. gdrive:nas-backup, s3:bucket/prefix). Empty derives from provider.";
-        };
-        rcloneConfigFile = lib.mkOption {
-          type = lib.types.str;
-          default = "";
-          description = "Absolute path to rclone.conf with credentials. Empty uses default location.";
-        };
-      };
     };
 
     autoUpdate = {
@@ -112,8 +119,31 @@
       apply = lib.mkOption {
         type = lib.types.bool;
         default = false;
-        description = "Automatically activate the exact reviewed checkout after successful build and health checks. When false, scheduled runs validate/fetch/build only and leave the active system unchanged.";
+        description = "Automatically activate the exact reviewed checkout after successful build and health checks. When false, scheduled runs validate/fetch/build only and leave the active system unchanged. Requires nas.update.externalProbeCommand.";
       };
+    };
+
+    update.externalProbeCommand = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = lib.literalExpression ''[ "''${pkgs.openssh}/bin/ssh" "-o" "BatchMode=yes" "probe@monitor.lan" "check-nas-reachability" ]'';
+      description = ''
+        Independent management reachability probe that nas-update runs, as an
+        argument vector without a shell, after a candidate generation passes
+        local health checks and again after it becomes persistent. A nonzero
+        exit rolls the update back. The command must confirm that the NAS
+        management path is reachable from outside this host, for example by
+        asking a second machine to load the NAS sign-in page.
+
+        The first element must be an absolute executable path. Arguments are
+        stored in the Nix store and the process environment, so they must not
+        contain credentials; let the probe read secrets from its own private file.
+
+        While this is empty, persistent deployment is unavailable: Cockpit
+        disables Apply, nas-update --apply refuses before building, and
+        nas.autoUpdate.apply cannot be enabled. Only an administrator on the
+        recovery plane may use nas-update --apply --allow-local-health-only.
+      '';
     };
   };
 }

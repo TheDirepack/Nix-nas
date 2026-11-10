@@ -307,11 +307,43 @@ test("unavailable CLI probes never render an empty successful health result", as
   const data = overview();
   data.failedUnits = null;
   data.zfs = {healthy: null, stateLabel: "Status unavailable"};
+  data.backup = {ok: false, error: "Backup policy is unavailable", rows: []};
   await installCockpitMock(page, {payload: data});
   await page.goto("/index.html");
   await expect(page.getByText("Failed-unit status unavailable. Refresh to retry.")).toBeVisible();
   await expect(page.getByText("No failed units reported.")).toHaveCount(0);
-  await expect(page.getByText("Status unavailable", {exact: true})).toBeVisible();
+  const card = (title) =>
+    page.locator(".pf-v6-c-card").filter({has: page.getByText(title, {exact: true})});
+  await expect(card("ZFS").getByText("Status unavailable", {exact: true})).toBeVisible();
+  const backup = card("Backup");
+  await expect(backup.getByText("Status unavailable", {exact: true})).toBeVisible();
+  await expect(backup.getByText("Backup policy is unavailable")).toBeVisible();
+  await expect(backup.getByText("Succeeded")).toHaveCount(0);
+});
+
+test("source page explains and disables an update apply that nas-update would refuse", async ({
+  page,
+}) => {
+  const message =
+    "Applying an update requires an independent management probe. Set nas.update.externalProbeCommand in the NixOS configuration.";
+  const data = overview();
+  data.update.applyBlockers = [{code: "external-probe-unconfigured", message}];
+  await openApp(page, {payload: data});
+  await page.locator(".pf-v6-c-nav").getByText("Source & updates", {exact: true}).click();
+  await expect(page.getByText("Applying updates is unavailable")).toBeVisible();
+  await expect(page.getByText(message)).toBeVisible();
+  await expect(page.getByRole("button", {name: "Apply validated candidate"})).toBeDisabled();
+  await expect(page.getByRole("button", {name: "Validate candidate"})).toBeEnabled();
+  await expect(page.getByRole("button", {name: "Fetch approved update"})).toBeEnabled();
+});
+
+test("source page offers update apply only when nas-update reports no blockers", async ({page}) => {
+  const data = overview();
+  data.update.applyBlockers = [];
+  await openApp(page, {payload: data});
+  await page.locator(".pf-v6-c-nav").getByText("Source & updates", {exact: true}).click();
+  await expect(page.getByRole("button", {name: "Apply validated candidate"})).toBeEnabled();
+  await expect(page.getByText("Applying updates is unavailable")).toHaveCount(0);
 });
 
 for (const [name, payload] of hostileDisplayCorpus) {

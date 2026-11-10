@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  backupRows,
   managedApplicationLinks,
   managedServiceMap,
   managedServiceOperationsBusy,
@@ -11,6 +12,7 @@ import {
   safeInternalPath,
   setupModel,
   staticLinks,
+  updateApplyModel,
   visibleOperations,
 } from "../../cockpit/src/view-model.js";
 
@@ -136,4 +138,69 @@ test("backend link destinations remain same-origin root-relative paths", () => {
   ]) {
     assert.equal(safeInternalPath(value), null, String(value));
   }
+});
+
+test("backup rows render CLI observations and never infer success", () => {
+  const rows = backupRows({
+    backup: {
+      rows: [
+        {
+          id: "repository",
+          label: "Restic repository",
+          state: "attention",
+          summary: "Same pool",
+          detail: "x",
+        },
+        {id: "last-backup", label: "Last backup", state: "succeeded", summary: "Succeeded"},
+        null,
+        {label: "missing id"},
+      ],
+    },
+  });
+  assert.deepEqual(
+    rows.map((row) => [row.id, row.state]),
+    [
+      ["repository", "attention"],
+      ["last-backup", "unavailable"],
+    ],
+  );
+  for (const data of [
+    {},
+    {backup: null},
+    {backup: {rows: []}},
+    {backup: {ok: false, error: "Policy missing", rows: []}},
+  ]) {
+    const [row] = backupRows(data);
+    assert.equal(row.state, "unavailable");
+    assert.equal(row.summary, "Status unavailable");
+  }
+  assert.equal(
+    backupRows({backup: {error: "Policy missing", rows: []}})[0].detail,
+    "Policy missing",
+  );
+});
+
+test("update apply availability renders nas-update admission and fails closed", () => {
+  assert.deepEqual(updateApplyModel({applyBlockers: []}), {available: true, reasons: []});
+  assert.deepEqual(
+    updateApplyModel({
+      applyBlockers: [
+        {
+          code: "external-probe-unconfigured",
+          message: "Set nas.update.externalProbeCommand.",
+        },
+        {code: "external-probe-invalid"},
+      ],
+    }),
+    {
+      available: false,
+      reasons: ["Set nas.update.externalProbeCommand.", "external-probe-invalid"],
+    },
+  );
+  for (const unavailable of [undefined, null, [], {}, {applyBlockers: "none"}]) {
+    assert.equal(updateApplyModel(unavailable).available, false);
+  }
+  assert.deepEqual(updateApplyModel({ok: false, error: "nas-update failed"}).reasons, [
+    "nas-update failed",
+  ]);
 });
