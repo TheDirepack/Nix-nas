@@ -25,7 +25,7 @@ The base NAS module keeps optional applications disabled. Import the focused pro
 - TFTP is anonymous and disabled by default. Enabling writes is appropriate only on an isolated provisioning network.
 - The NUT monitor password must be readable at boot because UPS shutdown cannot depend on KeePassXC activation.
 - `autoUpdate.apply = false` fetches and validates reviewed revisions without deploying them automatically.
-- `backup.repositoryFile` is the only way to configure an off-pool Restic repository, including `rclone:` and other Restic backends. A `backup.localRepository` requires `backup.allowSamePoolRepository = true` and is local rollback only. Production readiness requires an off-pool repository file or enabled ZFS replication; at boot, `nas-backup-status check-readiness` also rejects a repository file that names a path on the managed pool. The former `backup.remote.*` options are retired (see [Backups](backups.md#off-pool-repository)).
+- `backup.repositoryFile` is the only way to configure an off-pool Restic repository. `backup.localRepository` is local rollback only and requires `backup.allowSamePoolRepository = true`. Production readiness requires an off-pool repository file or enabled ZFS replication. Readiness rules and migration from `backup.remote.*` are in [Backups](backups.md#off-pool-repository).
 - `backup.restoreVerification` controls the scheduled isolated restore test and must point to disk-backed scratch storage outside `/run`.
 
 See the focused networking, storage, backup, CopyParty, and virtualization/power pages for operational details.

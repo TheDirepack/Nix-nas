@@ -44,7 +44,7 @@ The job always backs up its complete profile. There is no partial or "config-onl
 - `remote.scope`: delete it. It never limited what was backed up.
 - `remote.rcloneConfigFile`: still accepted, with a warning, as `nas.backup.rcloneConfigFile`. It is valid only with `repositoryFile`.
 
-A top-level `backup.remote` block in `services.yaml` was never applied. A block that only holds the old defaults is dropped. Any other value stops validation until you remove it and configure the repository in Nix.
+A top-level `backup.remote` block in `services.yaml` was never applied. A block that only holds the old defaults is dropped. Any other value fails validation, so Cockpit mode changes and desired-state saves fail until it is gone. The Cockpit form cannot remove it, because the schema no longer has a `backup` property. Configure the repository in Nix, then delete the whole top-level `backup:` block from `/var/lib/nas-control/services.yaml`, either in the raw YAML editor or on the console.
 
 ### Status in Cockpit
 

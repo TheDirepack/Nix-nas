@@ -390,7 +390,7 @@ class ReadinessTests(unittest.TestCase):
                 mountinfo = overrides.pop("mountinfo", None)
                 fixture = PolicyFixture(case_root, **overrides)
                 if mountinfo is not None:
-                    fixture.mountinfo.write_text(mountinfo, encoding="utf-8")
+                    fixture.mountinfo.write_text(str(mountinfo), encoding="utf-8")
                 if repository is not None:
                     fixture.repository(repository)
                 code, out, err = fixture.main("check-readiness")
