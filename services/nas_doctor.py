@@ -133,7 +133,13 @@ def _setup_checks() -> list[Check]:
             checks.append(Check("setup.state", "ok", "Setup state is complete and bound to a plan digest"))
     elif state is None:
         status = first.get("status") if first else None
-        if status in {"ready", "configuration-invalid", "missing-config"}:
+        if status in {
+            "ready",
+            "configuration-invalid",
+            "missing-config",
+            "manual-recovery-required",
+            "journal-invalid",
+        }:
             checks.append(Check("setup.state", "info", f"Initial setup is not complete ({status})"))
         else:
             checks.append(Check("setup.state", "warning", "Setup state is absent and first-start readiness is unknown"))

@@ -8,7 +8,7 @@
 | Validation | `modules/nas/config/validation.nix` | Evaluation-time safety assertions. |
 | Core services | `modules/nas/config/systemd-services.nix`, `application-services.nix` | Native upstream applications and appliance units. |
 | Managed Services V2 | `managed-services.nix`, `managed-services-seed-v2.nix`, `managed-services-helpers.nix`, `managed-services-lifecycle.nix`, `managed-services-authentik-blueprint.nix`, `managed-services-backup-profile.nix`, `managed-services-compose-import.nix`, `managed-services-generations.nix`, `managed-services-network-platform.nix`, `managed-services-transactions.nix` (all under `modules/nas/config/`) | Single complete V3 seed (baseline + operations + backup + platform), seed-once bootstrap, finite reconciliation; no continuous regeneration. Shared helpers (`daemon`, `job`, `portListener`, etc.) live once in `managed-services-helpers.nix`; generations, transactions, backup, network, compose-import, and blueprint fragments are split per concern but aggregated in the seed. |
-| Proxy/auth | `modules/nas/config/reverse-proxy.nix`, `caddy-bootstrap.nix`, `modules/nas/internal/caddy-helpers.nix`, `services/nas_v2_caddy.py` | Caddy + Authentik trusted-header and request-time authorization boundary. `caddy-bootstrap.nix` selects static setup guidance before activation and the managed configuration after it; app routes are data in `services.yaml`, not Caddy branches. |
+| Proxy/auth | `modules/nas/config/reverse-proxy.nix`, `caddy-bootstrap.nix`, `modules/nas/internal/caddy-helpers.nix`, `services/nas_v2_caddy.py` | Caddy + Authentik trusted-header and request-time authorization boundary. `caddy-bootstrap.nix` selects the Authentik-gated first-start routes before setup, a static locked notice after setup while secrets are inactive, and the managed configuration after activation; app routes are data in `services.yaml`, not Caddy branches. |
 | Storage | `modules/nas/config/storage-monitoring.nix`, `modules/nas/internal/zfs-tools.nix` | ZFS, snapshots, restore verification, replication, and Restic integration. |
 | Observability | `modules/nas/config/observability.nix`, `alertmanager-ntfy.nix`, `scripts/lib/render-alertmanager-ntfy-config.py` | VictoriaMetrics, Telegraf, vmalert, upstream Alertmanager, optional Grafana/ntfy bridge and runtime credentials. |
 | Identity/capability policy | `services/nas_v2_authentik_blueprint.py`, `schemas/managed-services-v3.schema.json` | Appliance identity capability/group contract; V2 creates `application.<service>.<capability>` objects, never assignments. |
@@ -82,7 +82,7 @@ offline error format.
 - `cockpit/src/app.scss`: NAS-specific layout only; PatternFly owns component styling.
 - `cockpit/build.js`: Starter Kit style esbuild/Sass source-to-package build and source-hash stale-output check.
 - `cockpit/dist/`: generated React/PatternFly package payload installed by Nix; never edit it directly.
-- `web/portal/`: static Caddy templates (launcher and locked-boot setup page), not application services.
+- `web/locked/`: the static locked-boot unlock notice Caddy serves after setup while secrets are inactive.
 
 Pure Cockpit API and view-model behavior has direct Node coverage. JSX component composition is checked structurally and through the built browser package in CI.
 
@@ -104,4 +104,4 @@ Pure Cockpit API and view-model behavior has direct Node coverage. JSX component
 - `policy/mkforce-allowlist.json`: the reviewed `lib.mkForce` allowlist validated by preflight.
 - `installation/`: operator-facing disk-formatting examples (Disko) and pool layout guidance.
 - `setup/`: first-run configuration examples plus the committed first-run wizard bundle (`setup/first-run-wizard/`).
-- `web/portal/`: static Caddy templates for the launcher and locked-boot setup page.
+- `web/locked/`: static locked-boot unlock notice (no scripts, forms, or proxied routes).

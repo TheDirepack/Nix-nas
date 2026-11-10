@@ -1141,56 +1141,30 @@ def setup_fingerprint(
     return hashlib.sha256(payload).hexdigest()
 
 
-def _remove_setup_application() -> dict[str, Any]:
+def retire_setup_application() -> dict[str, Any]:
     """Remove the one-time setup application before bootstrap authority retirement."""
     try:
         SETUP_BLUEPRINT_PATH.unlink(missing_ok=True)
     except OSError as exc:
         raise SetupError("Unable to remove the mutable Authentik setup blueprint") from exc
-    token_path = pathlib.Path(
-        os.environ.get("NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE", "/run/nas-secrets/authentik/bootstrap-token")
-    )
+    completed = run_root(coordinated_child(["nas-identity-sync", "retire-setup-application"]))
     try:
-        token = token_path.read_text(encoding="utf-8").strip()
-    except OSError as exc:
-        raise SetupError("Authentik bootstrap token is unavailable for setup application retirement") from exc
-    if not token:
-        raise SetupError("Authentik bootstrap token is empty during setup application retirement")
+        value = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise SetupError("nas-identity-sync returned invalid setup-application JSON") from exc
+    if not setup_application_retired(value):
+        raise SetupError("nas-identity-sync did not prove the setup application is absent")
+    return value
 
-    # Authentik listens on 127.0.0.1:9000 with the configured path prefix.
-    # Try both the canonical and the bare API path for robustness across
-    # generations.
-    import urllib.error
-    import urllib.request
 
-    bases = [
-        "http://127.0.0.1:9000/identity/api/v3",
-        "http://127.0.0.1:9000/api/v3",
-    ]
-    last_error: str | None = None
-    not_found_count = 0
-    for base in bases:
-        url = f"{base}/core/applications/{SETUP_APPLICATION_SLUG}/"
-        request = urllib.request.Request(url, method="DELETE", headers={"Authorization": f"Bearer {token}"})
-        try:
-            with urllib.request.urlopen(request, timeout=5) as response:
-                # 204 No Content on successful deletion, 200 is also treated as success.
-                if response.status in (200, 201, 202, 204):
-                    return {"removed": True, "slug": SETUP_APPLICATION_SLUG}
-        except urllib.error.HTTPError as exc:
-            # A 404 from one API base does not mean the application is absent
-            # everywhere; only a 404 from every base proves it is gone.
-            if exc.code == 404:
-                not_found_count += 1
-                continue
-            last_error = f"HTTP {exc.code}"
-            continue
-        except OSError as exc:
-            last_error = str(exc)
-            continue
-    if not_found_count == len(bases):
-        return {"removed": False, "reason": "not-found"}
-    raise SetupError(f"Unable to retire the Authentik setup application: {last_error or 'unknown error'}")
+def setup_application_retired(result: Any) -> bool:
+    # Older journals recorded a successful DELETE as {"removed": true}; a
+    # bare not-found from a guessed API prefix was never proof of absence.
+    return (
+        isinstance(result, Mapping)
+        and result.get("slug") == SETUP_APPLICATION_SLUG
+        and (result.get("absent") is True or result.get("removed") is True)
+    )
 
 
 def install_runtime_identity_token(keepass_password: str) -> dict[str, Any]:
@@ -1714,11 +1688,8 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
             run_setup_stage(
                 journal,
                 "setup-application-retirement",
-                _remove_setup_application,
-                postcondition=lambda result: (
-                    isinstance(result, Mapping)
-                    and (result.get("removed") is True or result.get("reason") == "not-found")
-                ),
+                retire_setup_application,
+                postcondition=setup_application_retired,
             )
             run_setup_stage(
                 journal,
@@ -1947,6 +1918,58 @@ def setup_authority_health(config: Mapping[str, Any]) -> dict[str, Any]:
     return {"ok": all(value is True for value in required), "checks": checks}
 
 
+SETUP_RECOVERY_GUIDANCE = (
+    "Inspect `nas-setup status` from the console or SSH and repair the failed step. Then acknowledge the "
+    "recovery on Cockpit's First start page or with `nas-setup reconcile-first-run --note ...`, and reload "
+    "setup. Retrying uses the same administrator and KeePassXC passwords."
+)
+
+
+def setup_journal_summary(journal: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Return non-secret journal state for an unfinished first-run; step errors stay in the journal."""
+    if journal is None or journal.get("status") in {"complete", "cancelled"}:
+        return None
+    step = journal.get("currentStep")
+    updated = journal.get("updatedAt")
+    return {
+        "schemaVersion": journal.get("schemaVersion"),
+        "workflow": str(journal.get("workflow")),
+        "status": str(journal.get("status")),
+        "step": step if isinstance(step, str) else None,
+        "updatedAt": updated if isinstance(updated, int) else None,
+    }
+
+
+def setup_journal_blocker(summary: Mapping[str, Any] | None) -> str | None:
+    """Explain why a worker would refuse this journal, or None when submission can resume it."""
+    if summary is None:
+        return None
+    if summary["schemaVersion"] != 1 or summary["workflow"] != "first-run-v2":
+        return "The first-run journal belongs to another operation or an unsupported version."
+    if summary["status"] != "manual-recovery-required":
+        return None
+    # The worker completes an interrupted storage step itself once the pool,
+    # dataset and mount verify; that proof needs no operator acknowledgement.
+    if summary["step"] == "storage" and pool_exists() and dataset_exists():
+        return None
+    return f"Setup stopped at {summary['step'] or 'final verification'} and needs manual recovery."
+
+
+def first_start_job_recovery() -> dict[str, Any]:
+    """Report whether a failed job left a journal that blocks a plain retry."""
+    try:
+        journal = setup_journal_summary(load_json(JOURNAL_PATH))
+        blocker = setup_journal_blocker(journal)
+    except (JournalError, OSError, subprocess.SubprocessError) as exc:
+        return {"manualRecovery": {"required": True, "message": f"{exc}. {SETUP_RECOVERY_GUIDANCE}"}}
+    if blocker is None:
+        return {"setupJournal": journal}
+    return {
+        "setupJournal": journal,
+        "manualRecovery": {"required": True, "message": f"{blocker} {SETUP_RECOVERY_GUIDANCE}"},
+    }
+
+
 def first_start_status(config_source: str) -> dict[str, Any]:
     try:
         state = load_json(STATE_PATH)
@@ -2012,6 +2035,24 @@ def first_start_status(config_source: str) -> dict[str, Any]:
     storage = config["storage"]
     devices = [str(item) for item in storage.get("devices", [])]
     pool_present = pool_exists()
+    try:
+        journal = setup_journal_summary(load_json(JOURNAL_PATH))
+    except JournalError as exc:
+        return {
+            "schemaVersion": SCHEMA_VERSION,
+            "status": "journal-invalid",
+            "configPath": config_source,
+            "message": f"{exc}. Repair it from the console or SSH before setup can continue.",
+        }
+    blocker = setup_journal_blocker(journal)
+    if blocker is not None:
+        return {
+            "schemaVersion": SCHEMA_VERSION,
+            "status": "manual-recovery-required",
+            "configPath": config_source,
+            "setupJournal": journal,
+            "message": f"{blocker} {SETUP_RECOVERY_GUIDANCE}",
+        }
     destructive = bool(not pool_present and storage.get("createPool"))
     return {
         "schemaVersion": SCHEMA_VERSION,
@@ -2019,6 +2060,7 @@ def first_start_status(config_source: str) -> dict[str, Any]:
         "configPath": config_source,
         "message": "Enter the KeePassXC database password in Cockpit to continue setup.",
         "planDigest": plan_digest,
+        "setupJournal": journal,
         "requiresPassword": True,
         "requiresDestructiveConfirmation": destructive,
         "storage": {
@@ -2062,10 +2104,19 @@ def prepare_first_start(config_source: str) -> dict[str, Any]:
 
 def reconcile_first_run(note: str) -> dict[str, Any]:
     journal = OperationJournal.acknowledge_manual_recovery(JOURNAL_PATH, workflow="first-run-v2", note=note)
+    metadata = journal.value.get("metadata")
+    config_path = metadata.get("configPath") if isinstance(metadata, Mapping) else None
+    first_start: dict[str, Any] | None = None
+    if isinstance(config_path, str) and config_path:
+        try:
+            first_start = prepare_first_start(config_path)
+        except (SetupError, OSError, subprocess.SubprocessError) as exc:
+            progress(f"acknowledged recovery but could not republish first-start status: {exc}")
     return {
         "ok": True,
         "journal": str(JOURNAL_PATH),
         "status": journal.value["status"],
+        "firstStartStatus": first_start.get("status") if first_start else None,
         "message": "Manual recovery was acknowledged. Re-run first-run with the original inputs to resume.",
     }
 
@@ -2237,6 +2288,7 @@ def run_first_start_job(request_file: pathlib.Path, password_file: pathlib.Path)
                     "status": "failed",
                     "completedAt": int(time.time()),
                     "error": str(exc),
+                    **first_start_job_recovery(),
                 },
             )
         raise

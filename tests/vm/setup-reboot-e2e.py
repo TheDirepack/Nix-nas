@@ -213,7 +213,46 @@ def syncthing_api_key() -> str:
     raise CheckError("Syncthing API key is unavailable")
 
 
+LOCKED_NOTICE_MARKER = 'id="nas-locked"'
+LOCKED_ROUTES = ("/", "/console/", "/setup/", "/setup/api/first-start", "/identity/if/user/", "/shares/")
+
+
+def locked_request(path: str, *extra: str) -> tuple[str, str]:
+    result = run(
+        "curl",
+        "--insecure",
+        "--silent",
+        "--show-error",
+        "--max-time",
+        "20",
+        "--resolve",
+        "nas-test.local:443:127.0.0.1",
+        "--write-out",
+        "\n%{http_code}",
+        *extra,
+        f"https://nas-test.local{path}",
+        timeout=30,
+    )
+    if result.returncode:
+        raise CheckError(f"locked route {path} was unreachable: {result.stderr.strip()[-400:]}")
+    body, _, code = result.stdout.rpartition("\n")
+    return code, body
+
+
+def verify_locked_browser_surface() -> None:
+    """After setup, a locked boot serves only static unlock guidance on every route."""
+    wait_active("caddy.service")
+    for path in LOCKED_ROUTES:
+        code, body = locked_request(path)
+        if code != "503" or LOCKED_NOTICE_MARKER not in body or "nas-secrets activate" not in body:
+            raise CheckError(f"locked route {path} did not return the static unlock notice (HTTP {code})")
+    code, body = locked_request("/setup/api/reboot", "--request", "POST", "--data", "{}")
+    if code not in {"405", "503"} or "rebooting" in body:
+        raise CheckError(f"locked setup API reboot route reached a backend (HTTP {code})")
+
+
 def activate_after_reboot() -> None:
+    verify_locked_browser_surface()
     status = json.loads(require(("nas-setup", "status")))
     if (
         status.get("runtimeSecretsActive")

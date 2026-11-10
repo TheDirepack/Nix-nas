@@ -18,28 +18,19 @@ if str(SERVICES) not in sys.path:
 import nas_setup as setup  # noqa: E402
 
 
-class TestSetupHTML(unittest.TestCase):
-    """Tests for the packaged setup HTML structure and content."""
+class TestBrowserBootstrapPages(unittest.TestCase):
+    """The wizard and the locked notice are the only static setup pages."""
 
-    def test_setup_html_exists(self):
-        """Verify the packaged setup.html file exists."""
-        html_path = pathlib.Path(ROOT / "web/portal/setup.html")
-        self.assertTrue(html_path.exists(), "web/portal/setup.html should exist")
-
-    def test_setup_html_links_to_the_authentik_gated_console(self):
-        """Verify setup.html links to the GUI setup Console."""
-        html_path = pathlib.Path(ROOT / "web/portal/setup.html")
-        content = html_path.read_text()
-        self.assertIn('href="/console/"', content, "setup.html should link to Console")
-        self.assertIn("Sign in to Authentik", content, "setup.html should explain Authentik access")
-        self.assertNotIn('method="POST"', content, "setup.html should not use POST form")
-
-    def test_setup_html_has_canonical_link(self):
-        """Verify setup.html has canonical link to /setup."""
-        html_path = pathlib.Path(ROOT / "web/portal/setup.html")
-        content = html_path.read_text()
-        self.assertIn('rel="canonical"', content, "setup.html should have canonical link")
-        self.assertIn('href="/setup"', content, "Canonical link should point to /setup")
+    def test_unserved_portal_templates_stay_removed(self):
+        # The canonical wizard replaced web/portal/setup.html and Authentik's
+        # library replaced its launcher; web/locked is the served locked page.
+        self.assertFalse((ROOT / "web/portal").exists())
+        self.assertTrue((ROOT / "web/locked/index.html").is_file())
+        for path in (ROOT / "modules").rglob("*.nix"):
+            with self.subTest(path=path.relative_to(ROOT)):
+                text = path.read_text(encoding="utf-8")
+                self.assertNotIn("nasPortalStatic", text)
+                self.assertNotIn("web/portal", text)
 
 
 class TestCaddyConfig(unittest.TestCase):

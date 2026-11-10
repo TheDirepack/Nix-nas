@@ -7,6 +7,7 @@ import './wizard.css';
 import AdminStep from './steps/AdminStep.jsx';
 import StorageStep from './steps/StorageStep.jsx';
 import ConfirmStep from './steps/ConfirmStep.jsx';
+import SetupNotice from './SetupNotice.jsx';
 import { fetchJson } from './http.js';
 
 // @patternfly/react-core 6.1.0 builds wizard steps exclusively from
@@ -52,6 +53,13 @@ const App = () => {
     return () => media?.removeEventListener?.('change', applyTheme);
   }, [theme]);
 
+  const refreshPlan = React.useCallback(() => {
+    // A refreshed plan can list different devices, so any prior destructive
+    // confirmation no longer applies to it.
+    setAllowDestructive(false);
+    setPlanRequest((value) => value + 1);
+  }, []);
+
   React.useEffect(() => {
     let cancelled = false;
     setPlan(null);
@@ -91,6 +99,7 @@ const App = () => {
         </label>
       </header>
       <main className="nas-setup-main">
+        <SetupNotice plan={plan} onRefresh={refreshPlan} />
         <Wizard
           className="nas-setup-wizard"
           navAriaLabel="First-run setup steps"
@@ -119,12 +128,7 @@ const App = () => {
                 setAllowDestructive(false);
                 setPlan(value);
               }}
-              onRefresh={() => {
-                // A refreshed plan can list different devices, so any prior
-                // destructive confirmation no longer applies to it.
-                setAllowDestructive(false);
-                setPlanRequest((value) => value + 1);
-              }}
+              onRefresh={refreshPlan}
             />
           </WizardStep>
           <WizardStep id="wizard-confirm" step={3} name="Confirm and Reboot" footer={<></>}>
@@ -135,6 +139,7 @@ const App = () => {
               allowDestructive={allowDestructive}
               encryptStorage={encryptStorage}
               plan={plan}
+              onRefreshPlan={refreshPlan}
             />
           </WizardStep>
         </Wizard>

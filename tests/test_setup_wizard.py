@@ -156,9 +156,12 @@ class TestWizardSource(unittest.TestCase):
 
     def test_refreshing_the_plan_clears_the_previous_destructive_confirmation(self):
         index = (WIZARD / "src/index.jsx").read_text(encoding="utf-8")
-        refresh = index.split("onRefresh={() => {", 1)[1].split("}}", 1)[0]
+        refresh = index.split("const refreshPlan = React.useCallback(() => {", 1)[1].split("}, []);", 1)[0]
         self.assertIn("setAllowDestructive(false)", refresh)
         self.assertIn("setPlanRequest", refresh)
+        # Every plan refresh (storage step, recovery notice, failed-job recheck) shares it.
+        self.assertEqual(index.count("setPlanRequest("), 1)
+        self.assertEqual(index.count("={refreshPlan}"), 3)
 
     def test_refresh_resumes_without_resubmitting(self):
         confirm = (WIZARD / "src/steps/ConfirmStep.jsx").read_text(encoding="utf-8")

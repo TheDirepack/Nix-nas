@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import email.message
 import io
 import json
 import os
@@ -9,7 +8,7 @@ import pwd
 import sys
 import tempfile
 import unittest
-import urllib.error
+from typing import Any
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -22,39 +21,67 @@ import nas_setup_config as setup_config  # noqa: E402
 
 
 class SetupApplicationRetirementTests(unittest.TestCase):
-    def test_removal_uses_bootstrap_authority(self) -> None:
+    def retire(self, stdout: str) -> tuple[dict[str, object] | None, mock.Mock, pathlib.Path, BaseException | None]:
         with tempfile.TemporaryDirectory() as temporary:
-            token_path = pathlib.Path(temporary) / "bootstrap-token"
-            token_path.write_text("bootstrap-authority\n", encoding="utf-8")
             blueprint_path = pathlib.Path(temporary) / "nas-setup.yaml"
             blueprint_path.write_text("version: 1\n", encoding="utf-8")
-            response = mock.MagicMock()
-            response.__enter__.return_value.status = 204
+            completed = setup.Completed(("nas-identity-sync",), stdout, "")
+            error: BaseException | None = None
+            result = None
             with (
-                mock.patch.dict(os.environ, {"NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE": str(token_path)}),
                 mock.patch.object(setup, "SETUP_BLUEPRINT_PATH", blueprint_path),
-                mock.patch("urllib.request.urlopen", return_value=response) as urlopen,
+                mock.patch.object(setup, "coordinated_child", side_effect=lambda command: ["env", *command]),
+                mock.patch.object(setup, "run_root", return_value=completed) as run_root,
             ):
-                result = setup._remove_setup_application()
-            self.assertFalse(blueprint_path.exists())
+                try:
+                    result = setup.retire_setup_application()
+                except setup.SetupError as exc:
+                    error = exc
+            self.assertFalse(blueprint_path.exists(), "the blueprint must not recreate the application")
+            return result, run_root, blueprint_path, error
 
-        self.assertEqual(result, {"removed": True, "slug": "nas-setup"})
-        request = urlopen.call_args.args[0]
-        self.assertEqual(request.get_header("Authorization"), "Bearer bootstrap-authority")
+    def test_retirement_uses_the_identity_sync_authentik_client(self) -> None:
+        proof = {"absent": True, "removed": True, "slug": "nas-setup"}
+        result, run_root, _blueprint, error = self.retire(json.dumps(proof))
+        self.assertIsNone(error)
+        self.assertEqual(result, proof)
+        run_root.assert_called_once_with(["env", "nas-identity-sync", "retire-setup-application"])
 
-    def test_removal_fails_closed_when_bootstrap_authority_is_rejected(self) -> None:
+    def test_retirement_rejects_output_without_canonical_absence_proof(self) -> None:
+        for stdout in ('{"removed": false, "reason": "not-found"}', '{"slug": "nas-setup"}', "[]", "not-json"):
+            with self.subTest(stdout=stdout):
+                _result, _run_root, _blueprint, error = self.retire(stdout)
+                self.assertIsInstance(error, setup.SetupError)
+
+    def test_resumed_journal_does_not_trust_a_legacy_not_found_result(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            token_path = pathlib.Path(temporary) / "bootstrap-token"
-            token_path.write_text("bootstrap-authority\n", encoding="utf-8")
-            forbidden = urllib.error.HTTPError("http://authentik", 403, "Forbidden", email.message.Message(), None)
-            with (
-                mock.patch.dict(os.environ, {"NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE": str(token_path)}),
-                mock.patch.object(setup, "SETUP_BLUEPRINT_PATH", pathlib.Path(temporary) / "nas-setup.yaml"),
-                mock.patch("urllib.request.urlopen", side_effect=forbidden),
-                self.assertRaisesRegex(setup.SetupError, "HTTP 403"),
-            ):
-                setup._remove_setup_application()
-            forbidden.close()
+            path = pathlib.Path(temporary) / "journal.json"
+            journal = setup.OperationJournal.open(path, workflow="first-run-v2", fingerprint="f" * 64)
+            journal.complete_step("setup-application-retirement", {"removed": False, "reason": "not-found"})
+            action = mock.Mock()
+            with self.assertRaisesRegex(setup.SetupError, "explicit recovery"):
+                setup.run_setup_stage(
+                    journal, "setup-application-retirement", action, postcondition=setup.setup_application_retired
+                )
+            action.assert_not_called()
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["status"], "manual-recovery-required")
+
+    def test_resumed_journal_accepts_recorded_deletions(self) -> None:
+        for recorded in (
+            {"removed": True, "slug": "nas-setup"},
+            {"absent": True, "removed": False, "slug": "nas-setup"},
+        ):
+            with self.subTest(recorded=recorded), tempfile.TemporaryDirectory() as temporary:
+                journal = setup.OperationJournal.open(
+                    pathlib.Path(temporary) / "journal.json", workflow="first-run-v2", fingerprint="f" * 64
+                )
+                journal.complete_step("setup-application-retirement", recorded)
+                action = mock.Mock()
+                result = setup.run_setup_stage(
+                    journal, "setup-application-retirement", action, postcondition=setup.setup_application_retired
+                )
+                self.assertEqual(result, recorded)
+                action.assert_not_called()
 
 
 class BootstrapAuthentikPasswordTests(unittest.TestCase):
@@ -782,6 +809,7 @@ class FirstStartStatusTests(unittest.TestCase):
             state = root / "missing-state.json"
             with (
                 mock.patch.object(setup, "STATE_PATH", state),
+                mock.patch.object(setup, "JOURNAL_PATH", root / "missing-journal.json"),
                 mock.patch.object(setup, "pool_exists", return_value=True),
                 mock.patch.object(setup, "validate_service_request"),
             ):
@@ -789,6 +817,137 @@ class FirstStartStatusTests(unittest.TestCase):
         self.assertEqual(result["status"], "ready")
         self.assertEqual(result["serviceCount"], 1)
         self.assertNotIn("featureCount", result)
+
+    def status_with_journal(
+        self, journal: dict[str, object] | str | None, *, pool: bool = True, dataset: bool = True
+    ) -> dict[str, Any]:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            config = self.config_file(root)
+            journal_path = root / "first-run-journal.json"
+            if isinstance(journal, str):
+                journal_path.write_text(journal, encoding="utf-8")
+            elif journal is not None:
+                journal_path.write_text(json.dumps(journal), encoding="utf-8")
+            with (
+                mock.patch.object(setup, "STATE_PATH", root / "missing-state.json"),
+                mock.patch.object(setup, "JOURNAL_PATH", journal_path),
+                mock.patch.object(setup, "pool_exists", return_value=pool),
+                mock.patch.object(setup, "dataset_exists", return_value=dataset),
+                mock.patch.object(setup, "validate_service_request"),
+            ):
+                return setup.first_start_status(str(config))
+
+    @staticmethod
+    def journal(status: str, step: str | None, **extra: object) -> dict[str, object]:
+        return {
+            "schemaVersion": 1,
+            "workflow": "first-run-v2",
+            "fingerprint": "f" * 64,
+            "status": status,
+            "currentStep": step,
+            "updatedAt": 1700000000,
+            "steps": {step: {"status": "failed", "error": "SECRET-BEARING STEP DETAIL"}} if step else {},
+            **extra,
+        }
+
+    def test_manual_recovery_journal_is_reported_before_submission(self) -> None:
+        result = self.status_with_journal(self.journal("manual-recovery-required", "identity-database-regeneration"))
+        self.assertEqual(result["status"], "manual-recovery-required")
+        self.assertNotIn("planDigest", result, "a blocked plan must not be confirmable")
+        self.assertEqual(
+            result["setupJournal"],
+            {
+                "schemaVersion": 1,
+                "workflow": "first-run-v2",
+                "status": "manual-recovery-required",
+                "step": "identity-database-regeneration",
+                "updatedAt": 1700000000,
+            },
+        )
+        self.assertIn("identity-database-regeneration", str(result["message"]))
+        self.assertIn("reconcile-first-run", str(result["message"]))
+        self.assertNotIn("SECRET-BEARING", json.dumps(result))
+
+    def test_verifiable_storage_recovery_stays_submittable(self) -> None:
+        journal = self.journal("manual-recovery-required", "storage")
+        resumable = self.status_with_journal(journal, pool=True, dataset=True)
+        self.assertEqual(resumable["status"], "ready")
+        self.assertEqual(resumable["setupJournal"]["status"], "manual-recovery-required")
+        for pool, dataset in ((False, False), (True, False)):
+            with self.subTest(pool=pool, dataset=dataset):
+                blocked = self.status_with_journal(journal, pool=pool, dataset=dataset)
+                self.assertEqual(blocked["status"], "manual-recovery-required")
+
+    def test_interrupted_and_acknowledged_journals_remain_resumable(self) -> None:
+        for status in ("failed", "reconciled", "running"):
+            with self.subTest(status=status):
+                result = self.status_with_journal(self.journal(status, "identity-accounts"))
+                self.assertEqual(result["status"], "ready")
+                self.assertEqual(result["setupJournal"]["status"], status)
+                self.assertEqual(result["setupJournal"]["step"], "identity-accounts")
+        for journal in (None, self.journal("complete", None), self.journal("cancelled", None)):
+            with self.subTest(journal=journal):
+                result = self.status_with_journal(journal)
+                self.assertEqual(result["status"], "ready")
+                self.assertIsNone(result["setupJournal"])
+
+    def test_unusable_journal_blocks_submission(self) -> None:
+        invalid = self.status_with_journal("{not json")
+        self.assertEqual(invalid["status"], "journal-invalid")
+        self.assertNotIn("planDigest", invalid)
+        for journal in (
+            self.journal("running", "storage", workflow="identity-accounts"),
+            self.journal("failed", "storage", schemaVersion=2),
+        ):
+            with self.subTest(journal=journal):
+                self.assertEqual(self.status_with_journal(journal)["status"], "manual-recovery-required")
+
+    def test_failed_job_document_reports_a_blocking_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            journal_path = pathlib.Path(tmp) / "journal.json"
+            journal_path.write_text(
+                json.dumps(self.journal("manual-recovery-required", "bootstrap-authority-retirement")),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(setup, "JOURNAL_PATH", journal_path),
+                mock.patch.object(setup, "pool_exists", side_effect=AssertionError("pool probe not needed")),
+            ):
+                blocked = setup.first_start_job_recovery()
+            journal_path.write_text(json.dumps(self.journal("failed", "identity-accounts")), encoding="utf-8")
+            with mock.patch.object(setup, "JOURNAL_PATH", journal_path):
+                retryable = setup.first_start_job_recovery()
+        self.assertIs(blocked["manualRecovery"]["required"], True)
+        self.assertIn("bootstrap-authority-retirement", blocked["manualRecovery"]["message"])
+        self.assertNotIn("manualRecovery", retryable)
+        self.assertEqual(retryable["setupJournal"]["status"], "failed")
+
+    def test_acknowledgement_republishes_first_start_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            config = self.config_file(root)
+            journal_path = root / "journal.json"
+            journal_path.write_text(
+                json.dumps(
+                    self.journal("manual-recovery-required", "identity-accounts", metadata={"configPath": str(config)})
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(setup, "STATE_PATH", root / "missing-state.json"),
+                mock.patch.object(setup, "JOURNAL_PATH", journal_path),
+                mock.patch.object(setup, "pool_exists", return_value=True),
+                mock.patch.object(setup, "validate_service_request"),
+                mock.patch.object(setup, "publish_first_start_status") as publish,
+            ):
+                self.assertEqual(setup.first_start_status(str(config))["status"], "manual-recovery-required")
+                result = setup.reconcile_first_run("repaired the Authentik database from the console")
+            published = publish.call_args.args[0]
+        self.assertEqual(result["status"], "reconciled")
+        self.assertEqual(result["firstStartStatus"], "ready")
+        self.assertEqual(published["status"], "ready")
+        self.assertEqual(published["setupJournal"]["status"], "reconciled")
 
     def test_confirmed_plan_digest_must_match_normalized_v2_plan(self) -> None:
         config = setup_config.normalize_config(

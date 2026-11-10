@@ -736,6 +736,89 @@ class SetupApiCapabilityTests(unittest.TestCase):
         finally:
             client.close()
 
+    def test_manual_recovery_is_visible_and_blocks_submission_until_acknowledged(self) -> None:
+        import nas_setup as setup
+
+        root = pathlib.Path(self.temporary.name)
+        config = root / "first-run.json"
+        config.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 2,
+                    "storage": {"createPool": False},
+                    "accounts": [],
+                    "services": {},
+                    "runPreflight": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        journal_path = root / "first-run-journal.json"
+        journal = setup.OperationJournal.open(
+            journal_path, workflow="first-run-v2", fingerprint="f" * 64, metadata={"configPath": str(config)}
+        )
+        journal.fail_step("identity-database-regeneration", "detail kept in the journal", manual_recovery=True)
+
+        def setup_cli(command, **_kwargs):
+            # The API consumes the CLI's JSON; serve it from the real status code.
+            self.assertEqual(command, [api._setup_entry(), "prepare-first-start", "--config", api.FIRST_RUN_CONFIG])
+            return api.CommandResult(0, json.dumps(setup.first_start_status(str(config))), "")
+
+        submission = {
+            "password": "database-password",
+            "planDigest": setup.setup_plan_digest(setup.normalize_config(json.loads(config.read_text()))),
+            "devices": [],
+            "allowDestructiveStorage": False,
+            "encryptStorage": True,
+            "administrator": {
+                "username": "nasadmin",
+                "name": "NAS Administrator",
+                "email": "admin@example.test",
+                "password": "administrator-password",
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            _, socket_path = self.live_server(directory)
+            with (
+                mock.patch.object(setup, "STATE_PATH", root / "missing-state.json"),
+                mock.patch.object(setup, "JOURNAL_PATH", journal_path),
+                mock.patch.object(setup, "pool_exists", return_value=True),
+                mock.patch.object(setup, "publish_first_start_status"),
+                mock.patch.object(api, "run", side_effect=setup_cli),
+                mock.patch.object(
+                    api, "reserve_operation", side_effect=api.OperationBusyError("reservation reached")
+                ) as reserve,
+            ):
+                status, blocked = self.exchange(socket_path, "GET", "/setup/api/first-start")
+                self.assertIn(b"200", status)
+                self.assertEqual(blocked["status"], "manual-recovery-required")
+                self.assertEqual(blocked["setupJournal"]["step"], "identity-database-regeneration")
+                self.assertNotIn("planDigest", blocked)
+                self.assertNotIn("detail kept in the journal", json.dumps(blocked))
+
+                status, refused = self.exchange(socket_path, "POST", "/setup/api/first-run", body=submission)
+                self.assertIn(b"400", status)
+                self.assertIn("needs manual recovery", refused["error"])
+                reserve.assert_not_called()
+                status, _ = self.exchange(socket_path, "POST", "/setup/api/first-start/resume", body={})
+                self.assertIn(b"404", status)
+                self.assertEqual(
+                    json.loads(journal_path.read_text(encoding="utf-8"))["status"],
+                    "manual-recovery-required",
+                    "browser requests must never acknowledge manual recovery",
+                )
+
+                setup.reconcile_first_run("repaired the identity database from the console")
+                status, ready = self.exchange(socket_path, "GET", "/setup/api/first-start")
+                self.assertIn(b"200", status)
+                self.assertEqual(ready["status"], "ready")
+                self.assertEqual(ready["setupJournal"]["status"], "reconciled")
+                status, admitted = self.exchange(socket_path, "POST", "/setup/api/first-run", body=submission)
+            self.assertIn(b"400", status)
+            self.assertIn("reservation reached", admitted["error"])
+            reserve.assert_called_once()
+            self.assertIsNone(api.read_active_setup_job())
+
     def test_job_id_in_url_no_longer_authorizes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             _, socket_path = self.live_server(directory)

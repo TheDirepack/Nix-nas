@@ -12,8 +12,7 @@ let
   ;
   authentikPathNoSlash = lib.removeSuffix "/" cfg.identity.authentikPath;
   activeCaddyPath = "/run/nas-control/caddy-active.conf";
-  bootstrapCaddyfileGen = pkgs.writeShellScript "bootstrap-caddyfile-gen" ''
-    cat <<'EOCF'
+  caddyGlobalOptions = ''
 {
   log {
     output file ${config.services.caddy.logDir}/access.log {
@@ -25,8 +24,8 @@ let
     format json
   }
 }
-
-https://${lanHost} {
+'';
+  caddySiteHeaders = ''
   tls internal
   encode zstd gzip
   ${builtins.readFile ../../../services/nas_policy/proxy-probes.caddy}
@@ -39,6 +38,34 @@ https://${lanHost} {
     Cross-Origin-Opener-Policy "same-origin"
     Cross-Origin-Resource-Policy "same-origin"
   }
+'';
+  lockedNotice = pkgs.runCommand "nas-locked-notice" { } ''
+    install -D -m 0444 ${../../../web/locked/index.html} "$out/share/nas-locked/index.html"
+  '';
+  # Completed setup with inactive secrets. The recovery plane owns unlock, so
+  # this configuration proxies nothing: every path gets the same static notice.
+  lockedCaddyfile = pkgs.writeText "locked-caddyfile" ''
+${caddyGlobalOptions}
+https://${lanHost} {
+${caddySiteHeaders}
+  header {
+    Cache-Control "no-store"
+    Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+  }
+  handle {
+    root * ${lockedNotice}/share/nas-locked
+    rewrite * /index.html
+    file_server {
+      status 503
+    }
+  }
+}
+'';
+  bootstrapCaddyfileGen = pkgs.writeShellScript "bootstrap-caddyfile-gen" ''
+    cat <<'EOCF'
+${caddyGlobalOptions}
+https://${lanHost} {
+${caddySiteHeaders}
 
   handle / {
     redir * ${cfg.identity.authentikPath}if/user/ 303
@@ -144,6 +171,7 @@ EOCF
     authorityLockPath="${authorityLockPath}"
     historyRepoPath="${historyRepoPath}"
     bootstrapImport="import ${bootstrapCaddyfile}"
+    lockedImport="import ${lockedCaddyfile}"
     fullImport=${lib.escapeShellArg fullCaddyImport}
 
     exec 9>${lib.escapeShellArg selectorLockPath}
@@ -163,6 +191,9 @@ EOCF
     select_bootstrap() {
       write_active "$bootstrapImport"
     }
+    select_locked() {
+      write_active "$lockedImport"
+    }
     select_full() {
       write_active "$fullImport"
     }
@@ -170,7 +201,11 @@ EOCF
       ${caddyPackage}/bin/caddy reload ${runOptions} --force
     }
     reload_bootstrap() {
-      select_bootstrap
+      reload_selected select_bootstrap
+    }
+    # A failed reload cannot safely leave other routes in memory, so stop Caddy.
+    reload_selected() {
+      "$1"
       if ${pkgs.systemd}/bin/systemctl is-active --quiet caddy.service; then
         if ! reload_caddy; then
           ${pkgs.systemd}/bin/systemctl stop --no-block caddy.service
@@ -214,6 +249,13 @@ EOCF
       ${pkgs.coreutils}/bin/rm -rf "$validation_root"
       return "$status"
     }
+
+    # After setup, a locked appliance exposes only the static notice; the
+    # bootstrap routes (setup API, Cockpit, Authentik) belong to first start.
+    if [[ -f /var/lib/nas-setup/state.json && ! -f ${secretRoot}/ready ]]; then
+      reload_selected select_locked
+      exit 0
+    fi
 
     # Load bootstrap before checking unlock state or invoking reconciliation.
     # A failed reload cannot safely leave full routes in memory, so stop Caddy.

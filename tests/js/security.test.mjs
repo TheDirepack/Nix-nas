@@ -15,7 +15,7 @@ test("browser sources avoid direct HTML/code injection sinks", () => {
     "cockpit/src/app.jsx",
     "cockpit/src/api.js",
     "cockpit/src/view-model.js",
-    "web/portal/index.html",
+    "web/locked/index.html",
   ]
     .map(text)
     .join("\n");
@@ -39,14 +39,10 @@ test("external-target links keep opener isolation", () => {
   for (const anchor of externalAnchors) assert.match(anchor, /rel="noopener noreferrer"/);
 });
 
-test("Caddy portal escapes displayed identity and compares the raw user header", () => {
-  const portal = text("web/portal/index.html");
-  assert.match(portal, /Remote-Name" \| html/);
-  // The user header is only compared against the allow-list. Escaping it with
-  // urlquery rewrites characters such as "@" and breaks legitimate accounts.
-  assert.match(portal, /\$user := placeholder "http\.request\.header\.Remote-User"/);
-  assert.doesNotMatch(portal, /Remote-User" \| urlquery/);
-  assert.doesNotMatch(portal, /\{\{\s*\$user\s*\}\}/);
+test("static locked notice renders no identity or Caddy template input", () => {
+  const notice = text("web/locked/index.html");
+  assert.doesNotMatch(notice, /\{\{|Remote-|X-Authentik-/);
+  assert.doesNotMatch(notice, /<script|<form|<input/i);
 });
 
 import {

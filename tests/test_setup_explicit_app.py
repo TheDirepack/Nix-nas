@@ -69,14 +69,13 @@ class SetupUtilityLifecycleTests(unittest.TestCase):
 
     def test_setup_python_retires_application_before_bootstrap_authority(self) -> None:
         setup_py = (ROOT / "services/nas_setup.py").read_text(encoding="utf-8")
-        self.assertIn("SETUP_APPLICATION_SLUG", setup_py)
-        self.assertIn("def _remove_setup_application", setup_py)
         retirement_idx = setup_py.index('"setup-application-retirement"')
         authority_idx = setup_py.index('"bootstrap-authority-retirement"')
         self.assertLess(retirement_idx, authority_idx)
-        self.assertIn("Authentik bootstrap token is unavailable", setup_py)
-        self.assertIn("SETUP_BLUEPRINT_PATH.unlink(missing_ok=True)", setup_py)
-        self.assertNotIn("Best-effort removal", setup_py)
+        # Authentik URLs belong to nas-identity-sync's NAS_AUTHENTIK_URL; setup
+        # must not guess API prefixes (tests/test_setup_application_retirement.py).
+        self.assertNotIn("/api/v3", setup_py)
+        self.assertNotIn("urllib.request", setup_py)
 
 
 if __name__ == "__main__":

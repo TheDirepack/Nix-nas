@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "sourceSha256": "ed90fd2b049ff948266398b83ba387b1810d1b6a4dfd1190518436ada622051a",
+  "sourceSha256": "f329d901dd0feddfff21ef533653e9de85c0f28600517ea14a474bab45c9b646",
   "inputs": [
     "node_modules/@patternfly/patternfly/assets/fonts/RedHatDisplay/RedHatDisplayVF-Italic.woff2",
     "node_modules/@patternfly/patternfly/assets/fonts/RedHatDisplay/RedHatDisplayVF.woff2",
@@ -797,8 +797,10 @@
     "node_modules/scheduler/index.js",
     "node_modules/tabbable/dist/index.esm.js",
     "node_modules/tslib/tslib.es6.mjs",
+    "src/SetupNotice.jsx",
     "src/http.js",
     "src/index.jsx",
+    "src/setup-state.js",
     "src/steps/AdminStep.jsx",
     "src/steps/ConfirmStep.jsx",
     "src/steps/StoragePlanForm.jsx",
@@ -843,8 +845,8 @@
       "sha256": "1b8727779dd351359f41296dc71d773995c8ebbfb7412f606f463834e78de227"
     },
     "first-run-wizard.js": {
-      "bytes": 248421,
-      "sha256": "3fdeb26efd26b3772087c532303f403c7c0022d6b0b80b2202926711f29e5527"
+      "bytes": 250810,
+      "sha256": "f0597276be5b85c0401af65424a12cb6ad35c4bd659e59714ffff56edd09793a"
     },
     "index.html": {
       "bytes": 374,
