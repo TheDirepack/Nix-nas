@@ -203,6 +203,7 @@ in
   systemd.services.copyparty.serviceConfig.MemoryPressureWatch = lib.mkForce "off";
   # Health must not inspect the disposable dataset between creation and its
   # initial policy snapshots. The timer still runs the full appliance policy.
+  systemd.services.nas-zfs-snapshot-health.serviceConfig.StateDirectory = "nas-test";
   systemd.services.nas-zfs-snapshot-health.serviceConfig.ExecStart = lib.mkForce (
     "${pkgs.util-linux}/bin/flock /var/lib/nas-test/.snapshot-health.lock "
     + "${pkgs.sanoid}/bin/sanoid --monitor-snapshots --force-update --configdir /etc/sanoid"
