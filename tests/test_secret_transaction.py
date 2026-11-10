@@ -436,7 +436,8 @@ nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.
         # Mount and device units escape path characters, e.g. '-' as \\x2d.
         result = self.run_scenario(
             r"""
-            export NAS_TX_MEMBERS='tank-vm\x2doci\x2dpersist.mount   nas-v2-app.service'
+            # systemctl show shell-quotes entries containing a backslash.
+            export NAS_TX_MEMBERS='"tank-vm\\x2doci\\x2dpersist.mount"   nas-v2-app.service'
             touch 'tank-vm\x2doci\x2dpersist.mount.glob'
             nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
             nas_secret_tx_swap
@@ -445,6 +446,23 @@ nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.
             """
         )
         self.assert_ok(result)
+
+    def test_quoted_member_entries_must_still_be_valid_unit_names(self) -> None:
+        for listed in ('"a b.service"', '"--now.service"', '"x\\"y.service"'):
+            with self.subTest(listed=listed):
+                result = self.run_scenario(
+                    f"""
+                    export NAS_TX_MEMBERS='{listed}'
+                    nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+                    set +e
+                    nas_secret_tx_swap 2>swap.err; swap_rc=$?
+                    set -e
+                    [[ $swap_rc -ne 0 && -f root/old && ! -e previous ]]
+                    grep -q 'invalid protected member unit' swap.err
+                    ! grep -q -- '^stop -- ' systemctl.log
+                    """
+                )
+                self.assert_ok(result)
 
     def test_member_listing_failure_is_reported_before_secrets_move(self) -> None:
         result = self.run_scenario(

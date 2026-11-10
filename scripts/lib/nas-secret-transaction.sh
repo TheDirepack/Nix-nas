@@ -50,14 +50,24 @@ nas_secret_tx_stop_members() {
     nas_secret_tx_report "unable to list members of $NAS_SECRET_TX_TARGET (exit $status)"
     return 1
   fi
+  local -a listed=()
+  local quote='"' backslash=$'\\'
   # read -a splits on whitespace without pathname expansion.
-  read -r -a members <<<"$output" || true
-  for unit in "${members[@]}"; do
+  read -r -a listed <<<"$output" || true
+  for unit in "${listed[@]}"; do
+    # systemctl show shell-quotes list entries that contain a backslash, e.g.
+    # "tank-vm\\x2dapp.mount" for the escaped unit tank-vm\x2dapp.mount.
+    # Unit names cannot contain whitespace or quotes, so only that form occurs.
+    if [[ ${#unit} -ge 2 && "${unit:0:1}" == "$quote" && "${unit: -1}" == "$quote" ]]; then
+      unit="${unit:1:${#unit}-2}"
+      unit="${unit//"$backslash$backslash"/"$backslash"}"
+    fi
     # systemd escapes unit names to this alphabet, e.g. \x2d for '-' in paths.
     [[ "$unit" =~ $name_pattern && "$unit" != -* ]] || {
       nas_secret_tx_report "invalid protected member unit: $(printf '%q' "$unit")"
       return 1
     }
+    members+=("$unit")
   done
   ((${#members[@]})) || return 0
   # A target's stop job completes before PartOf members finish stopping.
