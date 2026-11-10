@@ -27,6 +27,7 @@ PROJECTIONS = (
     pathlib.Path("/run/containers/systemd/nas-v2-net-vm-oci-persist.network"),
     pathlib.Path("/run/systemd/generator/nas-v2-vm-oci-persist.service"),
 )
+RECONCILED = pathlib.Path("/run/nas-control/systemd-reconciled.json")
 BASELINE = pathlib.Path("/var/lib/nas-test/oci-probe-baseline.json")
 
 
@@ -39,6 +40,24 @@ def command(*argv: str, input_text: str | None = None, timeout: float = 120) -> 
     result = subprocess.run(argv, input=input_text, capture_output=True, text=True, timeout=timeout, check=False)
     require(result.returncode == 0, f"{argv[0]} failed ({result.returncode}): {result.stderr[-1200:]}")
     return result.stdout.strip()
+
+
+def replace_document(desired: dict, revision: str) -> None:
+    services = str(pathlib.Path(__file__).resolve().parents[2] / "services")
+    if services not in sys.path:
+        sys.path.insert(0, services)
+    from nas_v2_apply_budget import state_budget
+
+    previous = json.loads(RECONCILED.read_text()) if RECONCILED.exists() else {}
+    timeout = state_budget(desired, previous)["transactionSeconds"] + 30
+    command(
+        "nas-managed-services-control",
+        "replace-json-document",
+        "-",
+        revision,
+        input_text=json.dumps(desired),
+        timeout=timeout,
+    )
 
 
 def document() -> dict:
@@ -118,13 +137,7 @@ def remove_declarations(expected: dict | None = None) -> None:
         del entries[key]
         changed = True
     if changed:
-        command(
-            "nas-managed-services-control",
-            "replace-json-document",
-            "-",
-            value["revision"],
-            input_text=json.dumps(desired),
-        )
+        replace_document(desired, value["revision"])
 
 
 def create() -> None:
@@ -156,13 +169,7 @@ def create() -> None:
             "tank/nas/vm-oci-persist",
         )
         created = True
-        command(
-            "nas-managed-services-control",
-            "replace-json-document",
-            "-",
-            value["revision"],
-            input_text=json.dumps(desired),
-        )
+        replace_document(desired, value["revision"])
         published = True
         command(
             "podman", "exec", CONTAINER, "sh", "-c", "umask 077; printf '%s\n' nas-v2-persistent-data > /data/sentinel"

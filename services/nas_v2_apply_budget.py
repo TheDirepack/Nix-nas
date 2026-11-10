@@ -54,15 +54,20 @@ def document_budget(document: dict[str, Any], previous_units: int = 0) -> dict[s
     return {"commandSeconds": command + probes, "transactionSeconds": transaction + probes}
 
 
-def authority_budget(desired: pathlib.Path, state: pathlib.Path) -> dict[str, Any]:
-    raw = desired.read_bytes()
-    previous = json.loads(state.read_text()) if state.exists() else {}
-    budget = document_budget(parse_yaml_text(raw.decode(), source=str(desired)), len(previous.get("ownedUnits", [])))
+def state_budget(document: dict[str, Any], previous: dict[str, Any]) -> dict[str, int]:
+    budget = document_budget(document, len(previous.get("ownedUnits", [])))
     prior_command = previous.get("activationTimeoutSeconds", 180)
     if not isinstance(prior_command, int) or isinstance(prior_command, bool) or prior_command < 180:
         raise ValueError("invalid previous activation budget")
     budget["transactionSeconds"] += len(previous.get("ownedUnits", [])) * prior_command
     budget["commandSeconds"] = max(budget["commandSeconds"], prior_command)
+    return budget
+
+
+def authority_budget(desired: pathlib.Path, state: pathlib.Path) -> dict[str, Any]:
+    raw = desired.read_bytes()
+    previous = json.loads(state.read_text()) if state.exists() else {}
+    budget = state_budget(parse_yaml_text(raw.decode(), source=str(desired)), previous)
     return {**budget, "desiredSha256": hashlib.sha256(raw).hexdigest()}
 
 

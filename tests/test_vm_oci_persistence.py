@@ -28,6 +28,40 @@ def load_probe() -> Any:
 
 
 class OciPersistenceTests(unittest.TestCase):
+    def test_replacement_waits_for_candidate_and_prior_owner_budget(self):
+        probe = load_probe()
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            probe.RECONCILED = root / "state.json"
+            probe.RECONCILED.write_text(json.dumps({"ownedUnits": ["old.service"], "activationTimeoutSeconds": 1800}))
+            candidate = {
+                "services": {
+                    "db": {"readiness": {"timeoutSeconds": 100}},
+                    "app": {"dependencies": [{"service": "db"}]},
+                }
+            }
+            desired = root / "desired.json"
+            desired.write_text(json.dumps(candidate))
+            calls = []
+
+            def run(argv, **kwargs):
+                calls.append((argv, kwargs))
+                if "replace-json-document" in argv and kwargs["timeout"] < 150:
+                    raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+                return subprocess.CompletedProcess(argv, 0, "{}", "")
+
+            with mock.patch.object(probe.subprocess, "run", side_effect=run):
+                probe.replace_document(candidate, "a" * 64)
+                probe.command("zfs", "list")
+            from nas_v2_apply_budget import authority_budget
+
+            expected = authority_budget(desired, probe.RECONCILED)["transactionSeconds"] + 30
+            self.assertEqual(calls[0][1]["timeout"], expected)
+            self.assertGreater(expected, 1800)
+            self.assertEqual(json.loads(calls[0][1]["input"]), candidate)
+            self.assertEqual(calls[0][0][-1], "a" * 64)
+            self.assertEqual(calls[1][1]["timeout"], 120)
+
     def test_fixture_forwards_stop_reaps_server_and_preserves_server_failure(self):
         probe = load_probe()
         command = probe.fixture_document()["services"][probe.SERVICE]["runtime"]["command"]
@@ -76,7 +110,7 @@ class OciPersistenceTests(unittest.TestCase):
         probe = load_probe()
         calls = []
 
-        def command(*argv, input_text=None):
+        def command(*argv, input_text=None, **kwargs):
             calls.append((argv, input_text))
             if argv == ("nas-managed-services-control", "document"):
                 return json.dumps({"revision": "a" * 64, "document": {"schemaVersion": 3, "services": {}}})
@@ -276,7 +310,7 @@ class OciPersistenceTests(unittest.TestCase):
                 dataset_owner = "-"
                 dataset_exists = False
 
-                def command(*argv, input_text=None):
+                def command(*argv, input_text=None, **kwargs):
                     nonlocal dataset_owner, dataset_exists
                     if argv[:2] == ("zfs", "create"):
                         if failure in {"zfs", "zfs-unowned", "zfs-inspection"}:
@@ -386,7 +420,7 @@ class OciPersistenceTests(unittest.TestCase):
             probe.BASELINE = pathlib.Path(raw) / "baseline"
             attempts = 0
 
-            def command(*argv, input_text=None):
+            def command(*argv, input_text=None, **kwargs):
                 nonlocal attempts
                 if argv[:2] == ("zfs", "create"):
                     attempts += 1
@@ -517,7 +551,7 @@ class OciPersistenceTests(unittest.TestCase):
                 )
                 replacements = []
 
-                def command(*argv, input_text=None):
+                def command(*argv, input_text=None, **kwargs):
                     if argv[1] == "replace-json-document":
                         if input_text is None:
                             self.fail("replacement did not send desired state on stdin")
