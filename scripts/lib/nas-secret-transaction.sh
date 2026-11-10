@@ -29,20 +29,26 @@ nas_secret_tx_unit_stopped() {
 }
 
 nas_secret_tx_stop_members() {
-  local members unit stop_status=0 stopped=true
-  members="$(nas_secret_tx_systemctl show --property=ConsistsOf --value -- "$NAS_SECRET_TX_TARGET")" || return 1
-  for unit in $members; do
-    [[ "$unit" =~ ^[A-Za-z0-9_.@:-]+$ && "$unit" != -* ]] || {
-      printf 'nas-secret-transaction: invalid protected member unit: %s\n' "$unit" >&2
+  local output unit stop_status=0 stopped=true
+  local -a members=()
+  if ! output="$(nas_secret_tx_systemctl show --property=ConsistsOf --value -- "$NAS_SECRET_TX_TARGET")"; then
+    printf 'nas-secret-transaction: unable to list members of %s\n' "$NAS_SECRET_TX_TARGET" >&2
+    return 1
+  fi
+  # read -a splits on whitespace without pathname expansion.
+  read -r -a members <<<"$output" || true
+  for unit in "${members[@]}"; do
+    # systemd escapes unit names to this alphabet, e.g. \x2d for '-' in paths.
+    [[ "$unit" =~ ^[A-Za-z0-9_.@:\\-]+$ && "$unit" != -* ]] || {
+      printf 'nas-secret-transaction: invalid protected member unit: %q\n' "$unit" >&2
       return 1
     }
   done
-  [[ -n "${members//[[:space:]]/}" ]] || return 0
+  ((${#members[@]})) || return 0
   # A target's stop job completes before PartOf members finish stopping.
   # Joining their stop jobs keeps secrets in place until every member is down.
-  # shellcheck disable=SC2086
-  nas_secret_tx_systemctl stop -- $members || stop_status=$?
-  for unit in $members; do
+  nas_secret_tx_systemctl stop -- "${members[@]}" || stop_status=$?
+  for unit in "${members[@]}"; do
     nas_secret_tx_unit_stopped "$unit" || stopped=false
   done
   if ! "$stopped"; then

@@ -42,6 +42,7 @@ class SecretTransactionShellTests(unittest.TestCase):
                         [[ "${NAS_TX_ACTIVE:-1}" == 1 && ! -e "$NAS_TX_INACTIVE_MARKER" ]] ;;
                       show)
                         if [[ "${2:-}" == --property=ConsistsOf ]]; then
+                          [[ "${NAS_TX_MEMBERS_QUERY_FAIL:-0}" != 1 ]] || exit 1
                           printf '%s\n' "${NAS_TX_MEMBERS:-}"
                           exit 0
                         fi
@@ -426,6 +427,34 @@ nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.
             set -e
             [[ $swap_rc -ne 0 && -f root/old && -f stage/new && ! -e previous ]]
             grep -q 'protected unit is active, not stopped: nas-v2-app.service' swap.err
+            """
+        )
+        self.assert_ok(result)
+
+    def test_systemd_escaped_member_names_are_stopped_as_single_arguments(self) -> None:
+        # Mount and device units escape path characters, e.g. '-' as \\x2d.
+        result = self.run_scenario(
+            r"""
+            export NAS_TX_MEMBERS='var-lib-nas\x2dcontrol.mount   nas-v2-app.service'
+            touch 'var-lib-nas\x2dcontrol.mount.glob'
+            nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+            nas_secret_tx_swap
+            [[ -f root/new && -e members-stopped && ! -e moved-early ]]
+            grep -qxF 'stop -- var-lib-nas\x2dcontrol.mount nas-v2-app.service' systemctl.log
+            """
+        )
+        self.assert_ok(result)
+
+    def test_member_listing_failure_is_reported_before_secrets_move(self) -> None:
+        result = self.run_scenario(
+            """
+            export NAS_TX_MEMBERS="nas-v2-app.service" NAS_TX_MEMBERS_QUERY_FAIL=1
+            nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+            set +e
+            nas_secret_tx_swap 2>swap.err; swap_rc=$?
+            set -e
+            [[ $swap_rc -ne 0 && -f root/old && ! -e previous ]]
+            grep -q 'unable to list members of nas-protected-services.target' swap.err
             """
         )
         self.assert_ok(result)
