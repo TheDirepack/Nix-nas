@@ -139,6 +139,7 @@ const App = () => {
               allowDestructive={allowDestructive}
               encryptStorage={encryptStorage}
               plan={plan}
+              planError={planError}
               onRefreshPlan={refreshPlan}
             />
           </WizardStep>

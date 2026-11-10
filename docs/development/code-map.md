@@ -12,7 +12,7 @@
 | Storage | `modules/nas/config/storage-monitoring.nix`, `modules/nas/internal/zfs-tools.nix` | ZFS, snapshots, restore verification, replication, and Restic integration. |
 | Observability | `modules/nas/config/observability.nix`, `alertmanager-ntfy.nix`, `scripts/lib/render-alertmanager-ntfy-config.py` | VictoriaMetrics, Telegraf, vmalert, upstream Alertmanager, optional Grafana/ntfy bridge and runtime credentials. |
 | Identity/capability policy | `services/nas_v2_authentik_blueprint.py`, `schemas/managed-services-v3.schema.json` | Appliance identity capability/group contract; V2 creates `application.<service>.<capability>` objects, never assignments. |
-| Command packaging | `modules/nas/internal/account-tools.nix` | Installs Python tools (`nas-managed-services`, `nas-managed-services-control`), finite V2 control aliases, portal assets, and Authentik blueprint. |
+| Command packaging | `modules/nas/internal/account-tools.nix` | Installs Python tools (`nas-managed-services`, `nas-managed-services-control`), finite V2 control aliases, and Authentik blueprint. |
 | Documentation/UI packaging | `modules/nas/internal/documentation-tools.nix` | Builds mdBook references and the Cockpit plugin. |
 
 `modules/nas/internal/default.nix` merges internal contexts with duplicate-name detection. New helpers should stay local unless multiple configuration modules consume them.

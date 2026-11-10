@@ -819,11 +819,15 @@ class FirstStartStatusTests(unittest.TestCase):
         self.assertNotIn("featureCount", result)
 
     def status_with_journal(
-        self, journal: dict[str, object] | str | None, *, pool: bool = True, dataset: bool = True
+        self,
+        journal: dict[str, object] | str | None,
+        *,
+        storage_verified: bool = True,
+        with_config: bool = True,
     ) -> dict[str, Any]:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            config = self.config_file(root)
+            config = self.config_file(root) if with_config else root / "missing-first-run.json"
             journal_path = root / "first-run-journal.json"
             if isinstance(journal, str):
                 journal_path.write_text(journal, encoding="utf-8")
@@ -832,8 +836,8 @@ class FirstStartStatusTests(unittest.TestCase):
             with (
                 mock.patch.object(setup, "STATE_PATH", root / "missing-state.json"),
                 mock.patch.object(setup, "JOURNAL_PATH", journal_path),
-                mock.patch.object(setup, "pool_exists", return_value=pool),
-                mock.patch.object(setup, "dataset_exists", return_value=dataset),
+                mock.patch.object(setup, "pool_exists", return_value=True),
+                mock.patch.object(setup, "storage_ready", return_value=storage_verified),
                 mock.patch.object(setup, "validate_service_request"),
             ):
                 return setup.first_start_status(str(config))
@@ -871,13 +875,34 @@ class FirstStartStatusTests(unittest.TestCase):
 
     def test_verifiable_storage_recovery_stays_submittable(self) -> None:
         journal = self.journal("manual-recovery-required", "storage")
-        resumable = self.status_with_journal(journal, pool=True, dataset=True)
+        resumable = self.status_with_journal(journal, storage_verified=True)
         self.assertEqual(resumable["status"], "ready")
         self.assertEqual(resumable["setupJournal"]["status"], "manual-recovery-required")
-        for pool, dataset in ((False, False), (True, False)):
-            with self.subTest(pool=pool, dataset=dataset):
-                blocked = self.status_with_journal(journal, pool=pool, dataset=dataset)
-                self.assertEqual(blocked["status"], "manual-recovery-required")
+        # Pool and dataset without a verified mount are not the worker's proof.
+        blocked = self.status_with_journal(journal, storage_verified=False)
+        self.assertEqual(blocked["status"], "manual-recovery-required")
+
+    def test_storage_proof_uses_the_worker_mount_verification(self) -> None:
+        summary = setup.setup_journal_summary(self.journal("manual-recovery-required", "storage"))
+        for pool, dataset, mount_check, blocked in (
+            (True, True, 0, False),
+            (True, True, 1, True),
+            (True, False, 0, True),
+            (False, False, 0, True),
+        ):
+            with (
+                self.subTest(pool=pool, dataset=dataset, mount_check=mount_check),
+                mock.patch.object(setup, "pool_exists", return_value=pool),
+                mock.patch.object(setup, "dataset_exists", return_value=dataset),
+                mock.patch.object(
+                    setup,
+                    "run_storage_host",
+                    return_value=setup.Completed(("nas-zfs-mount-check",), "", "", mount_check),
+                ) as mount,
+            ):
+                self.assertEqual(setup.setup_journal_blocker(summary) is not None, blocked)
+                if pool and dataset:
+                    mount.assert_called_once_with(["nas-zfs-mount-check"], check=False)
 
     def test_interrupted_and_acknowledged_journals_remain_resumable(self) -> None:
         for status in ("failed", "reconciled", "running"):
@@ -892,6 +917,14 @@ class FirstStartStatusTests(unittest.TestCase):
                 self.assertEqual(result["status"], "ready")
                 self.assertIsNone(result["setupJournal"])
 
+    def test_recovery_outranks_a_missing_plan(self) -> None:
+        result = self.status_with_journal(
+            self.journal("manual-recovery-required", "identity-accounts"), with_config=False
+        )
+        self.assertEqual(result["status"], "manual-recovery-required")
+        self.assertEqual(self.status_with_journal("{not json", with_config=False)["status"], "journal-invalid")
+        self.assertEqual(self.status_with_journal(None, with_config=False)["status"], "configuration-missing")
+
     def test_unusable_journal_blocks_submission(self) -> None:
         invalid = self.status_with_journal("{not json")
         self.assertEqual(invalid["status"], "journal-invalid")
@@ -899,6 +932,8 @@ class FirstStartStatusTests(unittest.TestCase):
         for journal in (
             self.journal("running", "storage", workflow="identity-accounts"),
             self.journal("failed", "storage", schemaVersion=2),
+            self.journal("corrupted", "storage"),
+            {key: value for key, value in self.journal("failed", "storage").items() if key != "status"},
         ):
             with self.subTest(journal=journal):
                 self.assertEqual(self.status_with_journal(journal)["status"], "manual-recovery-required")
@@ -912,7 +947,7 @@ class FirstStartStatusTests(unittest.TestCase):
             )
             with (
                 mock.patch.object(setup, "JOURNAL_PATH", journal_path),
-                mock.patch.object(setup, "pool_exists", side_effect=AssertionError("pool probe not needed")),
+                mock.patch.object(setup, "storage_ready", side_effect=AssertionError("storage probe not needed")),
             ):
                 blocked = setup.first_start_job_recovery()
             journal_path.write_text(json.dumps(self.journal("failed", "identity-accounts")), encoding="utf-8")

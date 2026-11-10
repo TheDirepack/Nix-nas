@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html.parser
+import json
 import pathlib
 import re
 import subprocess
@@ -26,7 +27,7 @@ def nix_string(source: str, start_marker: str) -> str:
 class SelectorHarness:
     """Run the shipped selector with fake systemctl/caddy and temporary state paths."""
 
-    def __init__(self, root: pathlib.Path, *, reload_status: int = 0) -> None:
+    def __init__(self, root: pathlib.Path, *, reload_status: int = 0, reconcile_status: int = 1) -> None:
         self.root = root
         self.log = root / "calls.log"
         self.active = root / "caddy-active.conf"
@@ -40,16 +41,29 @@ class SelectorHarness:
             f'echo "systemctl $*" >> "{self.log}"\n'
             'case "$1" in\n'
             "  is-active) exit 0 ;;\n"
-            "  start) exit 1 ;;\n"
+            f"  start) exit {reconcile_status} ;;\n"
             "  *) exit 0 ;;\n"
             "esac\n",
             encoding="utf-8",
         )
         (bin_dir / "caddy").write_text(
-            f'#!/bin/sh\necho "caddy $* active=$(cat "{self.active}")" >> "{self.log}"\nexit {reload_status}\n',
+            "#!/bin/sh\n"
+            f'echo "caddy $* active=$(cat "{self.active}")" >> "{self.log}"\n'
+            f'[ "$1" = reload ] && exit {reload_status}\n'
+            "exit 0\n",
             encoding="utf-8",
         )
-        for tool in ("systemctl", "caddy"):
+        # Validation runs as the Caddy user with owned scratch directories; the
+        # fakes keep the directory layout without needing root.
+        (bin_dir / "install").write_text(
+            '#!/bin/sh\nwhile [ $# -gt 0 ]; do case "$1" in -d) shift ;; -m|-o|-g) shift 2 ;; '
+            '*) mkdir -p "$1"; shift ;; esac; done\n',
+            encoding="utf-8",
+        )
+        (bin_dir / "runuser").write_text(
+            '#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n', encoding="utf-8"
+        )
+        for tool in ("systemctl", "caddy", "install", "runuser"):
             (bin_dir / tool).chmod(0o755)
         substitutions = {
             "${activeCaddyPath}": str(self.active),
@@ -96,6 +110,31 @@ class SelectorHarness:
             check=False,
         )
 
+    def publish_generated_revision(self) -> None:
+        """Create the applied desired-state revision the selector requires for full routes."""
+        desired = self.root / "services.yaml"
+        desired.write_text("services: {}\n", encoding="utf-8")
+        (self.root / "services.lock").write_text("", encoding="utf-8")
+        (self.root / "caddy-managed.conf").write_text("(nas_v2_managed_paths) {\n}\n", encoding="utf-8")
+        git = ["git", "--git-dir", str(self.root / "history.git"), "--work-tree", str(self.root)]
+        environment = {
+            "PATH": "/usr/bin:/bin",
+            "GIT_AUTHOR_NAME": "test",
+            "GIT_AUTHOR_EMAIL": "test@example.test",
+            "GIT_COMMITTER_NAME": "test",
+            "GIT_COMMITTER_EMAIL": "test@example.test",
+        }
+        subprocess.run(
+            ["git", "init", "--quiet", "--bare", str(self.root / "history.git")], check=True, env=environment
+        )
+        subprocess.run([*git, "add", "services.yaml"], check=True, env=environment)
+        subprocess.run([*git, "commit", "--quiet", "-m", "desired"], check=True, env=environment)
+        revision = subprocess.run(
+            [*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True, env=environment
+        ).stdout.strip()
+        subprocess.run([*git, "update-ref", "refs/nas/applied", revision], check=True, env=environment)
+        (self.root / "plan.json").write_text(json.dumps({"desiredRevision": revision}), encoding="utf-8")
+
     def calls(self) -> list[str]:
         return self.log.read_text(encoding="utf-8").splitlines()
 
@@ -125,12 +164,23 @@ class LockedSelectionTests(unittest.TestCase):
                 self.assertEqual(harness.active.read_text(encoding="utf-8"), "import BOOTSTRAP\n")
                 self.assertFalse(any("LOCKED" in call for call in harness.calls()))
 
-    def test_unlocked_appliance_never_selects_the_locked_notice(self) -> None:
-        harness = self.harness()
-        harness.run(setup_complete=True, unlocked=True)
+    def test_unlocked_appliance_selects_the_full_configuration(self) -> None:
+        harness = self.harness(reconcile_status=0)
+        harness.publish_generated_revision()
+        completed = harness.run(setup_complete=True, unlocked=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(harness.active.read_text(encoding="utf-8"), "import FULL\n")
         calls = harness.calls()
         self.assertIn("systemctl start nas-managed-services-reconcile.service", calls)
+        self.assertIn("caddy reload --config active --force active=import FULL", calls)
         self.assertFalse(any("LOCKED" in call for call in calls))
+
+    def test_unlocked_appliance_without_a_current_revision_falls_back_to_bootstrap(self) -> None:
+        harness = self.harness(reconcile_status=1)
+        completed = harness.run(setup_complete=True, unlocked=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(harness.active.read_text(encoding="utf-8"), "import BOOTSTRAP\n")
+        self.assertFalse(any("LOCKED" in call for call in harness.calls()))
 
     def test_failed_locked_reload_stops_caddy(self) -> None:
         harness = self.harness(reload_status=1)

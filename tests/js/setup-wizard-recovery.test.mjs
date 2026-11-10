@@ -135,5 +135,14 @@ test("failed job documents gate retry on their recovery requirement", async () =
   assert.equal(state.planProblem({...READY, status: "complete"}), "");
   assert.match(state.planProblem({status: "state-drift", message: "drift"}), /drift/);
   assert.match(state.planProblem(null), /not loaded/);
+  assert.match(state.planProblem({status: "journal-invalid"}), /journal shown above is repaired/);
+  assert.match(state.planProblem(BLOCKED), /recovery shown above is acknowledged/);
+  assert.equal(state.canRetryFailedJob(blocked, false), false);
+  assert.equal(state.canRetryFailedJob(blocked, true), true, "a fresh ready plan clears the snapshot");
+  assert.equal(state.canRetryFailedJob({status: "failed", error: "transient"}, false), true);
+  assert.equal(state.canRetryFailedJob({status: "running"}, true), false);
+  assert.equal(state.recheckOutcome(READY, ""), "");
+  assert.match(state.recheckOutcome(BLOCKED, ""), /still required/);
+  assert.match(state.recheckOutcome(null, "HTTP 502"), /could not be checked: HTTP 502/);
   assert.match(state.planProblem({...READY, planDigest: "not-a-digest"}), /not loaded/);
 });

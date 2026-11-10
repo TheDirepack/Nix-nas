@@ -1925,6 +1925,11 @@ SETUP_RECOVERY_GUIDANCE = (
 )
 
 
+SETUP_JOURNAL_STATUSES = frozenset(
+    {"pending", "running", "resuming", "failed", "manual-recovery-required", "reconciled"}
+)
+
+
 def setup_journal_summary(journal: Mapping[str, Any] | None) -> dict[str, Any] | None:
     """Return non-secret journal state for an unfinished first-run; step errors stay in the journal."""
     if journal is None or journal.get("status") in {"complete", "cancelled"}:
@@ -1946,11 +1951,13 @@ def setup_journal_blocker(summary: Mapping[str, Any] | None) -> str | None:
         return None
     if summary["schemaVersion"] != 1 or summary["workflow"] != "first-run-v2":
         return "The first-run journal belongs to another operation or an unsupported version."
+    if summary["status"] not in SETUP_JOURNAL_STATUSES:
+        return f"The first-run journal has an unrecognized status {summary['status']!r}."
     if summary["status"] != "manual-recovery-required":
         return None
-    # The worker completes an interrupted storage step itself once the pool,
-    # dataset and mount verify; that proof needs no operator acknowledgement.
-    if summary["step"] == "storage" and pool_exists() and dataset_exists():
+    # The worker completes an interrupted storage step itself only after the
+    # same pool, dataset and mount verification; anything less needs an operator.
+    if summary["step"] == "storage" and storage_ready():
         return None
     return f"Setup stopped at {summary['step'] or 'final verification'} and needs manual recovery."
 
@@ -1980,6 +1987,29 @@ def first_start_status(config_source: str) -> dict[str, Any]:
             "configPath": config_source,
             "message": str(exc),
         }
+    setup_complete = isinstance(state, dict) and state.get("status") in {"complete", "complete-unverified"}
+    journal: dict[str, Any] | None = None
+    if not setup_complete:
+        # A journal the worker would refuse outranks plan problems: creating or
+        # editing a plan cannot proceed until the recorded run is recovered.
+        try:
+            journal = setup_journal_summary(load_json(JOURNAL_PATH))
+        except JournalError as exc:
+            return {
+                "schemaVersion": SCHEMA_VERSION,
+                "status": "journal-invalid",
+                "configPath": config_source,
+                "message": f"{exc}. Repair it from the console or SSH before setup can continue.",
+            }
+        blocker = setup_journal_blocker(journal)
+        if blocker is not None:
+            return {
+                "schemaVersion": SCHEMA_VERSION,
+                "status": "manual-recovery-required",
+                "configPath": config_source,
+                "setupJournal": journal,
+                "message": f"{blocker} {SETUP_RECOVERY_GUIDANCE}",
+            }
     config_path = pathlib.Path(config_source)
     if not config_path.exists():
         return {
@@ -1999,7 +2029,7 @@ def first_start_status(config_source: str) -> dict[str, Any]:
             "configPath": config_source,
             "message": str(exc),
         }
-    if isinstance(state, dict) and state.get("status") in {"complete", "complete-unverified"}:
+    if setup_complete and isinstance(state, dict):
         if state.get("planDigest") != plan_digest:
             return {
                 "schemaVersion": SCHEMA_VERSION,
@@ -2035,24 +2065,6 @@ def first_start_status(config_source: str) -> dict[str, Any]:
     storage = config["storage"]
     devices = [str(item) for item in storage.get("devices", [])]
     pool_present = pool_exists()
-    try:
-        journal = setup_journal_summary(load_json(JOURNAL_PATH))
-    except JournalError as exc:
-        return {
-            "schemaVersion": SCHEMA_VERSION,
-            "status": "journal-invalid",
-            "configPath": config_source,
-            "message": f"{exc}. Repair it from the console or SSH before setup can continue.",
-        }
-    blocker = setup_journal_blocker(journal)
-    if blocker is not None:
-        return {
-            "schemaVersion": SCHEMA_VERSION,
-            "status": "manual-recovery-required",
-            "configPath": config_source,
-            "setupJournal": journal,
-            "message": f"{blocker} {SETUP_RECOVERY_GUIDANCE}",
-        }
     destructive = bool(not pool_present and storage.get("createPool"))
     return {
         "schemaVersion": SCHEMA_VERSION,

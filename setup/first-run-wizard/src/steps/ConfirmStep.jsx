@@ -2,7 +2,7 @@ import React from 'react';
 import { Alert, Button, Checkbox, useWizardContext } from '@patternfly/react-core';
 import { fetchJson } from '../http.js';
 import { RecoveryAlert } from '../SetupNotice.jsx';
-import { jobRecoveryMessage, planProblem } from '../setup-state.js';
+import { canRetryFailedJob, jobRecoveryMessage, planProblem, recheckOutcome } from '../setup-state.js';
 
 const COMPLETE_STATUSES = new Set(['complete', 'complete-unverified']);
 const TERMINAL_STATUSES = new Set([...COMPLETE_STATUSES, 'failed']);
@@ -63,6 +63,7 @@ const ConfirmStep = ({
   allowDestructive,
   encryptStorage,
   plan,
+  planError,
   onRefreshPlan,
 }) => {
   const [busy, setBusy] = React.useState(false);
@@ -77,8 +78,9 @@ const ConfirmStep = ({
   const [confirmPasswordReapply, setConfirmPasswordReapply] = React.useState(false);
   // A failed job document is a snapshot; only a plan fetched after the
   // operator's acknowledgement can clear its recovery requirement.
-  const [recheckingFrom, setRecheckingFrom] = React.useState(null);
+  const [pendingRecheck, setPendingRecheck] = React.useState(null);
   const [recoveryCleared, setRecoveryCleared] = React.useState(false);
+  const [recheckStatus, setRecheckStatus] = React.useState('');
   const { goToPrevStep } = useWizardContext();
 
   const jobId = job?.jobId;
@@ -86,6 +88,7 @@ const ConfirmStep = ({
   const isComplete = COMPLETE_STATUSES.has(jobStatus);
   const isTerminal = TERMINAL_STATUSES.has(jobStatus);
   const recoveryMessage = recoveryCleared ? '' : jobRecoveryMessage(job);
+  const retryAllowed = canRetryFailedJob(job, recoveryCleared);
   const rebootAuthorized = Boolean(capability) && isComplete;
   const problem = validate(
     administrator,
@@ -121,17 +124,27 @@ const ConfirmStep = ({
   }, []);
 
   React.useEffect(() => {
-    if (!recheckingFrom || !plan || plan === recheckingFrom.plan) return;
-    setRecheckingFrom(null);
-    setRecoveryCleared(plan.status === 'ready');
-  }, [plan, recheckingFrom]);
+    if (!pendingRecheck) return;
+    // Every refresh clears plan and error before fetching; only results that
+    // arrive after that reset answer this recheck.
+    if (!plan && !planError) {
+      if (!pendingRecheck.reset) setPendingRecheck({ reset: true });
+      return;
+    }
+    if (!pendingRecheck.reset) return;
+    setPendingRecheck(null);
+    setRecoveryCleared(!planError && plan.status === 'ready');
+    setRecheckStatus(recheckOutcome(plan, planError));
+  }, [plan, planError, pendingRecheck]);
 
   React.useEffect(() => {
     setRecoveryCleared(false);
+    setRecheckStatus('');
   }, [jobId, jobStatus]);
 
   const recheckRecovery = () => {
-    setRecheckingFrom({ plan });
+    setRecheckStatus('Checking the setup state...');
+    setPendingRecheck({ reset: false });
     onRefreshPlan();
   };
 
@@ -282,9 +295,14 @@ const ConfirmStep = ({
         </Alert>
       )}
       {recoveryMessage && (
-        <RecoveryAlert title="Setup needs manual recovery" message={recoveryMessage} onRefresh={recheckRecovery} />
+        <RecoveryAlert
+          title="Setup needs manual recovery"
+          message={recoveryMessage}
+          onRefresh={recheckRecovery}
+          status={recheckStatus}
+        />
       )}
-      {jobStatus === 'failed' && !recoveryMessage && (
+      {retryAllowed && (
         <Checkbox
           id="wizard-password-reapply"
           label="I understand retrying may reapply administrator and account passwords"
@@ -343,7 +361,7 @@ const ConfirmStep = ({
             {resuming ? 'Checking for setup' : 'Check for running setup'}
           </Button>
         )}
-        {jobStatus === 'failed' && !recoveryMessage && (
+        {retryAllowed && (
           <Button
             variant="primary"
             onClick={submit}

@@ -29,6 +29,9 @@ export const interruptedNotice = (plan) => {
 
 export const planProblem = (plan) => {
   if (!plan) return 'The storage plan has not loaded yet.';
+  if (plan.status === 'journal-invalid') {
+    return 'Setup cannot start until the setup journal shown above is repaired.';
+  }
   if (RECOVERY_STATUSES.has(plan.status)) {
     return 'Setup cannot start until the recovery shown above is acknowledged.';
   }
@@ -41,3 +44,14 @@ export const jobRecoveryMessage = (job) =>
   job?.status === 'failed' && job.manualRecovery?.required === true
     ? job.manualRecovery.message || 'Setup stopped at a step that needs manual recovery.'
     : '';
+
+// Retry stays hidden while a failed job requires recovery, until a plan
+// fetched after the operator's acknowledgement reports ready.
+export const canRetryFailedJob = (job, recoveryCleared) =>
+  job?.status === 'failed' && (recoveryCleared || !jobRecoveryMessage(job));
+
+export const recheckOutcome = (plan, planError) => {
+  if (planError) return `The setup state could not be checked: ${planError}`;
+  if (plan?.status === 'ready') return '';
+  return 'Recovery is still required. Acknowledge it in Cockpit or the CLI, then check again.';
+};

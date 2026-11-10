@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -161,7 +162,20 @@ class TestWizardSource(unittest.TestCase):
         self.assertIn("setPlanRequest", refresh)
         # Every plan refresh (storage step, recovery notice, failed-job recheck) shares it.
         self.assertEqual(index.count("setPlanRequest("), 1)
-        self.assertEqual(index.count("={refreshPlan}"), 3)
+        self.assertEqual(index.count("onRefresh={refreshPlan}"), 2)
+        self.assertEqual(index.count("onRefreshPlan={refreshPlan}"), 1)
+
+    def test_recovery_notice_precedes_password_steps_and_gates_retry(self):
+        index = (WIZARD / "src/index.jsx").read_text(encoding="utf-8")
+        main = index.split('<main className="nas-setup-main">', 1)[1]
+        # SSR tests render SetupNotice itself; this pins where the shipped page mounts it.
+        self.assertLess(main.index("<SetupNotice plan={plan}"), main.index("<Wizard"))
+        self.assertLess(main.index("<Wizard"), main.index("<AdminStep"))
+        confirm = (WIZARD / "src/steps/ConfirmStep.jsx").read_text(encoding="utf-8")
+        self.assertIn("const retryAllowed = canRetryFailedJob(job, recoveryCleared);", confirm)
+        for control in ('id="wizard-password-reapply"', "{busy ? 'Retrying setup' : 'Retry setup'}"):
+            guards = re.findall(r"\{([^{}\n]+) && \(\n", confirm[: confirm.index(control)])
+            self.assertEqual(guards[-1], "retryAllowed", control)
 
     def test_refresh_resumes_without_resubmitting(self):
         confirm = (WIZARD / "src/steps/ConfirmStep.jsx").read_text(encoding="utf-8")

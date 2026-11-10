@@ -500,6 +500,23 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
         )
     except OperationBusyError as exc:
         raise ApiError(str(exc)) from exc
+    # A worker that finished between the first check and the reservation may
+    # have left a journal that refuses this run; recheck before staging secrets.
+    try:
+        reserved = first_start_status()
+    except Exception:
+        cancel_reservation(reservation.token)
+        raise
+    reserved_digest = reserved.get("planDigest")
+    if (
+        reserved.get("status") != "ready"
+        or not isinstance(reserved_digest, str)
+        or not secrets.compare_digest(reserved_digest, plan_digest)
+    ):
+        cancel_reservation(reservation.token)
+        raise ApiError(
+            str(reserved.get("message") or "The first-start plan changed before submission; refresh and review it")
+        )
     request_root = pathlib.Path("/run/nas-first-start")
     request_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(request_root, 0o700)
