@@ -57,6 +57,7 @@ ${caddySiteHeaders}
     rewrite * /index.html
     file_server {
       status 503
+      disable_canonical_uris
     }
   }
 }

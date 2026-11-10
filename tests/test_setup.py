@@ -1022,6 +1022,19 @@ class FirstStartStatusTests(unittest.TestCase):
         self.assertEqual(stalled["status"], "journal-unreadable")
         self.assertIn("timed out", stalled["message"])
 
+    def test_sudo_start_failure_reports_an_unreadable_journal(self) -> None:
+        denied = setup.JournalError("Invalid operation journal")
+        denied.__cause__ = PermissionError(13, "Permission denied")
+        with (
+            mock.patch.object(setup, "load_json", side_effect=denied),
+            mock.patch.object(setup.os, "geteuid", return_value=1000),
+            mock.patch.object(
+                setup, "run_root_noninteractive", side_effect=FileNotFoundError(2, "No such file", "sudo")
+            ),
+            self.assertRaisesRegex(setup.JournalUnreadableError, "No such file"),
+        ):
+            setup.load_setup_journal()
+
     def test_bounded_privileged_commands_bound_the_sudo_refresh(self) -> None:
         calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
 

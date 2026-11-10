@@ -226,6 +226,9 @@ class LockedNoticeContentTests(unittest.TestCase):
         self.assertIn("root * ${lockedNotice}/share/nas-locked", locked)
         self.assertIn("rewrite * /index.html", locked)
         self.assertIn("status 503", locked)
+        # The rewrite makes /index.html/ share the file's base name; a canonical
+        # redirect would replace the notice with a 308.
+        self.assertIn("disable_canonical_uris", locked)
         self.assertIn("form-action 'none'", locked)
         self.assertIn('Cache-Control "no-store"', locked)
         self.assertIn("${caddySiteHeaders}", locked)

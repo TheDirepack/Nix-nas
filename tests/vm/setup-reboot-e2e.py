@@ -214,7 +214,15 @@ def syncthing_api_key() -> str:
 
 
 LOCKED_NOTICE_MARKER = 'id="nas-locked"'
-LOCKED_ROUTES = ("/", "/console/", "/setup/", "/setup/api/first-start", "/identity/if/user/", "/shares/")
+LOCKED_ROUTES = (
+    "/",
+    "/console/",
+    "/setup/",
+    "/setup/api/first-start",
+    "/identity/if/user/",
+    "/shares/",
+    "/index.html/",
+)
 
 
 def locked_request(path: str, *extra: str) -> tuple[str, str]:

@@ -1960,7 +1960,7 @@ def load_setup_journal() -> dict[str, Any] | None:
         completed = run_root_noninteractive(
             ["cat", "--", str(JOURNAL_PATH)], check=False, timeout_seconds=STATUS_STORAGE_PROBE_SECONDS
         )
-    except SetupError as exc:
+    except (SetupError, OSError) as exc:
         raise JournalUnreadableError(str(exc)) from exc
     if completed.returncode != 0:
         raise JournalUnreadableError(
