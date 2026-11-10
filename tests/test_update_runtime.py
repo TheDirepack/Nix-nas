@@ -457,6 +457,91 @@ class UpdateRuntimeTests(unittest.TestCase):
         for unit in units:
             self.assertIn(f"pkgs.systemd:systemctl is-active -- {unit}", self.trace.read_text())
 
+    def reconciler_state(self, *, readiness: bool) -> Path:
+        """Have the real V2 reconciler write its committed state for the updater to read."""
+        services = str(Path(__file__).resolve().parents[1] / "services")
+        if services not in sys.path:
+            sys.path.insert(0, services)
+        import nas_v2_systemd_reconcile as reconcile
+
+        projection = self.root / "projection"
+        unit_dir = projection / "units"
+        unit_dir.mkdir(parents=True)
+        owned = ["nas-v2-demo.service", "nas-v2-timer-demo-0.timer"]
+        if readiness:
+            owned.append("nas-v2-ready-demo.service")
+        for unit in owned:
+            gate = unit == "nas-v2-ready-demo.service"
+            dependency = "Requires=nas-v2-demo.service\nAfter=nas-v2-demo.service\n" if gate else ""
+            (unit_dir / unit).write_text("[Unit]\n" + dependency, encoding="utf-8")
+        manifest = projection / "manifest.json"
+        document: dict[str, object] = {
+            "schemaVersion": 1,
+            "links": [{"target": unit, "source": str(unit_dir / unit)} for unit in owned],
+            "quadletLinks": [],
+            "ownedUnits": owned,
+            "startUnits": owned,
+            "stopUnits": [],
+            "fingerprints": {unit: "v1" for unit in owned},
+        }
+        if readiness:
+            document["readinessUnits"] = ["nas-v2-ready-demo.service"]
+            document["readinessOwners"] = {"nas-v2-ready-demo.service": "nas-v2-demo.service"}
+        manifest.write_text(json.dumps(document), encoding="utf-8")
+        systemctl = self.root / "reconcile-systemctl"
+        # Every unit reports active so the reconciler commits; health is judged afterwards.
+        systemctl.write_text(
+            f"#!{self.bash}\n[[ $1 != is-active ]] || {{ [[ $2 == --quiet ]] || echo active; }}\nexit 0\n",
+            encoding="utf-8",
+        )
+        systemctl.chmod(0o755)
+        runtime = self.root / "systemd-runtime"
+        quadlet = self.root / "quadlet-runtime"
+        runtime.mkdir()
+        quadlet.mkdir()
+        state = self.root / "reconciled-state.json"
+        reconcile.reconcile(
+            manifest_path=manifest,
+            projection_root=projection,
+            systemd_runtime_dir=runtime,
+            quadlet_runtime_dir=quadlet,
+            state_path=state,
+            systemctl=str(systemctl),
+        )
+        return state
+
+    def health_from_state(self, state: Path, active: list[str], states: dict[str, list[str]] | None = None):
+        produced = json.loads(state.read_text(encoding="utf-8"))
+        return produced, self.protected_health(
+            produced["startUnits"], [*self.SUBSTRATE_UNITS, *active], raw_state=state.read_text(), states=states
+        )
+
+    def test_reconciler_produced_state_drives_application_health(self):
+        state = self.reconciler_state(readiness=False)
+        produced, result = self.health_from_state(state, ["nas-v2-demo.service", "nas-v2-timer-demo-0.timer"])
+        self.assertEqual(produced["schemaVersion"], 1)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.is_active_queries()[-2:], ["nas-v2-demo.service", "nas-v2-timer-demo-0.timer"])
+        self.trace.unlink()
+        _, down = self.health_from_state(state, ["nas-v2-timer-demo-0.timer"])
+        self.assertIn("nas-v2-demo.service (inactive)", down.stderr)
+
+    def test_reconciler_produced_readiness_gates_are_not_required_to_stay_active(self):
+        state = self.reconciler_state(readiness=True)
+        produced = json.loads(state.read_text(encoding="utf-8"))
+        if "readinessUnits" not in produced:
+            self.skipTest("this reconciler does not yet commit readinessUnits (introduced with PR #206)")
+        self.assertIn("nas-v2-ready-demo.service", produced["startUnits"])
+        _, passed = self.health_from_state(state, ["nas-v2-demo.service", "nas-v2-timer-demo-0.timer"])
+        self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)
+        self.trace.unlink()
+        _, failed = self.health_from_state(
+            state,
+            ["nas-v2-demo.service", "nas-v2-timer-demo-0.timer"],
+            states={"nas-v2-ready-demo.service": ["failed"]},
+        )
+        self.assertIn("units failed: nas-v2-ready-demo.service", failed.stderr)
+
     def test_v2_target_owner_units_are_accepted_and_required(self):
         units = ["nas-v2-wiki.target", "nas-v2-source-wiki.path"]
         result = self.protected_health(units, [*self.SUBSTRATE_UNITS, *units])
