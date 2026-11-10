@@ -507,6 +507,7 @@ NTFY_ENV
         # Path-triggered Caddy selection must see the locked state before
         # stopping units can publish changes that trigger reconciliation.
         sudo rm -f "$secret_root/ready"
+        # shellcheck disable=SC2034 # read by the sourced transaction library
         NAS_SECRET_TX_TARGET=nas-protected-services.target
         if ! nas_secret_tx_stop_target; then
           echo "Protected services did not stop completely; runtime secrets remain without their ready marker." >&2
