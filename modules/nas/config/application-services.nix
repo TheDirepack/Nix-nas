@@ -218,7 +218,9 @@ in
         StateDirectory = "nas-cockpit-sso";
         StateDirectoryMode = "0700";
         ReadOnlyPaths = [ "/var/lib/nas-setup/state.json" ];
-        ReadWritePaths = [ "/var/lib/nas-cockpit-sso" ];
+        # The superuser bridge inherits this sandbox; nas-cockpit-api opens the
+        # shared operation lock for admission and coordinator snapshots.
+        ReadWritePaths = [ "/var/lib/nas-cockpit-sso" "/run/nas-operations" ];
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
       };
     };

@@ -227,5 +227,23 @@ class ProtectedRestartActionTests(unittest.TestCase):
         self.assertEqual(observed[0]["state"]["active"], [])
 
 
+class CockpitBridgeSandboxTests(unittest.TestCase):
+    def test_gui_bridge_can_open_the_operation_lock(self) -> None:
+        source = (ROOT / "modules" / "nas" / "config" / "application-services.nix").read_text(encoding="utf-8")
+        block = re.search(r"\n    systemd\.services\.nas-cockpit-sso = \{\n(?P<body>.*?)\n    \};\n", source, re.S)
+        self.assertIsNotNone(block)
+        assert block is not None
+        body = block.group("body")
+        self.assertIn('ProtectSystem = "strict";', body)
+        write_paths = re.search(r"ReadWritePaths = \[(?P<paths>[^\]]*)\];", body)
+        self.assertIsNotNone(write_paths)
+        assert write_paths is not None
+        self.assertIn('"/run/nas-operations"', write_paths.group("paths").split())
+        system = (ROOT / "modules" / "nas" / "config" / "system.nix").read_text(encoding="utf-8")
+        self.assertIn('"d /run/nas-operations 2770 root nas-operations -"', system)
+        gui_api = (ROOT / "cockpit" / "src" / "api.js").read_text(encoding="utf-8")
+        self.assertRegex(gui_api, r'spawn\)\(\["nas-cockpit-api", \.\.\.args\], \{\n\s+superuser: "require",')
+
+
 if __name__ == "__main__":
     unittest.main()
