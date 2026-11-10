@@ -586,6 +586,7 @@ test("installed Services editor reconciles form changes and preserves rejected e
   const first = await openEditor(page);
   const original = await first.name.inputValue();
   const otherPage = await context.newPage();
+  let primaryError;
   try {
     const stale = await openEditor(otherPage);
     await first.name.fill("VM OCI edited through installed Cockpit");
@@ -622,6 +623,9 @@ test("installed Services editor reconciles form changes and preserves rejected e
     await persisted.save.click();
     await expect(persisted.save).toBeEnabled({timeout: 60_000});
     await expect(persisted.frame.locator(".nas-editor-card .pf-v6-c-alert")).toHaveCount(0);
+  } catch (error) {
+    primaryError = error;
+    throw error;
   } finally {
     try {
       await page.reload();
@@ -635,7 +639,9 @@ test("installed Services editor reconciles form changes and preserves rejected e
         body: String(error),
         contentType: "text/plain",
       });
-      throw error;
+      throw primaryError
+        ? new AggregateError([primaryError, error], "Services editor flow and cleanup both failed")
+        : error;
     } finally {
       await otherPage.close();
     }

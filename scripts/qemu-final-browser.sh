@@ -108,6 +108,12 @@ record() {
   printf 'exit\t%s\t%s\n' "$label" "$status"
   if ((status != 0)); then result=$status; fi
 }
+record managed-apply-state systemctl show nas-managed-services-reconcile.service nas-v2-apply-failed.service \
+  -p ActiveState -p SubState -p Result -p MainPID -p ExecMainStatus
+record managed-apply-journal journalctl -b --no-pager -n 180 \
+  -u nas-managed-services-reconcile.service -u nas-v2-apply-failed.service
+record process-waits ps -eo user,pid,ppid,stat,wchan:32,comm
+record pending-systemd-jobs systemctl list-jobs --no-pager
 record failed-units systemctl --failed --no-legend --plain --no-pager
 record identity-unit-state systemctl show --no-pager \
   --property=Id,LoadState,ActiveState,SubState,Result,ExecMainCode,ExecMainStatus,InvocationID,ExecMainStartTimestampMonotonic,ExecMainExitTimestampMonotonic \
