@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -141,6 +142,13 @@ def remove_declarations(expected: dict | None = None) -> None:
 
 
 def create() -> None:
+    with (BASELINE.parent / ".snapshot-health.lock").open("a") as lease:
+        fcntl.flock(lease, fcntl.LOCK_EX)
+        create_fixture()
+        command("nas-vm-initialize-oci-snapshots")
+
+
+def create_fixture() -> None:
     require(not BASELINE.exists() and not DATA.parent.exists(), "OCI persistence fixture already exists")
     value = document()
     desired = value["document"]

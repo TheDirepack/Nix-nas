@@ -28,6 +28,44 @@ def load_probe() -> Any:
 
 
 class OciPersistenceTests(unittest.TestCase):
+    def test_creation_serializes_snapshot_health_through_policy_initialization(self):
+        probe = load_probe()
+        with tempfile.TemporaryDirectory() as raw:
+            probe.BASELINE = pathlib.Path(raw) / "baseline"
+            lock = str(probe.BASELINE.parent / ".snapshot-health.lock")
+            observed = []
+
+            def observe(*argv):
+                status = subprocess.run(["flock", "-n", lock, "true"], check=False, timeout=5).returncode
+                self.assertEqual(status, 1, "snapshot health entered before fixture initialization finished")
+                observed.append(argv)
+
+            with (
+                mock.patch.object(probe, "create_fixture", side_effect=lambda: observe("create")),
+                mock.patch.object(probe, "command", side_effect=observe),
+            ):
+                probe.create()
+            self.assertEqual(observed, [("create",), ("nas-vm-initialize-oci-snapshots",)])
+            subprocess.run(["flock", "-n", lock, "true"], check=True, timeout=5)
+
+    def test_snapshot_health_lock_is_released_when_initialization_fails(self):
+        probe = load_probe()
+        for stage in ("create", "snapshots"):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as raw:
+                probe.BASELINE = pathlib.Path(raw) / "baseline"
+                lock = str(probe.BASELINE.parent / ".snapshot-health.lock")
+                with (
+                    mock.patch.object(
+                        probe,
+                        "create_fixture",
+                        side_effect=RuntimeError("create failed") if stage == "create" else None,
+                    ),
+                    mock.patch.object(probe, "command", side_effect=RuntimeError("snapshots failed")),
+                    self.assertRaisesRegex(RuntimeError, stage + " failed"),
+                ):
+                    probe.create()
+                subprocess.run(["flock", "-n", lock, "true"], check=True, timeout=5)
+
     def test_replacement_waits_for_candidate_and_prior_owner_budget(self):
         probe = load_probe()
         with tempfile.TemporaryDirectory() as raw:
