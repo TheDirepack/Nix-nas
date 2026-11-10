@@ -25,7 +25,7 @@ CopyParty SQLite databases are staged with online backups instead of copying the
 
 ### Off-pool repository
 
-Restic reads the repository from `nas.backup.repositoryFile`, a root-owned `0600` file holding one repository string. Any Restic backend works, including `sftp:`, `rest:`, `s3:`, `b2:` and `rclone:<remote>:<path>`. Keep the file out of Git and the Nix store, because a repository string can contain credentials.
+Restic reads the repository from `nas.backup.repositoryFile`, a root-owned `0600` file holding one repository string. Installation readiness rejects the file, and a `nas.backup.rcloneConfigFile`, unless root owns them and they grant no group or other access. It also rejects a repository on the managed pool, a memory-backed filesystem, or a filesystem it cannot identify, and a backend with no destination. Any Restic backend works, including `sftp:`, `rest:`, `s3:`, `b2:` and `rclone:<remote>:<path>`. Keep the file out of Git and the Nix store, because a repository string can contain credentials.
 
 ```nix
 nas.backup = {
@@ -50,9 +50,9 @@ A top-level `backup.remote` block in `services.yaml` was never applied. A block 
 
 The **Backup** card on the Cockpit overview shows what `nas-backup-status status` reports, as separate observations:
 
-- **Restic repository**: where the configured repository is. *Off-pool* means a network backend or a local path outside the managed pool. *Same pool* is rollback storage only. *System disk* means the path is on the root filesystem; check that its intended disk is mounted. The repository string itself is never displayed.
-- **Last backup**: the result systemd recorded for the last `nas-boot-system` run.
-- **Restore verification**: the last isolated restore and validation of the latest snapshot on this host.
+- **Restic repository**: where the configured repository is. *Off-pool* means a network backend or a local path outside the managed pool. *Same pool* is rollback storage only. *System disk* means the path is on the root filesystem; check that its intended disk is mounted. *Volatile* means a memory-backed filesystem such as `/run`. The repository string itself is never displayed.
+- **Last backup**: the result systemd recorded for the last `nas-boot-system` run against the current repository. A result recorded for a previous repository is not shown.
+- **Restore verification**: the last isolated restore and validation, on this host, of the snapshot that was latest when verification started. The card says when later backups are not yet verified.
 - **Independent restore**: always *Not proven*. Only the boot-device replacement drill in the [Recovery runbook](../reference/project-RECOVERY.md) proves it.
 
 Start a backup or restore verification from **Operations**.

@@ -10,6 +10,7 @@ repository string itself: a Restic repository URL may embed credentials.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -26,6 +27,28 @@ DEFAULT_MOUNTINFO_PATH = pathlib.Path(os.environ.get("NAS_BACKUP_MOUNTINFO", "/p
 RECORD_NAMES = ("backup", "restore-verify")
 MAX_REPOSITORY_BYTES = 4096
 NETWORK_BACKENDS = frozenset({"sftp", "rest", "s3", "azure", "gs", "swift", "b2", "rclone"})
+# Memory-backed and kernel pseudo filesystems lose a repository at reboot.
+VOLATILE_FILESYSTEMS = frozenset(
+    {
+        "tmpfs",
+        "ramfs",
+        "devtmpfs",
+        "proc",
+        "sysfs",
+        "devpts",
+        "cgroup",
+        "cgroup2",
+        "debugfs",
+        "tracefs",
+        "securityfs",
+        "configfs",
+        "pstore",
+        "bpf",
+        "efivarfs",
+        "mqueue",
+        "hugetlbfs",
+    }
+)
 _SCHEME = re.compile(r"^([a-z][a-z0-9]*):")
 
 
@@ -36,7 +59,7 @@ class BackupStatusError(RuntimeError):
 def load_policy(path: pathlib.Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise BackupStatusError(f"Backup policy is unavailable: {path}") from exc
     if not isinstance(value, dict) or value.get("schemaVersion") != 1:
         raise BackupStatusError(f"Backup policy has an unsupported shape: {path}")
@@ -121,13 +144,16 @@ def classify_repository(
 
     ``location`` is ``network`` for a Restic network backend, ``same-pool`` for
     a local path on the managed pool, ``system-disk`` for a path on the root
-    filesystem, ``off-pool`` for a local path mounted from another filesystem,
+    filesystem, ``volatile`` for a memory-backed or pseudo filesystem,
+    ``off-pool`` for a local path mounted from another filesystem,
     ``unverified`` when the mount cannot be determined, and ``invalid`` for a
-    relative path or an unknown scheme.
+    relative path, an unknown scheme, or a backend without a destination.
     """
     match = _SCHEME.match(reference)
     scheme = match.group(1) if match else None
     if scheme in NETWORK_BACKENDS:
+        if not reference[len(scheme) + 1 :].strip(":/ \t"):
+            return {"backend": scheme, "location": "invalid"}
         return {"backend": scheme, "location": "network"}
     if scheme == "local":
         candidate = reference[len("local:") :]
@@ -149,6 +175,8 @@ def classify_repository(
         return {"backend": "local", "location": "unverified"}
     if mount[1] == "zfs" and _on_pool(mount[2], zfs_pool):
         return {"backend": "local", "location": "same-pool"}
+    if mount[1] in VOLATILE_FILESYSTEMS:
+        return {"backend": "local", "location": "volatile"}
     if mount[0] == "/":
         return {"backend": "local", "location": "system-disk"}
     return {"backend": "local", "location": "off-pool"}
@@ -157,21 +185,34 @@ def classify_repository(
 def _read_optional_text(path: pathlib.Path) -> str | None:
     try:
         return path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _repository_reference(policy: dict[str, Any]) -> tuple[str, str]:
+    if policy["repositorySource"] == "repository-file":
+        return "repository-file", read_repository_reference(pathlib.Path(policy["repositoryFile"]))
+    return "local", policy["localRepository"]
+
+
+def _fingerprint(source: str, reference: str) -> str:
+    # Identifies the destination a run used without storing the secret string.
+    return hashlib.sha256(f"nas-backup-repository\0{source}\0{reference}".encode()).hexdigest()
+
+
+def repository_fingerprint(policy: dict[str, Any]) -> str | None:
+    try:
+        return _fingerprint(*_repository_reference(policy))
+    except BackupStatusError:
         return None
 
 
 def configured_repository(policy: dict[str, Any], *, mountinfo: str | None) -> dict[str, str]:
     """Classify the repository the Restic units use under ``policy``."""
-    if policy["repositorySource"] == "repository-file":
-        try:
-            reference = read_repository_reference(pathlib.Path(policy["repositoryFile"]))
-        except BackupStatusError as exc:
-            return {"source": "repository-file", "backend": "unknown", "location": "unavailable", "error": str(exc)}
-        source = "repository-file"
-    else:
-        reference = policy["localRepository"]
-        source = "local"
+    try:
+        source, reference = _repository_reference(policy)
+    except BackupStatusError as exc:
+        return {"source": "repository-file", "backend": "unknown", "location": "unavailable", "error": str(exc)}
     classified = classify_repository(
         reference,
         zfs_pool=policy["zfsPool"],
@@ -218,9 +259,10 @@ def write_record(
         "exitCode": environment.get("EXIT_CODE", "")[:64],
         "exitStatus": environment.get("EXIT_STATUS", "")[:64],
         "finishedAt": (now or datetime.now(timezone.utc)).isoformat(timespec="seconds"),
+        "repository": repository_fingerprint(policy),
     }
     path = _record_path(policy, name)
-    path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
@@ -228,7 +270,7 @@ def write_record(
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.chmod(temporary, 0o644)
+        os.chmod(temporary, 0o600)
         os.replace(temporary, path)
         fsync_directory(path.parent)
     finally:
@@ -254,22 +296,55 @@ _LOCATION_TEXT = {
         "The repository is on the root filesystem. It survives pool loss but not boot-device loss; "
         "check that its intended disk is mounted.",
     ),
+    "volatile": (
+        "attention",
+        "Volatile",
+        "The repository is on a memory-backed or pseudo filesystem and is lost at reboot.",
+    ),
     "unverified": (
         "attention",
         "Unverified",
         "The repository is a local path whose filesystem could not be determined.",
     ),
-    "invalid": ("attention", "Invalid", "The repository is a relative path or an unknown Restic backend."),
+    "invalid": (
+        "attention",
+        "Invalid",
+        "The repository is a relative path, an unknown Restic backend, or a backend without a destination.",
+    ),
     "unavailable": ("unavailable", "Unavailable", "{error}"),
 }
 
 
-def _run_row(row_id: str, label: str, record: dict[str, Any] | None, success_text: str) -> dict[str, str]:
+def _current_record(policy: dict[str, Any], name: str, fingerprint: str | None) -> dict[str, Any] | None:
+    """Return the record only when it was written for the current repository."""
+    record = read_record(policy, name)
+    if record is None or fingerprint is None or record.get("repository") != fingerprint:
+        return None
+    return record
+
+
+def _finished(record: dict[str, Any]) -> datetime | None:
+    try:
+        value = datetime.fromisoformat(record["finishedAt"])
+    except ValueError:
+        return None
+    return value if value.tzinfo is not None else None
+
+
+def _run_row(
+    row_id: str, label: str, record: dict[str, Any] | None, success_text: str, *, caveat: str = ""
+) -> dict[str, str]:
     if record is None:
-        return _row(row_id, label, "unavailable", "No run recorded", "No completed run has been recorded.")
+        return _row(
+            row_id,
+            label,
+            "unavailable",
+            "No run recorded",
+            "No completed run has been recorded for the current repository.",
+        )
     finished = record["finishedAt"]
     if record["result"] == "success":
-        return _row(row_id, label, "ok", "Succeeded", f"{success_text} {finished}.")
+        return _row(row_id, label, "ok", "Succeeded", f"{success_text} {finished}.{caveat}")
     return _row(
         row_id,
         label,
@@ -317,17 +392,25 @@ def backup_status(policy: dict[str, Any], *, mountinfo: str | None) -> dict[str,
                 "nas.zfsReplication copies the managed dataset to another ZFS target.",
             )
         )
-    last_backup = read_record(policy, "backup") if policy["enabled"] else None
+    fingerprint = repository_fingerprint(policy) if policy["enabled"] else None
+    last_backup = _current_record(policy, "backup", fingerprint) if policy["enabled"] else None
     if policy["enabled"]:
         rows.append(_run_row("last-backup", "Last backup", last_backup, "The last backup completed at"))
-    last_verify = read_record(policy, "restore-verify") if policy["restoreVerification"] else None
+    last_verify = _current_record(policy, "restore-verify", fingerprint) if policy["restoreVerification"] else None
     if policy["restoreVerification"]:
+        caveat = ""
+        if last_verify is not None and last_backup is not None and last_backup["result"] == "success":
+            backup_time, verify_time = _finished(last_backup), _finished(last_verify)
+            if backup_time is not None and verify_time is not None and backup_time > verify_time:
+                caveat = " Snapshots from later backups have not been restore-verified yet."
         rows.append(
             _run_row(
                 "restore-verification",
                 "Restore verification",
                 last_verify,
-                "The latest snapshot was restored and validated in scratch storage on this host at",
+                "The snapshot that was latest when verification started was restored and validated in "
+                "scratch storage on this host; verification finished at",
+                caveat=caveat,
             )
         )
     elif policy["enabled"]:
@@ -369,6 +452,7 @@ def check_readiness(policy: dict[str, Any], *, mountinfo: str | None) -> list[st
     repository must be readable and must not name a path on the managed pool.
     A path that currently resolves to the root filesystem is not rejected here:
     at boot its intended disk may not be mounted yet, so status reports it.
+    Every other location that is not demonstrably off-pool fails closed.
     """
     if policy["replication"]:
         return []
@@ -381,7 +465,13 @@ def check_readiness(policy: dict[str, Any], *, mountinfo: str | None) -> list[st
     if location == "same-pool":
         return ["nas.backup.repositoryFile names a path on the managed ZFS pool; it is not an independent backup."]
     if location == "invalid":
-        return ["nas.backup.repositoryFile must name an absolute local path or a supported Restic backend."]
+        return [
+            "nas.backup.repositoryFile must name an absolute local path or a supported Restic backend with a destination."
+        ]
+    if location == "volatile":
+        return ["nas.backup.repositoryFile names a memory-backed or pseudo filesystem that is lost at reboot."]
+    if location == "unverified":
+        return ["nas.backup.repositoryFile names a local path whose filesystem could not be determined."]
     return []
 
 

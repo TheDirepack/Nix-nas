@@ -120,10 +120,10 @@ let
     ${lib.optionalString cfg.backup.enable ''
       check_file ${lib.escapeShellArg cfg.backup.passwordFile} "Restic password file" private
       ${lib.optionalString (cfg.backup.repositoryFile != "") ''
-        check_file ${lib.escapeShellArg cfg.backup.repositoryFile} "Restic repository file" private
+        check_file ${lib.escapeShellArg cfg.backup.repositoryFile} "Restic repository file" root-private
       ''}
       ${lib.optionalString (cfg.backup.rcloneConfigFile != "") ''
-        check_file ${lib.escapeShellArg cfg.backup.rcloneConfigFile} "rclone configuration" private
+        check_file ${lib.escapeShellArg cfg.backup.rcloneConfigFile} "rclone configuration" root-private
       ''}
     ''}
     # The repository string is secret, so only its location can be checked

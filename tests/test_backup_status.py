@@ -27,6 +27,9 @@ MOUNTINFO = "\n".join(
         "42 22 0:42 / /mnt/usb\\040disk rw shared:22 - ext4 /dev/sdb1 rw",
         "43 22 0:43 / /backup rw shared:23 - zfs vault/restic rw,xattr",
         "44 22 0:44 / /tankfoo rw shared:24 - xfs /dev/sdc1 rw",
+        "45 22 0:45 / /run rw shared:25 - tmpfs tmpfs rw",
+        "46 22 0:46 / /dev/shm rw shared:26 - tmpfs tmpfs rw",
+        "47 22 0:47 / /proc rw shared:27 - proc proc rw",
         "malformed row without separator",
     ]
 )
@@ -89,6 +92,16 @@ class RepositoryClassificationTests(unittest.TestCase):
         for reference in ("backups/restic", "local:relative", "ftp:host/path", "C:\\restic"):
             with self.subTest(reference=reference):
                 self.assertEqual(classify(reference), "invalid")
+
+    def test_backend_without_a_destination_is_invalid(self) -> None:
+        for reference in ("rclone:", "s3:", "rest:/", "sftp: ", "b2:::"):
+            with self.subTest(reference=reference):
+                self.assertEqual(classify(reference), "invalid")
+
+    def test_memory_backed_and_pseudo_filesystems_are_volatile(self) -> None:
+        for reference in ("/run/restic", "local:/dev/shm/restic", "/proc/restic"):
+            with self.subTest(reference=reference):
+                self.assertEqual(classify(reference), "volatile")
 
 
 class PolicyFixture:
@@ -171,6 +184,64 @@ class BackupStatusTests(unittest.TestCase):
         # Restoring on the same host never proves disaster recovery.
         self.assertFalse(value["independentRestoreProven"])
         self.assertNotEqual(rows["independent-restore"]["state"], "ok")
+
+    def test_success_for_a_previous_repository_is_not_reported_for_the_current_one(self) -> None:
+        fixture = PolicyFixture(self.root)
+        fixture.repository("rclone:old:nas-backup")
+        finished = {"SERVICE_RESULT": "success"}
+        self.assertEqual(fixture.main("record", "backup", env=finished)[0], 0)
+        self.assertEqual(fixture.main("record", "restore-verify", env=finished)[0], 0)
+        self.assertTrue(json.loads(fixture.main("status")[1])["ok"])
+        record = json.loads((self.root / "records" / "backup.json").read_text(encoding="utf-8"))
+        self.assertNotIn("old:nas-backup", json.dumps(record))
+
+        fixture.repository("rclone:new:nas-backup")
+        value = json.loads(fixture.main("status")[1])
+        rows = self.rows(value)
+        self.assertFalse(value["ok"])
+        self.assertIsNone(value["lastBackup"])
+        self.assertEqual(rows["last-backup"]["summary"], "No run recorded")
+        self.assertIn("current repository", rows["last-backup"]["detail"])
+        self.assertEqual(rows["restore-verification"]["summary"], "No run recorded")
+
+        # A record without a fingerprint (older format or unreadable file) never counts.
+        (self.root / "records" / "backup.json").write_text(
+            json.dumps({"result": "success", "finishedAt": "2026-11-09T03:00:00+00:00"}), encoding="utf-8"
+        )
+        self.assertIsNone(json.loads(fixture.main("status")[1])["lastBackup"])
+
+    def test_restore_verification_older_than_the_last_backup_says_so(self) -> None:
+        fixture = PolicyFixture(self.root)
+        fixture.repository("s3:host/bucket")
+        early = datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc)
+        late = datetime(2026, 11, 9, 3, 0, tzinfo=timezone.utc)
+        status.write_record(fixture.policy, "restore-verify", {"SERVICE_RESULT": "success"}, now=early)
+        status.write_record(fixture.policy, "backup", {"SERVICE_RESULT": "success"}, now=late)
+        detail = self.rows(json.loads(fixture.main("status")[1]))["restore-verification"]["detail"]
+        self.assertIn("latest when verification started", detail)
+        self.assertIn("later backups have not been restore-verified", detail)
+
+        status.write_record(fixture.policy, "restore-verify", {"SERVICE_RESULT": "success"}, now=late)
+        status.write_record(fixture.policy, "backup", {"SERVICE_RESULT": "success"}, now=early)
+        detail = self.rows(json.loads(fixture.main("status")[1]))["restore-verification"]["detail"]
+        self.assertNotIn("later backups", detail)
+
+    def test_invalid_utf8_policy_mountinfo_and_records_do_not_crash(self) -> None:
+        fixture = PolicyFixture(self.root)
+        fixture.repository("b2:bucket:nas")
+        records = self.root / "records"
+        records.mkdir()
+        (records / "backup.json").write_bytes(b"\xff\xfe")
+        fixture.mountinfo.write_bytes(b"\xff")
+        code, out, _ = fixture.main("status")
+        self.assertEqual(code, 0)
+        self.assertIsNone(json.loads(out)["lastBackup"])
+        fixture.path.write_bytes(b"\xff\xfe")
+        code, out, err = fixture.main("status")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("unavailable", err)
+        with mock.patch.object(status, "DEFAULT_POLICY_PATH", fixture.path):
+            self.assertFalse(status.status_from_environment()["ok"])
 
     def test_failed_backup_run_is_reported_as_failed(self) -> None:
         fixture = PolicyFixture(self.root)
@@ -291,6 +362,9 @@ class ReadinessTests(unittest.TestCase):
             ("same-pool repository file", {}, "/tank/backups/restic", 1, "managed ZFS pool"),
             ("same-pool local: prefix", {}, "local:/srv/apps/restic", 1, "managed ZFS pool"),
             ("relative repository", {}, "restic", 1, "absolute local path"),
+            ("backend without destination", {}, "rclone:", 1, "with a destination"),
+            ("tmpfs repository", {}, "/run/restic", 1, "lost at reboot"),
+            ("unverifiable mount", {"mountinfo": ""}, "/mnt/usb/restic", 1, "could not be determined"),
             ("missing repository file", {}, None, 1, "unreadable"),
             ("replication covers same-pool", {"replication": True}, "/tank/backups/restic", 0, ""),
             (
@@ -312,7 +386,11 @@ class ReadinessTests(unittest.TestCase):
             with self.subTest(name):
                 case_root = self.root / name.replace(" ", "-")
                 case_root.mkdir()
+                overrides = dict(overrides)
+                mountinfo = overrides.pop("mountinfo", None)
                 fixture = PolicyFixture(case_root, **overrides)
+                if mountinfo is not None:
+                    fixture.mountinfo.write_text(mountinfo, encoding="utf-8")
                 if repository is not None:
                     fixture.repository(repository)
                 code, out, err = fixture.main("check-readiness")
@@ -339,7 +417,10 @@ class RecordTests(unittest.TestCase):
             path = pathlib.Path(raw) / "records" / "backup.json"
             self.assertEqual(json.loads(path.read_text(encoding="utf-8")), record)
             self.assertEqual(record["finishedAt"], "2026-11-09T03:00:00+00:00")
-            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o644)
+            # The record holds a fingerprint of a possibly secret repository string.
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
+            self.assertNotIn(str(fixture.repository_file), path.read_text(encoding="utf-8"))
             self.assertEqual(list(path.parent.glob(".*")), [])
             with self.assertRaises(status.BackupStatusError):
                 status.write_record(fixture.policy, "../escape", {"SERVICE_RESULT": "success"})
