@@ -222,7 +222,9 @@ def coordinated_child(command: Sequence[str]) -> list[str]:
 def run_root(command: Sequence[str], **kwargs: Any) -> Completed:
     if os.geteuid() == 0:
         return run(command, **kwargs)
-    refresh = run(["sudo", "-n", "-v"], check=False)
+    # A caller-bounded command must not wait longer on the authorization refresh.
+    bound = {"timeout_seconds": kwargs["timeout_seconds"]} if "timeout_seconds" in kwargs else {}
+    refresh = run(["sudo", "-n", "-v"], check=False, **bound)
     if refresh.returncode != 0:
         detail = refresh.stderr.strip() or "cached sudo authorization is unavailable"
         raise SetupError(f"Privileged setup authorization expired: {detail}")
@@ -1954,7 +1956,12 @@ def load_setup_journal() -> dict[str, Any] | None:
     except JournalError as exc:
         if os.geteuid() == 0 or not isinstance(exc.__cause__, PermissionError):
             raise
-    completed = run_root_noninteractive(["cat", "--", str(JOURNAL_PATH)], check=False)
+    try:
+        completed = run_root_noninteractive(
+            ["cat", "--", str(JOURNAL_PATH)], check=False, timeout_seconds=STATUS_STORAGE_PROBE_SECONDS
+        )
+    except SetupError as exc:
+        raise JournalUnreadableError(str(exc)) from exc
     if completed.returncode != 0:
         raise JournalUnreadableError(
             completed.stderr.strip() or "privileged read of the first-run journal is unavailable"

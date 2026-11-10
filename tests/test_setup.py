@@ -993,7 +993,9 @@ class FirstStartStatusTests(unittest.TestCase):
                     mock.patch.object(setup, "run_root_noninteractive", return_value=escalated)
                 )
                 result = setup.first_start_status(str(config))
-            privileged.assert_called_once_with(["cat", "--", str(setup.JOURNAL_PATH)], check=False)
+            privileged.assert_called_once_with(
+                ["cat", "--", str(setup.JOURNAL_PATH)], check=False, timeout_seconds=setup.STATUS_STORAGE_PROBE_SECONDS
+            )
             self.assertEqual(result["status"], "manual-recovery-required")
             self.assertEqual(result["setupJournal"]["step"], "identity-accounts")
 
@@ -1003,9 +1005,39 @@ class FirstStartStatusTests(unittest.TestCase):
                     stack.enter_context(patch)
                 stack.enter_context(mock.patch.object(setup, "run_root_noninteractive", return_value=refused))
                 unreadable = setup.first_start_status(str(config))
+            with contextlib.ExitStack() as stack:
+                for patch in common:
+                    stack.enter_context(patch)
+                stack.enter_context(
+                    mock.patch.object(
+                        setup,
+                        "run_root_noninteractive",
+                        side_effect=setup.SetupError("Command timed out after 12 seconds"),
+                    )
+                )
+                stalled = setup.first_start_status(str(config))
         self.assertEqual(unreadable["status"], "journal-unreadable")
         self.assertIn("a password is required", unreadable["message"])
         self.assertNotIn("planDigest", unreadable)
+        self.assertEqual(stalled["status"], "journal-unreadable")
+        self.assertIn("timed out", stalled["message"])
+
+    def test_bounded_privileged_commands_bound_the_sudo_refresh(self) -> None:
+        calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
+
+        def record(command, **kwargs):
+            calls.append((tuple(command), kwargs))
+            return setup.Completed(tuple(command), "", "", 0)
+
+        with (
+            mock.patch.object(setup.os, "geteuid", return_value=1000),
+            mock.patch.object(setup, "run", side_effect=record),
+        ):
+            setup.run_root(["nas-zfs-mount-check"], check=False, timeout_seconds=12)
+            setup.run_root(["systemctl", "start", "unit"])
+        self.assertEqual(calls[0], (("sudo", "-n", "-v"), {"check": False, "timeout_seconds": 12}))
+        self.assertEqual(calls[1][1]["timeout_seconds"], 12)
+        self.assertEqual(calls[2], (("sudo", "-n", "-v"), {"check": False}))
 
     def test_recovery_outranks_a_missing_plan(self) -> None:
         result = self.status_with_journal(
