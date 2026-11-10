@@ -123,7 +123,19 @@ def mock_data(value: str) -> dict[str, Any]:
         "operations": {"busyClasses": [], "conflictsByAction": {}, "managedServicesConflicts": []},
         "zfs": {"ok": True, "healthy": True, "summary": value, "dataset": "tank/nas"},
         "failedUnits": [value],
-        "backupRemote": {"provider": "local", "scope": "config-only", "rcloneRemote": value},
+        "backup": {
+            "ok": False,
+            "rows": [
+                {"id": "repository", "label": value, "state": "attention", "summary": value, "detail": value},
+                {
+                    "id": "independent-restore",
+                    "label": "Independent restore",
+                    "state": "unavailable",
+                    "summary": "Not proven",
+                    "detail": value,
+                },
+            ],
+        },
         "zfsReplicationInstalled": True,
     }
 

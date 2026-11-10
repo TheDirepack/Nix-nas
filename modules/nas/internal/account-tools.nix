@@ -56,6 +56,7 @@ let
       ruamel-yaml
     ];
     pythonImportsCheck = [
+      "nas_backup_status"
       "nas_cockpit_api"
       "nas_doctor"
       "nas_identity_sync"
@@ -246,6 +247,15 @@ let
       "$out/share/authentik/blueprints/nas-setup.yaml"
   '';
 
+  nasBackupStatus = pkgs.writeShellApplication {
+    name = "nas-backup-status";
+    runtimeInputs = [ pkgs.coreutils ];
+    text = ''
+      export NAS_BACKUP_POLICY=/etc/nas-control/backup-policy.json
+      exec ${nasPythonApplication}/bin/nas-backup-status "$@"
+    '';
+  };
+
   nasCockpitApiScript = "${nasPythonApplication}/bin/nas-cockpit-api";
   nasCockpitApi = pkgs.writeShellApplication {
     name = "nas-cockpit-api";
@@ -274,6 +284,6 @@ in
     authentikPackage
     nasPythonApplication nasIdentitySyncScript nasIdentityPython nasIdentitySync
     nasSetupScript nasSetup nasStateScript nasState nasDoctorScript nasDoctor nasPortalStatic nasAuthentikBlueprints
-    nasCockpitApiScript nasCockpitApi
+    nasCockpitApiScript nasCockpitApi nasBackupStatus
   ;
 }

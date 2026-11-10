@@ -307,11 +307,18 @@ test("unavailable CLI probes never render an empty successful health result", as
   const data = overview();
   data.failedUnits = null;
   data.zfs = {healthy: null, stateLabel: "Status unavailable"};
+  data.backup = {ok: false, error: "Backup policy is unavailable", rows: []};
   await installCockpitMock(page, {payload: data});
   await page.goto("/index.html");
   await expect(page.getByText("Failed-unit status unavailable. Refresh to retry.")).toBeVisible();
   await expect(page.getByText("No failed units reported.")).toHaveCount(0);
-  await expect(page.getByText("Status unavailable", {exact: true})).toBeVisible();
+  const card = (title) =>
+    page.locator(".pf-v6-c-card").filter({has: page.getByText(title, {exact: true})});
+  await expect(card("ZFS").getByText("Status unavailable", {exact: true})).toBeVisible();
+  const backup = card("Backup");
+  await expect(backup.getByText("Status unavailable", {exact: true})).toBeVisible();
+  await expect(backup.getByText("Backup policy is unavailable")).toBeVisible();
+  await expect(backup.getByText("Succeeded")).toHaveCount(0);
 });
 
 test("source page explains and disables an update apply that nas-update would refuse", async ({

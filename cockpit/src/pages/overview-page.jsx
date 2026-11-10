@@ -10,13 +10,14 @@ import {
 } from "@patternfly/react-core";
 import {StatusLabel} from "../components/status-label.jsx";
 import {OutputBlock} from "../components/output-block.jsx";
-import {setupModel, managedServiceRows} from "../view-model.js";
+import {backupRows, setupModel, managedServiceRows} from "../view-model.js";
 
 export function OverviewPage({data, refresh, busy}) {
   const setup = setupModel(data || {});
   const services = managedServiceRows(data || {});
   const running = services.filter((service) => service.running).length;
   const zfsHealthy = data?.zfs?.healthy === true;
+  const backup = backupRows(data || {});
   const cards = [
     {
       title: "Appliance",
@@ -60,6 +61,24 @@ export function OverviewPage({data, refresh, busy}) {
           </p>
           <OutputBlock>{data?.zfs?.summary || "Unavailable"}</OutputBlock>
           <OutputBlock>{data?.zfs?.dataset || ""}</OutputBlock>
+        </>
+      ),
+    },
+    {
+      title: "Backup",
+      body: (
+        <>
+          {backup.map((row) => (
+            <p key={row.id}>
+              {row.label}: <StatusLabel ok={row.state === "ok"}>{row.summary}</StatusLabel>
+              {row.detail ? (
+                <>
+                  <br />
+                  <small>{row.detail}</small>
+                </>
+              ) : null}
+            </p>
+          ))}
         </>
       ),
     },
