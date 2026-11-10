@@ -160,6 +160,17 @@ pkgs.testers.runNixOSTest {
     machine.succeed(f"test $(systemctl show -p ConditionResult --value '{oci_mount}') = no")
     machine.succeed(f"test $(systemctl show -p ActiveState --value '{oci_mount}') = inactive")
     machine.succeed("test ! -e /tank/vm-oci-persist")
+    sync_stop_status = machine.succeed("systemctl cat nas-syncthing-sync.service | sed -n 's/^SuccessExitStatus=//p'").strip()
+    assert sync_stop_status == "SIGTERM", sync_stop_status
+    machine.succeed(f"systemd-run --no-block --unit=nas-sync-stop-probe --property=Type=oneshot --property=SuccessExitStatus={sync_stop_status} ${pkgs.coreutils}/bin/sleep 300")
+    machine.wait_until_succeeds("test $(systemctl show -p MainPID --value nas-sync-stop-probe.service) -gt 0")
+    machine.succeed("systemctl stop nas-sync-stop-probe.service")
+    machine.succeed("test $(systemctl show -p Result --value nas-sync-stop-probe.service) = success")
+    machine.succeed("test $(systemctl show -p ExecMainStatus --value nas-sync-stop-probe.service) = 15")
+    machine.succeed(f"systemd-run --no-block --unit=nas-sync-failure-probe --property=Type=oneshot --property=SuccessExitStatus={sync_stop_status} ${pkgs.coreutils}/bin/false")
+    machine.wait_until_succeeds("systemctl is-failed --quiet nas-sync-failure-probe.service")
+    machine.succeed("test $(systemctl show -p Result --value nas-sync-failure-probe.service) = exit-code")
+    machine.succeed("systemctl reset-failed nas-sync-failure-probe.service")
     machine.succeed("${pkgs.python3}/bin/python ${deviceAllowProbe}")
     machine.succeed("test ! -e /run/nas-secret-runtime/live/ready")
     # The dirty service must gate reconciliation on the secret-ready marker:

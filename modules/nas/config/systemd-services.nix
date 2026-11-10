@@ -395,6 +395,9 @@ in
             http://127.0.0.1:${toString syncthingGuiPort}/rest/noauth/health
         '';
         ExecStart = "${nasPythonApplication}/bin/nas-operation-run --action syncthing-sync --class identity --class runtime -- ${nasIdentitySync}/bin/nas-identity-sync sync-syncthing";
+        # Unlike daemon services, oneshot units treat the protected target's
+        # normal SIGTERM stop as failure unless it is explicitly accepted.
+        SuccessExitStatus = [ "SIGTERM" ];
         RestartForceExitStatus = [ 75 ];
         RestartSec = "5s";
       };

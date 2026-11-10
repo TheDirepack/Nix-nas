@@ -297,6 +297,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("--action syncthing-sync --class identity --class runtime --", syncthing_sync)
         self.assertIn("RestartForceExitStatus = [ 75 ];", syncthing_sync)
         self.assertIn('RestartSec = "5s";', syncthing_sync)
+        self.assertIn('SuccessExitStatus = [ "SIGTERM" ];', syncthing_sync)
         guest = text("tests/vm/guest-test.sh")
         self.assertIn(
             "systemctl show nas-syncthing-sync.service --property=ExecMainStatus --value",
