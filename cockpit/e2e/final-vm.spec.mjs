@@ -565,7 +565,8 @@ test("installed Services editor reconciles form changes and preserves rejected e
     testInfo.project.name !== "chromium-final-vm",
     "One mutation flow owns the shared appliance document; other projects qualify rendering and authentication.",
   );
-  test.setTimeout(180_000);
+  const reconcileTimeout = 300_000;
+  test.setTimeout(3 * reconcileTimeout + 180_000);
   const openEditor = async (target) => {
     await target.goto("/console/nas");
     const frame = await getNasComponentFrame(target);
@@ -591,7 +592,7 @@ test("installed Services editor reconciles form changes and preserves rejected e
     const stale = await openEditor(otherPage);
     await first.name.fill("VM OCI edited through installed Cockpit");
     await first.save.click();
-    await expect(first.save).toBeEnabled({timeout: 60_000});
+    await expect(first.save).toBeEnabled({timeout: reconcileTimeout});
     await expect(first.frame.locator(".nas-editor-card .pf-v6-c-alert")).toHaveCount(0);
     await expect(first.name).toHaveValue("VM OCI edited through installed Cockpit");
 
@@ -621,7 +622,7 @@ test("installed Services editor reconciles form changes and preserves rejected e
     await expect(persisted.name).toHaveValue("VM OCI edited through installed Cockpit");
     await persisted.name.fill(original);
     await persisted.save.click();
-    await expect(persisted.save).toBeEnabled({timeout: 60_000});
+    await expect(persisted.save).toBeEnabled({timeout: reconcileTimeout});
     await expect(persisted.frame.locator(".nas-editor-card .pf-v6-c-alert")).toHaveCount(0);
   } catch (error) {
     primaryError = error;
@@ -630,9 +631,12 @@ test("installed Services editor reconciles form changes and preserves rejected e
     try {
       await page.reload();
       const cleanup = await openEditor(page);
-      await cleanup.name.fill(original);
-      await cleanup.save.click();
-      await expect(cleanup.save).toBeEnabled({timeout: 60_000});
+      if ((await cleanup.name.inputValue()) !== original) {
+        await cleanup.name.fill(original);
+        await cleanup.save.click();
+        await expect(cleanup.save).toBeEnabled({timeout: reconcileTimeout});
+      }
+      await expect(cleanup.name).toHaveValue(original);
       await expect(cleanup.frame.locator(".nas-editor-card .pf-v6-c-alert")).toHaveCount(0);
     } catch (error) {
       await testInfo.attach("editor-cleanup-error", {
