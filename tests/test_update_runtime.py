@@ -579,6 +579,11 @@ class UpdateRuntimeTests(unittest.TestCase):
             "non-array": '{"schemaVersion": 1, "startUnits": "copyparty.service"}',
             "non-string": '{"schemaVersion": 1, "startUnits": [3]}',
             "space": '{"schemaVersion": 1, "startUnits": ["a b.service"]}',
+            "trailing-newline": '{"schemaVersion": 1, "startUnits": ["trailing.service\\n"]}',
+            "embedded-newline": '{"schemaVersion": 1, "startUnits": ["x\\nok.service"]}',
+            "gate-trailing-newline": (
+                '{"schemaVersion": 1, "startUnits": ["g.service"], "readinessUnits": ["g.service\\n"]}'
+            ),
             "backslash": '{"schemaVersion": 1, "startUnits": ["a\\\\x2d.service"]}',
             "shell": '{"schemaVersion": 1, "startUnits": ["a;b.service"]}',
             "not-a-unit": '{"schemaVersion": 1, "startUnits": ["copyparty"]}',
