@@ -1660,6 +1660,7 @@ pass "observability stack, notification delivery, and Cockpit assets are present
 log "Secret stop/reactivation transaction"
 python3 "$CONFIG_DIR/tests/vm/oci-probe.py" create
 run_as_admin nas-secrets stop
+wait_inactive nas-v2-vm-oci-persist.service
 python3 "$CONFIG_DIR/tests/vm/oci-probe.py" locked
 wait_inactive caddy.service
 wait_inactive copyparty.service

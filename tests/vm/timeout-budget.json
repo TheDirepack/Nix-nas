@@ -129,7 +129,7 @@
     {
       "id": "secrets",
       "label": "Secret stop/reactivation transaction",
-      "ordinaryWaits": 8,
+      "ordinaryWaits": 9,
       "fixedSeconds": 240,
       "timeoutKeys": [
         "secretActivation"

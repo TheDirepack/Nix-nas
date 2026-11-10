@@ -174,7 +174,7 @@ class BrowserAuthzInputTests(unittest.TestCase):
               : {results: [{pk: 'oci', name: scope[0], attributes: {nasManagedCapability: true}}], pagination: {next: 0}};
           }
           else {
-            writes.push(url);
+            writes.push({url, body: options.body});
             if (url.includes('/add_user/')) membership.add('oci');
             else membership.delete('oci');
           }
@@ -203,7 +203,8 @@ class BrowserAuthzInputTests(unittest.TestCase):
         self.assertEqual(outcome["after"], ["other"])
         self.assertEqual(outcome["pages"], [1, 2, 1, 2])
         self.assertEqual(len(outcome["writes"]), 2)
-        self.assertTrue(all("/oci/" in url for url in outcome["writes"]))
+        self.assertTrue(all("/oci/" in write["url"] for write in outcome["writes"]))
+        self.assertEqual([json.loads(write["body"]) for write in outcome["writes"]], [{"pk": 7}, {"pk": 7}])
 
     @staticmethod
     def secret(root: pathlib.Path, name: str, value: str) -> pathlib.Path:
