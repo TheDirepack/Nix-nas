@@ -88,6 +88,8 @@ firewall_zone="${NAS_FIREWALL_ZONE:-nas-lan}"
 lan_host="${NAS_LAN_HOST:-$(cat /proc/sys/kernel/hostname).local}"
 trusted_interfaces="${NAS_TRUSTED_INTERFACES:-}"
 v2_systemd_state="${NAS_V2_SYSTEMD_STATE:-/run/nas-control/systemd-reconciled.json}"
+v2_reconcile_pending="${NAS_V2_RECONCILE_PENDING:-/run/nas-control/reconcile.pending}"
+copyparty_expected=false
 copyparty_socket=/run/copyparty/http.sock
 cockpit_socket=/run/nas-cockpit-sso/ws.sock
 
@@ -192,6 +194,10 @@ PY_EXTERNAL_PROBE
     echo "External management probe command is empty." >&2
     return 1
   }
+  [[ "${probe[0]}" == /* && -f "${probe[0]}" && -x "${probe[0]}" ]] || {
+    echo "External management probe executable is not an absolute executable file: ${probe[0]}" >&2
+    return 1
+  }
   $validate_only && return 0
   timeout 60 "${probe[@]}"
 }
@@ -207,7 +213,7 @@ v2_expected_units() {
   }
   jq -r '
     if type == "object" and (.startUnits | type) == "array"
-      and all(.startUnits[]; type == "string" and test("^[A-Za-z0-9_][A-Za-z0-9:_.@\\\\-]*[.](service|socket|timer|path)$"))
+      and all(.startUnits[]; type == "string" and test("^[A-Za-z0-9_][A-Za-z0-9:_.@\\\\-]*[.](service|socket|timer|path|target)$"))
     then .startUnits[]
     else error("startUnits must be an array of unit names")
     end' "$v2_systemd_state" || {
@@ -216,9 +222,11 @@ v2_expected_units() {
   }
 }
 
-application_health() {
-  local listing unit copyparty_expected=false
+# Sets copyparty_expected for application_health; read-only, so status uses it too.
+application_units_active() {
+  local listing unit
   local -a expected=() inactive=()
+  copyparty_expected=false
   listing="$(v2_expected_units)" || return 1
   [[ -z "$listing" ]] || mapfile -t expected <<<"$listing"
   for unit in "${expected[@]}"; do
@@ -229,6 +237,20 @@ application_health() {
     echo "Managed Services V2 expects these units to run, but they are not active: ${inactive[*]}" >&2
     return 1
   fi
+}
+
+# A pending or running reconcile can still stop units or replace the start set.
+managed_services_settled() {
+  local state
+  state="$(systemctl is-active nas-managed-services-reconcile.service 2>/dev/null || true)"
+  if [[ -e "$v2_reconcile_pending" || "$state" =~ ^(active|activating|deactivating|reloading)$ ]]; then
+    echo "Managed Services reconciliation is pending or running; retry after it settles, or inspect nas-managed-services-reconcile.service." >&2
+    return 1
+  fi
+}
+
+application_health() {
+  application_units_active || return 1
   if $copyparty_expected; then
     [[ -S "$copyparty_socket" ]] || { echo "CopyParty Unix listener is missing" >&2; return 1; }
     curl --fail --silent --show-error --max-time 10 --unix-socket "$copyparty_socket" http://localhost/ >/dev/null || {
@@ -304,9 +326,13 @@ if $status_only; then
     fi
   fi
   current_system="$(readlink -f /run/current-system 2>/dev/null || true)"
-  # Report the same probe validation --apply performs, without launching it, so
-  # clients can explain why persistent deployment is unavailable. The local-only
-  # recovery override is deliberately not reflected here.
+  # Report the admission checks --apply performs, without launching the probe
+  # or contacting applications, so clients can explain why persistent
+  # deployment is unavailable. Recovery overrides are deliberately ignored.
+  apply_blockers='[]'
+  add_apply_blocker() {
+    apply_blockers="$(jq -c --arg code "$1" --arg message "$2" '. + [{code:$code, message:$message}]' <<<"$apply_blockers")"
+  }
   probe_configured=false
   probe_valid=null
   probe_error=''
@@ -317,7 +343,22 @@ if $status_only; then
     else
       probe_valid=false
       [[ -n "$probe_error" ]] || probe_error="external probe command is invalid"
+      add_apply_blocker external-probe-invalid "The configured independent management probe is invalid: $probe_error"
     fi
+  else
+    add_apply_blocker external-probe-unconfigured \
+      "Applying an update requires an independent management probe. Set nas.update.externalProbeCommand in the NixOS configuration."
+  fi
+  if ! command -v systemctl >/dev/null 2>&1; then
+    add_apply_blocker runtime-state-unavailable "systemctl is unavailable, so protected-service state cannot be inspected."
+  elif ! systemctl is-active --quiet nas-protected-services.target; then
+    add_apply_blocker protected-services-stopped \
+      "Protected services are stopped. Unlock KeePassXC and activate secrets before applying an update."
+  elif ! runtime_detail="$(managed_services_settled 2>&1 >/dev/null)"; then
+    add_apply_blocker managed-services-reconciling "$runtime_detail"
+  elif ! runtime_detail="$(application_units_active 2>&1 >/dev/null)"; then
+    add_apply_blocker applications-unhealthy \
+      "$runtime_detail. Repair them or turn their applications off in Managed Services first."
   fi
   if $json_output; then
     jq -n \
@@ -333,24 +374,21 @@ if $status_only; then
       --argjson behind "$behind" \
       --argjson probeConfigured "$probe_configured" \
       --argjson probeValid "$probe_valid" \
+      --argjson applyBlockers "$apply_blockers" \
       '{configurationDir:$configurationDir, git:$git, revision:$revision, branch:$branch, upstream:(if $upstream == "" then null else $upstream end), ahead:$ahead, behind:$behind, dirty:$dirty, currentSystem:$currentSystem,
         externalProbe:{configured:$probeConfigured, valid:$probeValid, error:(if $probeError == "" then null else $probeError end)},
-        applyBlockers:(
-          if $probeConfigured | not then
-            [{code:"external-probe-unconfigured", message:"Applying an update requires an independent management probe. Set nas.update.externalProbeCommand in the NixOS configuration."}]
-          elif $probeValid | not then
-            [{code:"external-probe-invalid", message:("The configured independent management probe is invalid: " + $probeError)}]
-          else [] end)}'
+        applyBlockers:$applyBlockers}'
   else
     if ! $probe_configured; then
-      probe_summary="not configured (apply unavailable)"
+      probe_summary="not configured"
     elif [[ "$probe_valid" == true ]]; then
       probe_summary=configured
     else
-      probe_summary="invalid (apply unavailable): $probe_error"
+      probe_summary="invalid: $probe_error"
     fi
-    printf 'Configuration: %s\nRevision: %s\nBranch: %s\nUpstream: %s\nDirty: %s\nCurrent system: %s\nExternal probe: %s\n' \
-      "$config_dir" "$revision" "$branch" "${upstream:-none}" "$dirty" "$current_system" "$probe_summary"
+    apply_summary="$(jq -r 'if length == 0 then "no known blockers" else "unavailable: " + (map(.message) | join(" ")) end' <<<"$apply_blockers")"
+    printf 'Configuration: %s\nRevision: %s\nBranch: %s\nUpstream: %s\nDirty: %s\nCurrent system: %s\nExternal probe: %s\nApply: %s\n' \
+      "$config_dir" "$revision" "$branch" "${upstream:-none}" "$dirty" "$current_system" "$probe_summary" "$apply_summary"
   fi
   exit 0
 fi
@@ -528,6 +566,7 @@ if $apply; then
   # A pre-existing application failure is not evidence against the candidate;
   # refuse before any mutation instead of rolling back state afterwards.
   if $protected_was_active; then
+    managed_services_settled || exit 1
     application_health || {
       echo "Refusing to apply: repair the units above or turn their applications off in Managed Services first." >&2
       exit 1

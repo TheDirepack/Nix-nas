@@ -202,6 +202,17 @@ class UpdateRuntimeTests(unittest.TestCase):
                 self.assertFalse(self.trace.exists())
                 self.assertFalse(self.probe_args.exists())
 
+    def test_missing_or_non_executable_probe_is_rejected_before_launch(self):
+        plain = self.root / "plain-file"
+        plain.write_text("not a program\n")
+        for command in (["relative-probe"], [str(self.root / "missing")], [str(plain)], [str(self.root)]):
+            for invocation in ("external_management_probe --validate", "external_management_probe"):
+                with self.subTest(command=command, invocation=invocation):
+                    result = self.run_function(invocation, NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON=json.dumps(command))
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn("not an absolute executable file", result.stderr)
+                    self.assertFalse(self.trace.exists())
+
     def test_invalid_probe_argument_cannot_reach_candidate_activation(self):
         # A NUL byte is legal JSON and legal argv in the encoded document, so it
         # must be rejected by the validator rather than silently truncated by
@@ -318,6 +329,14 @@ class UpdateRuntimeTests(unittest.TestCase):
         present = self.protected_health(units, [*self.SUBSTRATE_UNITS, *units], copyparty_socket=True)
         self.assertEqual(present.returncode, 0, present.stdout + present.stderr)
         self.assertIn(str(self.root / "sockets" / "copyparty.sock"), self.trace.read_text())
+
+    def test_v2_target_owner_units_are_accepted_and_required(self):
+        units = ["nas-v2-wiki.target", "nas-v2-source-wiki.path"]
+        result = self.protected_health(units, [*self.SUBSTRATE_UNITS, *units])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.trace.unlink()
+        down = self.protected_health(units, [*self.SUBSTRATE_UNITS, "nas-v2-source-wiki.path"])
+        self.assertIn("not active: nas-v2-wiki.target", down.stderr)
 
     def test_failed_custom_application_expected_by_v2_fails_health(self):
         units = ["nas-v2-photos.service", "nas-v2-activation-wiki-web.socket"]

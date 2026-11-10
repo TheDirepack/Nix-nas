@@ -27,6 +27,8 @@ DEPLOYMENT_COMMANDS = (
     "firewall-cmd",
 )
 STATUS_COMMANDS = ("git", "jq", "readlink")
+# Status may ask systemd whether units are active; any other systemctl use fails.
+READ_ONLY_QUERIES = ("systemctl is-active",)
 
 
 class UpdateStatusTests(unittest.TestCase):
@@ -83,6 +85,39 @@ class UpdateStatusTests(unittest.TestCase):
                     self.bin / name,
                     f'printf "%s\\n" {shlex.quote(name)} >> "$COMMAND_LOG"\nexit 99\n',
                 )
+        if missing != "systemctl":
+            self.install_script(
+                self.bin / "systemctl",
+                "if [[ $1 == is-active ]]; then\n"
+                '  printf "systemctl is-active\\n" >> "$COMMAND_LOG"\n'
+                '  unit="${!#}"\n'
+                '  if [[ " ${ACTIVE_UNITS:-} " == *" $unit "* ]]; then [[ $2 == --quiet ]] || echo active; exit 0; fi\n'
+                "  [[ $2 == --quiet ]] || echo inactive\n"
+                "  exit 3\n"
+                "fi\n"
+                'printf "systemctl\\n" >> "$COMMAND_LOG"\nexit 99\n',
+            )
+
+    def assert_read_only(self) -> None:
+        self.assertFalse(set(self.calls()) - {*STATUS_COMMANDS, *READ_ONLY_QUERIES}, self.calls())
+
+    def blocker_codes(self, result: subprocess.CompletedProcess[str]) -> list[str]:
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return [item["code"] for item in json.loads(result.stdout)["applyBlockers"]]
+
+    def running_stack(self, start_units: list[str], active: list[str], *, pending: bool = False) -> None:
+        state = self.root / "systemd-reconciled.json"
+        state.write_text(json.dumps({"startUnits": start_units}), encoding="utf-8")
+        marker = self.root / "reconcile.pending"
+        if pending:
+            marker.write_text("", encoding="utf-8")
+        self.environment.update(
+            {
+                "NAS_V2_SYSTEMD_STATE": str(state),
+                "NAS_V2_RECONCILE_PENDING": str(marker),
+                "ACTIVE_UNITS": " ".join(["nas-protected-services.target", *active]),
+            }
+        )
 
     def calls(self) -> list[str]:
         return self.log.read_text(encoding="utf-8").splitlines() if self.log.exists() else []
@@ -111,7 +146,7 @@ class UpdateStatusTests(unittest.TestCase):
         result = self.invoke("--status", "--json")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIs(json.loads(result.stdout)["git"], False)
-        self.assertFalse(set(self.calls()) - set(STATUS_COMMANDS), self.calls())
+        self.assert_read_only()
 
     def test_json_status_needs_only_read_tools_and_preserves_dirty_checkout(self) -> None:
         git = shutil.which("git")
@@ -199,55 +234,95 @@ class UpdateStatusTests(unittest.TestCase):
 
     def test_unconfigured_probe_is_reported_as_an_apply_blocker(self) -> None:
         self.poison_deployment_commands()
+        self.running_stack([], [])
         result = self.invoke("--status", "--json")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.blocker_codes(result), ["external-probe-unconfigured"])
         value = json.loads(result.stdout)
         self.assertEqual(value["externalProbe"], {"configured": False, "valid": None, "error": None})
-        self.assertEqual([item["code"] for item in value["applyBlockers"]], ["external-probe-unconfigured"])
         self.assertIn("nas.update.externalProbeCommand", value["applyBlockers"][0]["message"])
-        self.assertFalse(set(self.calls()) - set(STATUS_COMMANDS), self.calls())
+        self.assert_read_only()
         text_result = self.invoke("--status")
-        self.assertIn("External probe: not configured (apply unavailable)\n", text_result.stdout)
+        self.assertIn("External probe: not configured\nApply: unavailable: Applying an update", text_result.stdout)
 
     def test_local_only_override_does_not_hide_the_status_blocker(self) -> None:
+        self.poison_deployment_commands()
+        self.running_stack([], [])
         result = self.invoke("--status", "--json", "--allow-local-health-only")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(
-            [item["code"] for item in json.loads(result.stdout)["applyBlockers"]], ["external-probe-unconfigured"]
-        )
+        self.assertEqual(self.blocker_codes(result), ["external-probe-unconfigured"])
 
     def test_valid_probe_is_validated_without_being_launched(self) -> None:
         self.poison_deployment_commands()
         probe = self.probe_tools()
+        self.running_stack(["syncthing.service"], ["syncthing.service"])
         self.environment["NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON"] = json.dumps([str(probe), "--target", "nas"])
         result = self.invoke("--status", "--json")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        value = json.loads(result.stdout)
-        self.assertEqual(value["externalProbe"], {"configured": True, "valid": True, "error": None})
-        self.assertEqual(value["applyBlockers"], [])
+        self.assertEqual(self.blocker_codes(result), [])
+        self.assertEqual(json.loads(result.stdout)["externalProbe"], {"configured": True, "valid": True, "error": None})
         self.assertFalse((self.root / "probe-launched").exists())
-        self.assertFalse(set(self.calls()) - set(STATUS_COMMANDS), self.calls())
-        self.assertIn("External probe: configured\n", self.invoke("--status").stdout)
+        self.assert_read_only()
+        self.assertIn("External probe: configured\nApply: no known blockers\n", self.invoke("--status").stdout)
 
     def test_invalid_probe_reports_the_decoder_reason_without_launching(self) -> None:
+        self.poison_deployment_commands()
         probe = self.probe_tools()
+        self.running_stack([], [])
+        missing = self.root / "missing-probe"
+        not_executable = self.root / "plain-file"
+        not_executable.write_text("not a program\n", encoding="utf-8")
         cases = {
             "{}": "nonempty JSON string array",
             "not-json": "must be valid JSON",
             json.dumps([str(probe), "bad\0tail"]): "contains NUL",
+            json.dumps(["probe", "--target"]): "not an absolute executable file",
+            json.dumps([str(missing)]): "not an absolute executable file",
+            json.dumps([str(not_executable)]): "not an absolute executable file",
+            json.dumps([str(self.root)]): "not an absolute executable file",
         }
         for raw, reason in cases.items():
             with self.subTest(raw=raw):
                 self.environment["NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON"] = raw
                 result = self.invoke("--status", "--json")
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(self.blocker_codes(result), ["external-probe-invalid"])
                 value = json.loads(result.stdout)
                 self.assertTrue(value["externalProbe"]["configured"])
                 self.assertIs(value["externalProbe"]["valid"], False)
                 self.assertIn(reason, value["externalProbe"]["error"])
-                self.assertEqual([item["code"] for item in value["applyBlockers"]], ["external-probe-invalid"])
                 self.assertIn(reason, value["applyBlockers"][0]["message"])
                 self.assertFalse((self.root / "probe-launched").exists())
+
+    def test_runtime_state_that_apply_would_refuse_is_reported(self) -> None:
+        self.poison_deployment_commands()
+        probe = self.probe_tools()
+        self.environment["NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON"] = json.dumps([str(probe)])
+        cases = (
+            ("stopped", None, [], False, "protected-services-stopped", "Protected services are stopped"),
+            (
+                "enabled-app-down",
+                ["copyparty.service", "syncthing.service"],
+                ["syncthing.service"],
+                False,
+                "applications-unhealthy",
+                "not active: copyparty.service",
+            ),
+            ("reconciling", [], [], True, "managed-services-reconciling", "reconciliation is pending or running"),
+            ("missing-v2-state", "absent", [], False, "applications-unhealthy", "start state is unavailable"),
+        )
+        for name, start_units, active, pending, code, message in cases:
+            with self.subTest(case=name):
+                self.log.unlink(missing_ok=True)
+                self.running_stack(start_units if isinstance(start_units, list) else [], active, pending=pending)
+                if start_units is None:
+                    self.environment["ACTIVE_UNITS"] = ""
+                if start_units == "absent":
+                    (self.root / "systemd-reconciled.json").unlink()
+                result = self.invoke("--status", "--json")
+                self.assertEqual(self.blocker_codes(result), [code])
+                self.assertIn(message, json.loads(result.stdout)["applyBlockers"][0]["message"])
+                self.assert_read_only()
+                (self.root / "reconcile.pending").unlink(missing_ok=True)
+        # A V2 owner may be a target; turning CopyParty off removes it from the requirement.
+        self.running_stack(["nas-v2-wiki.target"], ["nas-v2-wiki.target"])
+        self.assertEqual(self.blocker_codes(self.invoke("--status", "--json")), [])
 
     def test_original_script_keeps_root_requirement(self) -> None:
         result = subprocess.run(

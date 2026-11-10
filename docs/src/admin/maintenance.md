@@ -107,11 +107,19 @@ from its own private file. The installed `nas-update` takes the probe only from
 this option and runs it without a shell after local health checks pass. A failing
 probe rolls the update back.
 
-While no probe is configured, `nas-update --status --json` reports an
-`external-probe-unconfigured` entry in `applyBlockers`, **Source & updates**
-explains why Apply is unavailable and disables it, and `nas.autoUpdate.apply`
-cannot be enabled. Validation and fetching remain available. An invalid
-configured probe is reported the same way and is never launched.
+`nas-update --status --json` lists every reason `--apply` would refuse in
+`applyBlockers`:
+
+- no probe is configured;
+- the configured probe is invalid, including a first element that is not an
+  existing executable;
+- protected services are stopped;
+- a Managed Services reconciliation is pending or running;
+- an application that Managed Services expects to run is down.
+
+**Source & updates** shows these reasons and disables Apply, and
+`nas.autoUpdate.apply` cannot be enabled without a probe. Validation and fetching
+remain available. Status never launches the probe or contacts applications.
 `--allow-local-health-only` is a recovery-plane override for an absent probe, not
 permission to ignore an invalid one; Cockpit never passes it.
 
@@ -123,8 +131,9 @@ management route. It also checks every unit that Managed Services V2 last
 committed to start. An application turned off in Managed Services is not
 required to run. An application that is on but not running fails the check.
 The same application check runs before building. If an enabled application is
-already down, `--apply` refuses before any snapshot or activation; repair the
-application or turn it off first. If the V2 start state is missing or invalid
+already down, or a Managed Services reconciliation is still pending or running,
+`--apply` refuses before any snapshot or activation. Repair the application,
+turn it off, or wait for reconciliation to settle first. If the V2 start state is missing or invalid
 while protected services run, `--apply` refuses rather than guessing.
 
 ## Schedules

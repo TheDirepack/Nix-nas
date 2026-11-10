@@ -45,7 +45,12 @@ class UpdateApplyAdmissionTests(unittest.TestCase):
         self.install(
             self.bin / "systemctl",
             'printf "systemctl %s\\n" "$*" >> "$COMMAND_LOG"\n'
-            'if [[ $1 == is-active ]]; then unit="${!#}"; [[ " $ACTIVE_UNITS " == *" $unit "* ]]; exit; fi\n'
+            "if [[ $1 == is-active ]]; then\n"
+            '  unit="${!#}"\n'
+            '  if [[ " $ACTIVE_UNITS " == *" $unit "* ]]; then [[ $2 == --quiet ]] || echo active; exit 0; fi\n'
+            "  [[ $2 == --quiet ]] || echo inactive\n"
+            "  exit 3\n"
+            "fi\n"
             "exit 99\n",
         )
         self.install(
@@ -64,7 +69,12 @@ class UpdateApplyAdmissionTests(unittest.TestCase):
         path.write_text(f"#!{self.bash}\nset -euo pipefail\n{body}", encoding="utf-8")
         path.chmod(0o700)
 
-    def apply(self, *, probe: list[str] | None, start_units: list[str] | None, active: list[str]):
+    def apply(
+        self, *, probe: list[str] | None, start_units: list[str] | None, active: list[str], pending: bool = False
+    ):
+        marker = self.root / "reconcile.pending"
+        if pending:
+            marker.write_text("", encoding="utf-8")
         if start_units is None:
             self.state.unlink(missing_ok=True)
         else:
@@ -80,6 +90,7 @@ class UpdateApplyAdmissionTests(unittest.TestCase):
             "NAS_CONFIG_DIR": str(self.config),
             "NAS_LAN_HOST": "fixture.invalid",
             "NAS_V2_SYSTEMD_STATE": str(self.state),
+            "NAS_V2_RECONCILE_PENDING": str(marker),
             "NAS_OPERATION_RUNNER": str(self.root / "coordinator"),
             "NAS_OPERATION_COORDINATION_TOKEN": "fixture-only",
             "NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON": json.dumps(probe) if probe is not None else "",
@@ -133,6 +144,24 @@ class UpdateApplyAdmissionTests(unittest.TestCase):
         self.assertNotIn("systemctl is-active --quiet -- copyparty.service", self.calls())
         self.assertNotIn("nixos-rebuild", self.calls())
         self.assertFalse(self.marker.exists())
+
+    def test_pending_reconciliation_refuses_apply_before_build(self) -> None:
+        result = self.apply(
+            probe=[str(self.probe)], start_units=["syncthing.service"], active=["syncthing.service"], pending=True
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("reconciliation is pending or running", result.stderr)
+        self.assert_no_deployment()
+
+    def test_running_reconciliation_refuses_apply_before_build(self) -> None:
+        result = self.apply(
+            probe=[str(self.probe)],
+            start_units=["syncthing.service"],
+            active=["syncthing.service", "nas-managed-services-reconcile.service"],
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("reconciliation is pending or running", result.stderr)
+        self.assert_no_deployment()
 
     def test_missing_v2_state_refuses_apply_while_protected_stack_runs(self) -> None:
         result = self.apply(probe=[str(self.probe)], start_units=None, active=["copyparty.service"])

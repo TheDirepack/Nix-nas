@@ -20,7 +20,7 @@ let
     nas.autoUpdate.apply = true;
   };
   unconfigured = evaluate { };
-  internal = system: system.config._module.args.nasInternal;
+  internal = system: system._module.args.nasInternal;
   exportLine = json: "export NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON=${lib.escapeShellArg json}\n";
   checks = {
     configuredJsonPreservesArgv = builtins.fromJSON (internal configured).updateExternalProbeJson == probe;
