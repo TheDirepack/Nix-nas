@@ -49,6 +49,7 @@ printf 'systemctl %s\n' "$*"
 case "$*" in
   *--failed*) printf 'nas-health-alert@authentik-migrate.service.service failed\n' ;;
   *show*) printf 'Result=exit-code\nExecMainStatus=23\nInvocationID=fixture-invocation\n' ;;
+  'list-jobs --no-pager') printf '42 nas-managed-services-reconcile.service start running\n' ;;
   *) exit 99 ;;
 esac
 exit "${FIXTURE_DIAGNOSTICS_EXIT:-0}"
@@ -58,6 +59,7 @@ printf 'journalctl %s\n' "$*"
 printf 'original migration/notifier journal\n'
 exit "${FIXTURE_DIAGNOSTICS_EXIT:-0}"
 """,
+            "ps": "printf 'root 42 1 S do_wait systemctl\\n'",
             "timeout": """
 printf 'timeout %s\n' "$*" >> "$FIXTURE_EVENTS"
 [[ "${FIXTURE_DIAGNOSTICS_EXIT:-0}" != 124 ]] || exit 124
@@ -193,6 +195,10 @@ exit "${FIXTURE_WORKLOAD_EXIT:-0}"
                 log = (path / "guest-diagnostics.log").read_text()
                 if diagnostics != 124:
                     self.assertIn("nas-health-alert@authentik-migrate.service.service failed", log)
+                    self.assertIn("managed-apply-state", log)
+                    self.assertIn("managed-apply-journal", log)
+                    self.assertIn("root 42 1 S do_wait systemctl", log)
+                    self.assertIn("42 nas-managed-services-reconcile.service start running", log)
                     self.assertIn("original migration/notifier journal", log)
                     self.assertIn("InvocationID=fixture-invocation", log)
                     self.assertIn("-b", log)
