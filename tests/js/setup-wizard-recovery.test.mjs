@@ -74,9 +74,15 @@ const ADMINISTRATOR = {
 const BLOCKED = {
   status: "manual-recovery-required",
   setupJournal: {status: "manual-recovery-required", step: "identity-database-regeneration"},
-  message: "Setup stopped at identity-database-regeneration and needs manual recovery. Use nas-setup reconcile-first-run.",
+  message:
+    "Setup stopped at identity-database-regeneration and needs manual recovery. Use nas-setup reconcile-first-run.",
 };
-const READY = {status: "ready", planDigest: "a".repeat(64), storage: {devices: []}, setupJournal: null};
+const READY = {
+  status: "ready",
+  planDigest: "a".repeat(64),
+  storage: {devices: []},
+  setupJournal: null,
+};
 const confirmProps = (plan) => ({
   administrator: ADMINISTRATOR,
   keePassPassword: "database-password",
@@ -85,7 +91,8 @@ const confirmProps = (plan) => ({
   encryptStorage: true,
   plan,
 });
-const runSetupButton = (html) => html.match(/<button[^>]*>(?:(?!<\/button>).)*Run setup(?:(?!<\/button>).)*<\/button>/s)?.[0];
+const runSetupButton = (html) =>
+  html.match(/<button[^>]*>(?:(?!<\/button>).)*Run setup(?:(?!<\/button>).)*<\/button>/s)?.[0];
 
 test("manual recovery is shown before any password is submitted, without acknowledging it", async () => {
   const {html} = await render([["notice", {plan: BLOCKED}]]);
@@ -94,7 +101,11 @@ test("manual recovery is shown before any password is submitted, without acknowl
   assert.match(notice, /Setup needs manual recovery/);
   assert.match(notice, /identity-database-regeneration/);
   assert.match(notice, /href="\/console\/nas#\/setup"/);
-  assert.doesNotMatch(notice, /<form|<input|<textarea/, "the wizard never collects a recovery acknowledgement");
+  assert.doesNotMatch(
+    notice,
+    /<form|<input|<textarea/,
+    "the wizard never collects a recovery acknowledgement",
+  );
 });
 
 test("confirmation cannot start setup while the CLI reports manual recovery", async () => {
@@ -127,7 +138,10 @@ test("interrupted but resumable journals are explained; clean plans render nothi
 
 test("failed job documents gate retry on their recovery requirement", async () => {
   const {state} = await render([]);
-  const blocked = {status: "failed", manualRecovery: {required: true, message: "stopped at storage"}};
+  const blocked = {
+    status: "failed",
+    manualRecovery: {required: true, message: "stopped at storage"},
+  };
   assert.equal(state.jobRecoveryMessage(blocked), "stopped at storage");
   assert.equal(state.jobRecoveryMessage({status: "failed", error: "transient"}), "");
   assert.equal(state.jobRecoveryMessage({...blocked, status: "running"}), "");
@@ -138,7 +152,11 @@ test("failed job documents gate retry on their recovery requirement", async () =
   assert.match(state.planProblem({status: "journal-invalid"}), /journal shown above is repaired/);
   assert.match(state.planProblem(BLOCKED), /recovery shown above is acknowledged/);
   assert.equal(state.canRetryFailedJob(blocked, false), false);
-  assert.equal(state.canRetryFailedJob(blocked, true), true, "a fresh ready plan clears the snapshot");
+  assert.equal(
+    state.canRetryFailedJob(blocked, true),
+    true,
+    "a fresh ready plan clears the snapshot",
+  );
   assert.equal(state.canRetryFailedJob({status: "failed", error: "transient"}, false), true);
   assert.equal(state.canRetryFailedJob({status: "running"}, true), false);
   assert.equal(state.recheckOutcome(READY, ""), "");
