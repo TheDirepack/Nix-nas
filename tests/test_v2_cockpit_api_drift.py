@@ -313,6 +313,30 @@ class CockpitApiDriftTests(unittest.TestCase):
                 api.start_first_start(request)
         cancel.assert_called_once_with("reservation-token")
 
+    def test_start_first_start_rechecks_recovery_after_reserving(self) -> None:
+        request = {
+            "password": "db-password",
+            "administrator": self.administrator(),
+            "planDigest": "a" * 64,
+            "devices": ["/dev/a", "/dev/b"],
+            "allowDestructiveStorage": True,
+        }
+        blocked = {"status": "manual-recovery-required", "message": "Setup stopped at storage"}
+        for second in (blocked, {**self.prepared_first_start(), "planDigest": "b" * 64}):
+            with (
+                self.subTest(second=second.get("status")),
+                mock.patch.object(api, "first_start_status", side_effect=[self.prepared_first_start(), second]),
+                mock.patch.object(api, "reserve_operation", return_value=self.active()),
+                mock.patch.object(api, "cancel_reservation") as cancel,
+                mock.patch.object(api, "_write_private_new") as write,
+                mock.patch.object(api, "_start_first_start_unit") as start,
+                self.assertRaises(api.ApiError),
+            ):
+                api.start_first_start(request)
+            cancel.assert_called_once_with("reservation-token")
+            write.assert_not_called()
+            start.assert_not_called()
+
     def test_reconcile_first_start_parses_object_and_fallback_and_errors(self) -> None:
         with mock.patch.object(api, "run", return_value=CommandResult(0, '{"ok":true}', "")):
             self.assertTrue(api.reconcile_first_start({"note": "fixed"})["ok"])
@@ -324,14 +348,6 @@ class CockpitApiDriftTests(unittest.TestCase):
         with mock.patch.object(api, "run", return_value=CommandResult(2, "", "bad")):
             with self.assertRaises(api.ApiError):
                 api.reconcile_first_start({"note": "fixed"})
-
-    def test_operation_guard_translates_busy_error(self) -> None:
-        manager = mock.MagicMock()
-        manager.__enter__.side_effect = OperationBusyError("busy")
-        with mock.patch.object(api, "acquire_operation", return_value=manager):
-            with self.assertRaisesRegex(api.ApiError, "busy"):
-                with api.operation_guard("x", ("runtime",)):
-                    pass
 
     def test_run_action_discovers_v2_jobs_and_rejects_unknown_actions(self) -> None:
         with mock.patch.object(api, "managed_services_status", return_value={"services": []}):
@@ -368,14 +384,29 @@ class CockpitApiDriftTests(unittest.TestCase):
             timeout_seconds=21600,
         )
 
-    def test_host_action_uses_guard_and_stops_on_failure(self) -> None:
+    def test_host_action_admits_without_holding_the_worker_lock_and_reports_failure(self) -> None:
         with (
-            mock.patch.object(api, "operation_guard", return_value=contextlib.nullcontext()) as guard,
-            mock.patch.object(api, "run", return_value=CommandResult(1, "", "failed")),
+            mock.patch.object(api, "reserve_operation", side_effect=OperationBusyError("busy")) as admission,
+            mock.patch.object(api, "acquire_operation") as acquire,
+            mock.patch.object(api, "run") as run,
         ):
-            with self.assertRaises(api.ApiError):
+            with self.assertRaisesRegex(api.ApiError, "busy"):
                 api.run_action("protected-restart")
-        guard.assert_called_once_with("protected-restart", ("identity", "runtime"))
+        admission.assert_called_once_with("protected-restart", ("identity", "runtime"))
+        acquire.assert_not_called()
+        run.assert_not_called()
+        with (
+            mock.patch.object(api, "reserve_operation") as admission,
+            mock.patch.object(api, "acquire_operation") as acquire,
+            mock.patch.object(api, "run", return_value=CommandResult(1, "", "failed")) as run,
+            mock.patch.object(api, "diagnostic"),
+        ):
+            with self.assertRaisesRegex(api.ApiError, "Operation failed"):
+                api.run_action("protected-restart")
+        acquire.assert_not_called()
+        run.assert_called_once_with(
+            ("systemctl", "start", "nas-protected-restart.service"), check=False, timeout_seconds=300
+        )
 
     def test_set_managed_service_validates_and_propagates_coordination(self) -> None:
         with self.assertRaisesRegex(api.ApiError, "service identifier"):

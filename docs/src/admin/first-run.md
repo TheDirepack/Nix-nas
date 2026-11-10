@@ -182,7 +182,11 @@ a stale digest or mismatched device confirmation.
 Setup is resumable. Completed stages are reused only after their live
 postcondition probes still pass. A `manual-recovery-required` journal never
 automatically resumes; repair the reported authority and run
-`nas-setup reconcile-first-run --note 'what was repaired'` before retrying.
+`nas-setup reconcile-first-run --note 'what was repaired'`, or use Cockpit's
+First start page, before retrying. The wizard shows this state, and the step
+that stopped, before you enter passwords, and it does not offer a retry until a
+refreshed plan shows the acknowledgement. An interrupted journal that can resume
+is also shown; resume it with the same administrator and KeePassXC passwords.
 Keep the recovery terminal available until the protected stack is ready.
 
 Identity database regeneration pauses the timers that trigger identity and
@@ -234,9 +238,11 @@ preserve the current Authentik password.
 
 ## Browser bootstrap and locked boot
 
-Before setup completes, Caddy serves the static `/setup` guidance page and the
-Authentik gate protects every management route. The setup wizard itself is
-reachable only after signing in with the bootstrap Authentik identity.
+Before setup completes, the Authentik gate protects every management route.
+The setup wizard is reachable only after signing in with the bootstrap
+Authentik identity. After setup, a locked boot serves only a static notice that
+explains how to run `sudo nas-secrets activate` from the recovery plane; see
+[Locked-state unlock](../locked-unlock.md).
 
 The Storage step links to Cockpit Storage for disk partitioning or pool import,
 and to the Cockpit terminal for advanced ZFS work. Return to the wizard and

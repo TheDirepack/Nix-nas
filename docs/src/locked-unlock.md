@@ -2,6 +2,8 @@
 
 The NAS intentionally starts **locked** when the KeePass-backed runtime secret tree is absent. Authentik, Cockpit, CopyParty, encrypted ZFS datasets, and protected services are unavailable to browsers.
 
+After setup, a browser that opens the NAS while it is locked sees a static notice with these instructions on every path. The notice accepts no input; it cannot unlock the NAS or open Cockpit.
+
 Recover from the local console, SSH using a provisioned recovery key, or hardware KVM. Sign in as the local recovery administrator and activate the secret tree:
 
 ```bash

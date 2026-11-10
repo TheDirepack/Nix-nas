@@ -17,7 +17,7 @@ Runtime-managed upstream state is authoritative in appliance-managed mode. `nas-
 
 ## Locked boot
 
-Local console, SSH, or hardware KVM and a local PAM administrator are the recovery plane. Authentik, CopyParty, and protected services remain stopped until secret activation and storage validation succeed. Caddy may serve static setup guidance, but no browser management endpoint is exposed while locked. An Authentik administrator is not automatically a Linux/PAM administrator.
+Local console, SSH, or hardware KVM and a local PAM administrator are the recovery plane. Authentik, CopyParty, and protected services remain stopped until secret activation and storage validation succeed. After setup, Caddy serves only the static unlock notice while locked; no browser management or unlock endpoint is exposed. An Authentik administrator is not automatically a Linux/PAM administrator.
 
 ## Authorization
 

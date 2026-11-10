@@ -1,6 +1,8 @@
 import React from 'react';
 import { Alert, Button, Checkbox, useWizardContext } from '@patternfly/react-core';
 import { fetchJson } from '../http.js';
+import { RecoveryAlert } from '../SetupNotice.jsx';
+import { canRetryFailedJob, jobRecoveryMessage, planProblem, recheckOutcome } from '../setup-state.js';
 
 const COMPLETE_STATUSES = new Set(['complete', 'complete-unverified']);
 const TERMINAL_STATUSES = new Set([...COMPLETE_STATUSES, 'failed']);
@@ -34,9 +36,8 @@ const validate = (administrator, keePassPassword, keePassPasswordConfirm, plan, 
   if (keePassPassword !== keePassPasswordConfirm) {
     return 'Enter and confirm the KeePassXC database password.';
   }
-  if (!plan || !/^[0-9a-f]{64}$/.test(plan.planDigest || '')) {
-    return 'The storage plan has not loaded yet.';
-  }
+  const blocked = planProblem(plan);
+  if (blocked) return blocked;
   if (plan.requiresDestructiveConfirmation && !allowDestructive) {
     return 'Confirm the destructive storage creation on the Storage step.';
   }
@@ -62,6 +63,9 @@ const ConfirmStep = ({
   allowDestructive,
   encryptStorage,
   plan,
+  planError,
+  planSettled,
+  onRefreshPlan,
 }) => {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState('');
@@ -73,12 +77,19 @@ const ConfirmStep = ({
   const [rebooting, setRebooting] = React.useState(false);
   const [rebootRequested, setRebootRequested] = React.useState(false);
   const [confirmPasswordReapply, setConfirmPasswordReapply] = React.useState(false);
+  // A failed job document is a snapshot; only a plan fetched after the
+  // operator's acknowledgement can clear its recovery requirement.
+  const [pendingRecheck, setPendingRecheck] = React.useState(null);
+  const [recoveryCleared, setRecoveryCleared] = React.useState(false);
+  const [recheckStatus, setRecheckStatus] = React.useState('');
   const { goToPrevStep } = useWizardContext();
 
   const jobId = job?.jobId;
   const jobStatus = job?.status;
   const isComplete = COMPLETE_STATUSES.has(jobStatus);
   const isTerminal = TERMINAL_STATUSES.has(jobStatus);
+  const recoveryMessage = recoveryCleared ? '' : jobRecoveryMessage(job);
+  const retryAllowed = canRetryFailedJob(job, recoveryCleared);
   const rebootAuthorized = Boolean(capability) && isComplete;
   const problem = validate(
     administrator,
@@ -112,6 +123,24 @@ const ConfirmStep = ({
       setResumeAttempted(true);
     }
   }, []);
+
+  React.useEffect(() => {
+    if (!pendingRecheck || planSettled === pendingRecheck.settled) return;
+    setPendingRecheck(null);
+    setRecoveryCleared(!planError && plan?.status === 'ready');
+    setRecheckStatus(recheckOutcome(plan, planError));
+  }, [plan, planError, planSettled, pendingRecheck]);
+
+  React.useEffect(() => {
+    setRecoveryCleared(false);
+    setRecheckStatus('');
+  }, [jobId, jobStatus]);
+
+  const recheckRecovery = () => {
+    setRecheckStatus('Checking the setup state...');
+    setPendingRecheck({ settled: planSettled });
+    onRefreshPlan();
+  };
 
   // Recover the authorized active job after a refresh without resubmitting.
   // This effect only resumes; destructive submission stays behind the button.
@@ -256,10 +285,18 @@ const ConfirmStep = ({
           isInline
           title={`Setup job ${jobId || ''}: ${jobStatus || 'starting'}`}
         >
-          {job.message || 'The setup job is running. This can take several minutes.'}
+          {job.message || job.error || 'The setup job is running. This can take several minutes.'}
         </Alert>
       )}
-      {jobStatus === 'failed' && (
+      {recoveryMessage && (
+        <RecoveryAlert
+          title="Setup needs manual recovery"
+          message={recoveryMessage}
+          onRefresh={recheckRecovery}
+          status={recheckStatus}
+        />
+      )}
+      {retryAllowed && (
         <Checkbox
           id="wizard-password-reapply"
           label="I understand retrying may reapply administrator and account passwords"
@@ -318,7 +355,7 @@ const ConfirmStep = ({
             {resuming ? 'Checking for setup' : 'Check for running setup'}
           </Button>
         )}
-        {jobStatus === 'failed' && (
+        {retryAllowed && (
           <Button
             variant="primary"
             onClick={submit}

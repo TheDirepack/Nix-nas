@@ -410,6 +410,93 @@ class BrowserAuthzInputTests(unittest.TestCase):
         folders.assert_called_once_with(driver, ["post-a", "post-b"])
         driver.quit.assert_called_once_with()
 
+    def test_cockpit_protected_restart_only_cli_requires_administrator_and_restarts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            password = self.secret(pathlib.Path(temporary), "administrator", "administrator-secret")
+            argv = ["authz.py", "--cockpit-protected-restart-only", "--administrator-password-file", str(password)]
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(
+                    self.authz, "run_cockpit_protected_restart", return_value="transport-closed"
+                ) as restart,
+                redirect_stderr(StringIO()),
+            ):
+                self.assertEqual(self.authz.main(), 0)
+            with (
+                mock.patch.object(sys, "argv", ["authz.py", "--cockpit-protected-restart-only"]),
+                mock.patch.object(self.authz, "run_cockpit_protected_restart") as missing,
+                redirect_stderr(StringIO()),
+            ):
+                with self.assertRaises(SystemExit):
+                    self.authz.main()
+        restart.assert_called_once_with("https://nas-test.local", "nasadmin", "administrator-secret")
+        missing.assert_not_called()
+
+    def test_protected_restart_outcome_rejects_api_failures_and_accepts_only_known_endings(self) -> None:
+        outcome = self.authz.protected_restart_outcome
+        self.assertIsNone(outcome("Operations\nOperation coordinator\n{}"))
+        self.assertEqual(
+            outcome('Operation completed.\n{\n  "action": "protected-restart",\n  "ok": true\n}'), "completed"
+        )
+        for closed in (
+            "Operation failed\nServer has closed the connection.",
+            "Server has closed the connection.",
+            "This site can't be reached\nERR_CONNECTION_RESET",
+            "Operation failed\ndisconnected",
+        ):
+            with self.subTest(closed=closed):
+                self.assertEqual(outcome(closed), "transport-closed")
+        self.assertIsNone(outcome('Operation coordinator\n{"state": "disconnected"}'))
+        for failure in (
+            "Operation failed\nnas-cockpit-api: Operation failed (reference 0123456789ab)",
+            "Operation failed\nnas-cockpit-api: Another privileged operation conflicts with protected-restart",
+        ):
+            with self.subTest(failure=failure), self.assertRaisesRegex(RuntimeError, "API failure"):
+                outcome(failure)
+        self.assertIsNone(outcome("Operation failed\nPermission denied"))
+        self.assertIsNone(outcome('Operation completed.\n{"action": "identity-sync"}'))
+
+    def test_protected_restart_waits_for_cockpit_recovery_after_transport_closure(self) -> None:
+        first, failed_recovery, recovered = mock.MagicMock(), mock.MagicMock(), mock.MagicMock()
+
+        class ImmediateWait:
+            def __init__(self, driver, *_args, **_kwargs):
+                self.driver = driver
+
+            def until(self, predicate):
+                value = predicate(self.driver)
+                if not value:
+                    raise AssertionError("condition was not met")
+                return value
+
+        texts = {
+            id(first): "Operation failed\nServer has closed the connection.",
+            id(recovered): "NAS Overview\nProtected services: ready",
+        }
+        logins = [None, RuntimeError("HTTP ERROR 502"), None]
+
+        def login(*_args):
+            result = logins.pop(0)
+            if isinstance(result, Exception):
+                raise result
+
+        with (
+            mock.patch.object(self.authz, "browser", side_effect=[first, failed_recovery, recovered]),
+            mock.patch.object(self.authz, "close_browser") as close,
+            mock.patch.object(self.authz, "cockpit_login", side_effect=login),
+            mock.patch.object(self.authz, "open_cockpit_nas_page"),
+            mock.patch.object(self.authz, "button_with_text", return_value=mock.MagicMock()),
+            mock.patch.object(self.authz, "wait_for_page_text"),
+            mock.patch.object(self.authz, "WebDriverWait", ImmediateWait),
+            mock.patch.object(self.authz, "rendered_text", side_effect=lambda driver: texts.get(id(driver), "")),
+            mock.patch.object(self.authz.time, "sleep"),
+            redirect_stderr(StringIO()),
+        ):
+            first.page_source = "Confirm maintenance action"
+            outcome = self.authz.run_cockpit_protected_restart("https://nas-test.local", "nasadmin", "secret")
+        self.assertEqual(outcome, "transport-closed")
+        self.assertEqual([call.args[0] for call in close.call_args_list], [first, failed_recovery, recovered])
+
     def test_identity_xss_only_cli_requires_and_verifies_hostile_display_name(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             password = self.secret(pathlib.Path(temporary), "alice", "alice-secret")

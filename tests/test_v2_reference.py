@@ -174,16 +174,13 @@ class V2ReferenceTests(unittest.TestCase):
         self.assertIn("`/console/`", interfaces)
         self.assertNotIn("9092", interfaces)
 
-    def test_portal_delimiter_parity(self):
-        # Both nas_common and portal should use same delimiter
-        common = (ROOT / "services/nas_common.py").read_text(encoding="utf-8")
-        portal = (ROOT / "web/portal/index.html").read_text(encoding="utf-8")
-        # Check that both use commas only (or both handle pipe/semicolon)
-        # After fix, nas_common should only split on commas, and portal should only split on commas
-        self.assertIn('raw.split(",")', common)
-        self.assertIn('splitList ","', portal)
-        # Ensure portal does not handle pipe/semicolon if common doesn't
-        # This is now consistent: both use comma only
+    def test_group_headers_have_one_parser(self):
+        # The Caddy portal template that re-parsed Remote-Groups was never
+        # served and is removed; nas_common.split_groups (tests/test_common.py)
+        # is the only group-header parser.
+        self.assertFalse((ROOT / "web/portal").exists())
+        for path in (ROOT / "web").rglob("*.html"):
+            self.assertNotIn("Remote-Groups", path.read_text(encoding="utf-8"))
 
     def test_no_duplicate_route_catalogs(self):
         # The deleted native/platform split seed modules cannot be re-introduced.

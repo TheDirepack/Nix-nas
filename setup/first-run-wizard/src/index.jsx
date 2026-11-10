@@ -7,6 +7,7 @@ import './wizard.css';
 import AdminStep from './steps/AdminStep.jsx';
 import StorageStep from './steps/StorageStep.jsx';
 import ConfirmStep from './steps/ConfirmStep.jsx';
+import SetupNotice from './SetupNotice.jsx';
 import { fetchJson } from './http.js';
 
 // @patternfly/react-core 6.1.0 builds wizard steps exclusively from
@@ -33,6 +34,8 @@ const App = () => {
   const [plan, setPlan] = React.useState(null);
   const [planError, setPlanError] = React.useState('');
   const [planRequest, setPlanRequest] = React.useState(0);
+  // Counts plan fetches that settled, so callers can wait for a fresh answer.
+  const [planSettled, setPlanSettled] = React.useState(0);
 
   React.useEffect(() => {
     const media = window.matchMedia?.('(prefers-color-scheme: dark)');
@@ -52,6 +55,13 @@ const App = () => {
     return () => media?.removeEventListener?.('change', applyTheme);
   }, [theme]);
 
+  const refreshPlan = React.useCallback(() => {
+    // A refreshed plan can list different devices, so any prior destructive
+    // confirmation no longer applies to it.
+    setAllowDestructive(false);
+    setPlanRequest((value) => value + 1);
+  }, []);
+
   React.useEffect(() => {
     let cancelled = false;
     setPlan(null);
@@ -60,9 +70,12 @@ const App = () => {
       .then((value) => {
         if (cancelled) return;
         setPlan(value);
+        setPlanSettled((count) => count + 1);
       })
       .catch((reason) => {
-        if (!cancelled) setPlanError(String(reason));
+        if (cancelled) return;
+        setPlanError(String(reason));
+        setPlanSettled((count) => count + 1);
       });
     return () => {
       cancelled = true;
@@ -91,6 +104,7 @@ const App = () => {
         </label>
       </header>
       <main className="nas-setup-main">
+        <SetupNotice plan={plan} onRefresh={refreshPlan} />
         <Wizard
           className="nas-setup-wizard"
           navAriaLabel="First-run setup steps"
@@ -119,12 +133,7 @@ const App = () => {
                 setAllowDestructive(false);
                 setPlan(value);
               }}
-              onRefresh={() => {
-                // A refreshed plan can list different devices, so any prior
-                // destructive confirmation no longer applies to it.
-                setAllowDestructive(false);
-                setPlanRequest((value) => value + 1);
-              }}
+              onRefresh={refreshPlan}
             />
           </WizardStep>
           <WizardStep id="wizard-confirm" step={3} name="Confirm and Reboot" footer={<></>}>
@@ -135,6 +144,9 @@ const App = () => {
               allowDestructive={allowDestructive}
               encryptStorage={encryptStorage}
               plan={plan}
+              planError={planError}
+              planSettled={planSettled}
+              onRefreshPlan={refreshPlan}
             />
           </WizardStep>
         </Wizard>

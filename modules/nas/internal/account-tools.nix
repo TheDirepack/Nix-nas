@@ -229,12 +229,6 @@ let
     '';
   };
 
-  nasPortalStatic = pkgs.runCommand "nas-portal-static" { } ''
-    install -d "$out/share/nas-portal"
-    install -m 0444 ${../../../web/portal/index.html} "$out/share/nas-portal/index.html"
-    install -m 0444 ${../../../web/portal/setup.html} "$out/share/nas-portal/setup.html"
-  '';
-
   nasAuthentikBlueprints = pkgs.runCommand "nas-authentik-blueprints" { } ''
     mkdir -p "$out/share/authentik/blueprints"
     cp -a ${authentikPackage.src}/blueprints/. "$out/share/authentik/blueprints/"
@@ -283,7 +277,7 @@ in
   inherit
     authentikPackage
     nasPythonApplication nasIdentitySyncScript nasIdentityPython nasIdentitySync
-    nasSetupScript nasSetup nasStateScript nasState nasDoctorScript nasDoctor nasPortalStatic nasAuthentikBlueprints
+    nasSetupScript nasSetup nasStateScript nasState nasDoctorScript nasDoctor nasAuthentikBlueprints
     nasCockpitApiScript nasCockpitApi nasBackupStatus
   ;
 }
