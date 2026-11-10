@@ -38,6 +38,16 @@ python3 scripts/release-inventory.py --system /nix/store/EXACT-SYSTEM \
 
 The CopyParty flake is consumed as one reviewed upstream input and follows this repository's nixpkgs input. Nested lock nodes are not edited independently. A CopyParty update must include flake evaluation, closure builds, and the QEMU matrix.
 
+## Restic repositories
+
+The appliance uses only Restic's own repository selection: `--repo` for the
+acknowledged local repository and `--repository-file` for every off-pool backend,
+including `rclone:`. Do not add a provider list, an rclone wrapper or a second
+destination setting. `nas-backup-status` reads the repository file the way Restic
+does: one trimmed line, a Restic backend scheme, or an absolute or `local:` path.
+It classifies only the location and never prints the string. When Restic adds a
+backend scheme, add it to `NETWORK_BACKENDS` with a classification test.
+
 ## Python runtime validation
 
 The privileged control plane uses the Python standard library, immutable dataclasses at internal boundaries, and committed closed JSON Schemas for external payloads. A runtime framework such as Pydantic is not required for the current recovery plane and would add a new boot-critical dependency. Reconsider only when schema generation or cross-process model reuse clearly exceeds the existing validators.

@@ -26,7 +26,7 @@ The base NAS module keeps optional applications disabled. Import the focused pro
 - The NUT monitor password must be readable at boot because UPS shutdown cannot depend on KeePassXC activation.
 - `autoUpdate.apply = false` fetches and validates reviewed revisions without deploying them automatically.
 - `autoUpdate.apply = true` and every manual Apply require `update.externalProbeCommand`, an independent reachability probe. See [Maintenance](maintenance.md#updates).
-- Same-pool Restic requires `backup.allowSamePoolRepository = true` and is local rollback only. Production readiness requires an external Restic repository or enabled ZFS replication.
+- `backup.repositoryFile` is the only way to configure an off-pool Restic repository. `backup.localRepository` is local rollback only and requires `backup.allowSamePoolRepository = true`. Production readiness requires an off-pool repository file or enabled ZFS replication. Readiness rules and migration from `backup.remote.*` are in [Backups](backups.md#off-pool-repository).
 - `backup.restoreVerification` controls the scheduled isolated restore test and must point to disk-backed scratch storage outside `/run`.
 
 See the focused networking, storage, backup, CopyParty, and virtualization/power pages for operational details.

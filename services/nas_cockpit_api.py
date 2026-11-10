@@ -28,6 +28,7 @@ import sys
 import syslog
 from typing import Any, cast
 
+from nas_backup_status import status_from_environment as backup_status
 from nas_common import CommandResult, parse_systemd_show, run_command
 from nas_v2_apply_budget import client_timeout as managed_apply_timeout
 from nas_operation_lock import (
@@ -657,6 +658,7 @@ def overview() -> dict[str, Any]:
     probes: dict[str, Any] = {
         "setup": setup_status,
         "update": update_status,
+        "backup": backup_status,
         "services": lambda: service_states(units),
         "zpool": lambda: command_probe(["zpool", "status", "-x", ZFS_POOL]),
         "zfs": lambda: command_probe(["zfs", "list", "-H", "-o", "name,used,avail,refer,mountpoint", ZFS_DATASET]),
@@ -689,6 +691,7 @@ def overview() -> dict[str, Any]:
         "setup": results["setup"],
         "managedServices": managed,
         "update": results["update"],
+        "backup": results["backup"],
         "operations": operation_state(managed),
         "services": results["services"],
         "zfs": {

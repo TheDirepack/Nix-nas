@@ -17,7 +17,7 @@ import os
 import pathlib
 import stat
 import tempfile
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from typing import Any, Iterator, TypeGuard
 
 from ruamel.yaml import YAML
@@ -34,6 +34,7 @@ from nas_v2_spec import (
     load_schema,
     normalize,
     parse_yaml_text,
+    retire_backup_remote,
 )
 
 _MANAGED_PREAMBLE = (
@@ -421,6 +422,10 @@ def read_document(
         schema = load_schema(schema_path)
     except ManagedServicesV2Error as exc:
         raise ManagedServicesEditorError(str(exc)) from exc
+    with suppress(ManagedServicesV2Error):
+        # The form then saves without the inert block; a non-default block
+        # stays visible so saving reports the migration instead of hiding it.
+        document = retire_backup_remote(document)
     return {
         "ok": True,
         "authority": str(desired_path),
