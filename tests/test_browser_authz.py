@@ -786,6 +786,44 @@ class BrowserAuthzInputTests(unittest.TestCase):
         reset_session.assert_called_once_with(driver, "https://nas-test.local")
         sleep.assert_called_once_with(1)
 
+    def test_login_handles_only_transient_authentik_certificate_verifier_changes(self) -> None:
+        origin = "https://nas-test.local:8443"
+        for fault in ("recovered", "persistent", "authority", "foreign", "rendered"):
+            with self.subTest(fault=fault):
+                driver = mock.Mock()
+                resource_origin = "https://other.local" if fault == "foreign" else origin
+                error_code = "ERR_CERT_AUTHORITY_INVALID" if fault == "authority" else "ERR_CERT_VERIFIER_CHANGED"
+                diagnostics = {
+                    "url": origin + "/identity/if/user/",
+                    "body": "Access denied" if fault == "rendered" else "",
+                    "console": [
+                        {
+                            "message": resource_origin
+                            + "/identity/static/dist/app.js - Failed to load resource: net::"
+                            + error_code
+                        }
+                    ],
+                }
+                with (
+                    mock.patch.object(
+                        self.authz,
+                        "_login_once",
+                        side_effect=[self.authz.TimeoutException(), None]
+                        if fault == "recovered"
+                        else self.authz.TimeoutException(),
+                    ) as login_once,
+                    mock.patch.object(self.authz, "browser_diagnostics", return_value=diagnostics),
+                    mock.patch.object(self.authz, "reset_browser_session") as reset_session,
+                    mock.patch.object(self.authz.time, "sleep"),
+                ):
+                    if fault == "recovered":
+                        self.authz.login(driver, origin, "nasadmin", "secret")
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "Authentik browser login did not complete"):
+                            self.authz.login(driver, origin, "nasadmin", "secret")
+                self.assertEqual(login_once.call_count, 2 if fault in {"recovered", "persistent"} else 1)
+                self.assertEqual(reset_session.call_count, 1 if fault in {"recovered", "persistent"} else 0)
+
     def test_login_fails_closed_after_persistent_authentik_flow_502(self) -> None:
         driver = mock.Mock()
         diagnostics = {

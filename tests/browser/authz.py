@@ -318,6 +318,15 @@ def _login_once(driver: webdriver.Chrome, origin: str, username: str, password: 
 
 
 def transient_authentik_login_error(diagnostics: dict[str, Any]) -> bool:
+    location = urllib.parse.urlsplit(str(diagnostics.get("url", "")))
+    if location.path == "/identity/if/user/" and not str(diagnostics.get("body", "")).strip():
+        asset_prefix = urllib.parse.urlunsplit((location.scheme, location.netloc, "/identity/static/", "", ""))
+        for entry in diagnostics.get("console", []):
+            message = str(entry.get("message", ""))
+            # Chromium invalidates in-flight asset requests when its certificate
+            # verifier changes; a fresh navigation must still pass every gate.
+            if message.startswith(asset_prefix) and message.endswith("net::ERR_CERT_VERIFIER_CHANGED"):
+                return True
     if urllib.parse.urlsplit(str(diagnostics.get("url", ""))).path != "/identity/if/flow/default-authentication-flow/":
         return False
     if "Response returned an error code" not in str(diagnostics.get("body", "")):
