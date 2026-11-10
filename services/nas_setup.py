@@ -1936,7 +1936,8 @@ SETUP_RECOVERY_GUIDANCE = (
 )
 
 
-STATUS_STORAGE_PROBE_SECONDS = 15
+# Three bounded probes plus status work must finish inside Cockpit's 60 s call.
+STATUS_STORAGE_PROBE_SECONDS = 12
 SETUP_JOURNAL_STATUSES = frozenset(
     {"pending", "running", "resuming", "failed", "manual-recovery-required", "reconciled"}
 )
@@ -2075,7 +2076,12 @@ def first_start_status(config_source: str) -> dict[str, Any]:
         }
     storage = config["storage"]
     devices = [str(item) for item in storage.get("devices", [])]
-    pool_present = pool_exists()
+    # A verified storage recovery already proved the pool; probing again could
+    # push the status call past its deadline.
+    storage_recovery_verified = (
+        journal is not None and journal["status"] == "manual-recovery-required" and journal["step"] == "storage"
+    )
+    pool_present = True if storage_recovery_verified else pool_exists()
     destructive = bool(not pool_present and storage.get("createPool"))
     return {
         "schemaVersion": SCHEMA_VERSION,

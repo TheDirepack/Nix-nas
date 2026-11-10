@@ -902,14 +902,16 @@ class FirstStartStatusTests(unittest.TestCase):
             ):
                 self.assertEqual(setup.setup_journal_blocker(summary) is not None, blocked)
                 if pool and dataset:
-                    mount.assert_called_once_with(["nas-zfs-mount-check"], check=False, timeout_seconds=15)
+                    mount.assert_called_once_with(
+                        ["nas-zfs-mount-check"], check=False, timeout_seconds=setup.STATUS_STORAGE_PROBE_SECONDS
+                    )
 
     def test_storage_proof_stays_within_the_status_deadline(self) -> None:
         summary = setup.setup_journal_summary(self.journal("manual-recovery-required", "storage"))
-        hung = subprocess.TimeoutExpired(["zpool", "list"], 15)
+        hung = subprocess.TimeoutExpired(["zpool", "list"], setup.STATUS_STORAGE_PROBE_SECONDS)
         with mock.patch.object(setup.subprocess, "run", side_effect=hung) as listing:
             self.assertIsNotNone(setup.setup_journal_blocker(summary))
-        self.assertEqual(listing.call_args.kwargs["timeout"], 15)
+        self.assertEqual(listing.call_args.kwargs["timeout"], setup.STATUS_STORAGE_PROBE_SECONDS)
         with (
             mock.patch.object(setup, "pool_exists", return_value=True),
             mock.patch.object(setup, "dataset_exists", return_value=True),
@@ -917,8 +919,38 @@ class FirstStartStatusTests(unittest.TestCase):
         ):
             self.assertIsNotNone(setup.setup_journal_blocker(summary))
         command = run_root.call_args.args[0]
-        self.assertIn("--property=RuntimeMaxSec=15", command[: command.index("--")])
-        self.assertEqual(run_root.call_args.kwargs["timeout_seconds"], 15)
+        self.assertIn(f"--property=RuntimeMaxSec={setup.STATUS_STORAGE_PROBE_SECONDS}", command[: command.index("--")])
+        self.assertEqual(run_root.call_args.kwargs["timeout_seconds"], setup.STATUS_STORAGE_PROBE_SECONDS)
+
+    def test_full_status_path_with_slow_storage_proof_fits_the_api_deadline(self) -> None:
+        budgets: list[float] = []
+
+        def listing(command, **kwargs):
+            budgets.append(kwargs["timeout"])
+            return subprocess.CompletedProcess(command, 0)
+
+        def mount_check(command, **kwargs):
+            budgets.append(kwargs["timeout_seconds"])
+            return setup.Completed(tuple(command), "", "", 0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            config = self.config_file(root)
+            journal_path = root / "journal.json"
+            journal_path.write_text(json.dumps(self.journal("manual-recovery-required", "storage")), encoding="utf-8")
+            with (
+                mock.patch.object(setup, "STATE_PATH", root / "missing-state.json"),
+                mock.patch.object(setup, "JOURNAL_PATH", journal_path),
+                mock.patch.object(setup.subprocess, "run", side_effect=listing),
+                mock.patch.object(setup, "run_root", side_effect=mount_check),
+                mock.patch.object(setup, "validate_service_request"),
+            ):
+                result = setup.first_start_status(str(config))
+        self.assertEqual(result["status"], "ready")
+        self.assertTrue(result["storage"]["poolPresent"])
+        # zpool list, zfs list and the mount check, each bounded; no unbounded re-probe.
+        self.assertEqual(len(budgets), 3)
+        self.assertLess(sum(budgets), 60)
 
     def test_interrupted_and_acknowledged_journals_remain_resumable(self) -> None:
         for status in ("failed", "reconciled", "running"):
