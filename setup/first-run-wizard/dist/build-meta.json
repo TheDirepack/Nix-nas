@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "sourceSha256": "5faf732169bd40f773abf8de0abf3a6fa9fd33683db823041cf9c8635d37c0ac",
+  "sourceSha256": "d02e895f20d961ba784cf3b71290eb1b68d6505a263a6325c1503c7aee763a75",
   "inputs": [
     "node_modules/@patternfly/patternfly/assets/fonts/RedHatDisplay/RedHatDisplayVF-Italic.woff2",
     "node_modules/@patternfly/patternfly/assets/fonts/RedHatDisplay/RedHatDisplayVF.woff2",
@@ -845,8 +845,8 @@
       "sha256": "1b8727779dd351359f41296dc71d773995c8ebbfb7412f606f463834e78de227"
     },
     "first-run-wizard.js": {
-      "bytes": 251307,
-      "sha256": "2e118ea1d2b329c61825779d844f45f166fc91be411eaa5bfd7b48c6df3fca68"
+      "bytes": 251372,
+      "sha256": "7a5b1e38059d81ea25b91034fc12fd85b99aa20543f834218b84e1f46322cf5d"
     },
     "index.html": {
       "bytes": 374,

@@ -305,27 +305,27 @@ def read_json_source(source: str) -> dict[str, Any]:
     return value
 
 
-def pool_exists() -> bool:
+def pool_exists(timeout_seconds: float = 30) -> bool:
     return (
         subprocess.run(
             ["zpool", "list", "-H", ZFS_POOL],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
-            timeout=30,
+            timeout=timeout_seconds,
         ).returncode
         == 0
     )
 
 
-def dataset_exists() -> bool:
+def dataset_exists(timeout_seconds: float = 30) -> bool:
     return (
         subprocess.run(
             ["zfs", "list", "-H", ZFS_DATASET],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
-            timeout=30,
+            timeout=timeout_seconds,
         ).returncode
         == 0
     )
@@ -970,7 +970,11 @@ def run_storage_host(
     *,
     input_text: str | None = None,
     check: bool = True,
+    timeout_seconds: float | None = None,
 ) -> Completed:
+    # The transient unit outlives a killed `systemd-run --wait` client, so a
+    # bounded caller also bounds the unit itself.
+    limits = [] if timeout_seconds is None else [f"--property=RuntimeMaxSec={max(1, int(timeout_seconds))}"]
     return run_root(
         [
             "systemd-run",
@@ -988,11 +992,13 @@ def run_storage_host(
             "--property=PrivateDevices=no",
             "--property=DevicePolicy=auto",
             "--setenv=NAS_SETUP_ALLOW_ROOT=1",
+            *limits,
             "--",
             *command,
         ],
         input_text=input_text,
         check=check,
+        **({} if timeout_seconds is None else {"timeout_seconds": timeout_seconds}),
     )
 
 
@@ -1268,12 +1274,17 @@ def keepass_database_ready(_result: Any = None) -> bool:
     return stat.S_ISREG(mode) and not stat.S_ISLNK(mode)
 
 
-def storage_ready(_result: Any = None) -> bool:
-    if not pool_exists() or not dataset_exists():
-        return False
+def storage_ready(_result: Any = None, *, probe_timeout_seconds: float | None = None) -> bool:
+    list_timeout = 30 if probe_timeout_seconds is None else probe_timeout_seconds
     try:
-        return run_storage_host(["nas-zfs-mount-check"], check=False).returncode == 0
-    except SetupError:
+        if not pool_exists(list_timeout) or not dataset_exists(list_timeout):
+            return False
+        if probe_timeout_seconds is None:
+            mount_check = run_storage_host(["nas-zfs-mount-check"], check=False)
+        else:
+            mount_check = run_storage_host(["nas-zfs-mount-check"], check=False, timeout_seconds=probe_timeout_seconds)
+        return mount_check.returncode == 0
+    except (SetupError, subprocess.TimeoutExpired):
         return False
 
 
@@ -1925,6 +1936,7 @@ SETUP_RECOVERY_GUIDANCE = (
 )
 
 
+STATUS_STORAGE_PROBE_SECONDS = 15
 SETUP_JOURNAL_STATUSES = frozenset(
     {"pending", "running", "resuming", "failed", "manual-recovery-required", "reconciled"}
 )
@@ -1955,9 +1967,8 @@ def setup_journal_blocker(summary: Mapping[str, Any] | None) -> str | None:
         return f"The first-run journal has an unrecognized status {summary['status']!r}."
     if summary["status"] != "manual-recovery-required":
         return None
-    # The worker completes an interrupted storage step itself only after the
-    # same pool, dataset and mount verification; anything less needs an operator.
-    if summary["step"] == "storage" and storage_ready():
+    # Status callers allow 60 seconds; an unproven storage step stays blocked.
+    if summary["step"] == "storage" and storage_ready(probe_timeout_seconds=STATUS_STORAGE_PROBE_SECONDS):
         return None
     return f"Setup stopped at {summary['step'] or 'final verification'} and needs manual recovery."
 

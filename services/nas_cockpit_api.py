@@ -500,8 +500,8 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
         )
     except OperationBusyError as exc:
         raise ApiError(str(exc)) from exc
-    # A worker that finished between the first check and the reservation may
-    # have left a journal that refuses this run; recheck before staging secrets.
+    # reserve_operation only probes the lock and the worker's journal open stays
+    # authoritative; rechecking narrows the window before secrets are staged.
     try:
         reserved = first_start_status()
     except Exception:

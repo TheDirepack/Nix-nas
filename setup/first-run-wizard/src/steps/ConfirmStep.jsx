@@ -64,6 +64,7 @@ const ConfirmStep = ({
   encryptStorage,
   plan,
   planError,
+  planSettled,
   onRefreshPlan,
 }) => {
   const [busy, setBusy] = React.useState(false);
@@ -124,18 +125,11 @@ const ConfirmStep = ({
   }, []);
 
   React.useEffect(() => {
-    if (!pendingRecheck) return;
-    // Every refresh clears plan and error before fetching; only results that
-    // arrive after that reset answer this recheck.
-    if (!plan && !planError) {
-      if (!pendingRecheck.reset) setPendingRecheck({ reset: true });
-      return;
-    }
-    if (!pendingRecheck.reset) return;
+    if (!pendingRecheck || planSettled === pendingRecheck.settled) return;
     setPendingRecheck(null);
-    setRecoveryCleared(!planError && plan.status === 'ready');
+    setRecoveryCleared(!planError && plan?.status === 'ready');
     setRecheckStatus(recheckOutcome(plan, planError));
-  }, [plan, planError, pendingRecheck]);
+  }, [plan, planError, planSettled, pendingRecheck]);
 
   React.useEffect(() => {
     setRecoveryCleared(false);
@@ -144,7 +138,7 @@ const ConfirmStep = ({
 
   const recheckRecovery = () => {
     setRecheckStatus('Checking the setup state...');
-    setPendingRecheck({ reset: false });
+    setPendingRecheck({ settled: planSettled });
     onRefreshPlan();
   };
 

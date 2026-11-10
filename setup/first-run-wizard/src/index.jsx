@@ -34,6 +34,8 @@ const App = () => {
   const [plan, setPlan] = React.useState(null);
   const [planError, setPlanError] = React.useState('');
   const [planRequest, setPlanRequest] = React.useState(0);
+  // Counts plan fetches that settled, so callers can wait for a fresh answer.
+  const [planSettled, setPlanSettled] = React.useState(0);
 
   React.useEffect(() => {
     const media = window.matchMedia?.('(prefers-color-scheme: dark)');
@@ -68,9 +70,12 @@ const App = () => {
       .then((value) => {
         if (cancelled) return;
         setPlan(value);
+        setPlanSettled((count) => count + 1);
       })
       .catch((reason) => {
-        if (!cancelled) setPlanError(String(reason));
+        if (cancelled) return;
+        setPlanError(String(reason));
+        setPlanSettled((count) => count + 1);
       });
     return () => {
       cancelled = true;
@@ -140,6 +145,7 @@ const App = () => {
               encryptStorage={encryptStorage}
               plan={plan}
               planError={planError}
+              planSettled={planSettled}
               onRefreshPlan={refreshPlan}
             />
           </WizardStep>

@@ -49,14 +49,14 @@ class SelectorHarness:
         (bin_dir / "caddy").write_text(
             "#!/bin/sh\n"
             f'echo "caddy $* active=$(cat "{self.active}")" >> "{self.log}"\n'
-            f'[ "$1" = reload ] && exit {reload_status}\n'
+            f'if [ "$1" = reload ]; then exit {reload_status}; fi\n'
             "exit 0\n",
             encoding="utf-8",
         )
         # Validation runs as the Caddy user with owned scratch directories; the
         # fakes keep the directory layout without needing root.
         (bin_dir / "install").write_text(
-            '#!/bin/sh\nwhile [ $# -gt 0 ]; do case "$1" in -d) shift ;; -m|-o|-g) shift 2 ;; '
+            '#!/bin/sh\nset -e\nwhile [ $# -gt 0 ]; do case "$1" in -d) shift ;; -m|-o|-g) shift 2 ;; '
             '*) mkdir -p "$1"; shift ;; esac; done\n',
             encoding="utf-8",
         )

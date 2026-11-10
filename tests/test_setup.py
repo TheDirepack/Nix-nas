@@ -6,6 +6,7 @@ import os
 import pathlib
 import pwd
 import sys
+import subprocess
 import tempfile
 import unittest
 from typing import Any
@@ -878,7 +879,6 @@ class FirstStartStatusTests(unittest.TestCase):
         resumable = self.status_with_journal(journal, storage_verified=True)
         self.assertEqual(resumable["status"], "ready")
         self.assertEqual(resumable["setupJournal"]["status"], "manual-recovery-required")
-        # Pool and dataset without a verified mount are not the worker's proof.
         blocked = self.status_with_journal(journal, storage_verified=False)
         self.assertEqual(blocked["status"], "manual-recovery-required")
 
@@ -902,7 +902,23 @@ class FirstStartStatusTests(unittest.TestCase):
             ):
                 self.assertEqual(setup.setup_journal_blocker(summary) is not None, blocked)
                 if pool and dataset:
-                    mount.assert_called_once_with(["nas-zfs-mount-check"], check=False)
+                    mount.assert_called_once_with(["nas-zfs-mount-check"], check=False, timeout_seconds=15)
+
+    def test_storage_proof_stays_within_the_status_deadline(self) -> None:
+        summary = setup.setup_journal_summary(self.journal("manual-recovery-required", "storage"))
+        hung = subprocess.TimeoutExpired(["zpool", "list"], 15)
+        with mock.patch.object(setup.subprocess, "run", side_effect=hung) as listing:
+            self.assertIsNotNone(setup.setup_journal_blocker(summary))
+        self.assertEqual(listing.call_args.kwargs["timeout"], 15)
+        with (
+            mock.patch.object(setup, "pool_exists", return_value=True),
+            mock.patch.object(setup, "dataset_exists", return_value=True),
+            mock.patch.object(setup, "run_root", side_effect=setup.SetupError("Command timed out")) as run_root,
+        ):
+            self.assertIsNotNone(setup.setup_journal_blocker(summary))
+        command = run_root.call_args.args[0]
+        self.assertIn("--property=RuntimeMaxSec=15", command[: command.index("--")])
+        self.assertEqual(run_root.call_args.kwargs["timeout_seconds"], 15)
 
     def test_interrupted_and_acknowledged_journals_remain_resumable(self) -> None:
         for status in ("failed", "reconciled", "running"):

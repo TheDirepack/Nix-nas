@@ -173,6 +173,11 @@ class TestWizardSource(unittest.TestCase):
         self.assertLess(main.index("<Wizard"), main.index("<AdminStep"))
         confirm = (WIZARD / "src/steps/ConfirmStep.jsx").read_text(encoding="utf-8")
         self.assertIn("const retryAllowed = canRetryFailedJob(job, recoveryCleared);", confirm)
+        # A recheck completes on the settle counter, never on transient plan/error state
+        # that React may batch away.
+        self.assertIn("planSettled === pendingRecheck.settled", confirm)
+        self.assertEqual(index.count("setPlanSettled((count) => count + 1);"), 2)
+        self.assertIn("planSettled={planSettled}", index)
         for control in ('id="wizard-password-reapply"', "{busy ? 'Retrying setup' : 'Retry setup'}"):
             guards = re.findall(r"\{([^{}\n]+) && \(\n", confirm[: confirm.index(control)])
             self.assertEqual(guards[-1], "retryAllowed", control)

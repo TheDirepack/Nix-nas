@@ -321,8 +321,6 @@ class CockpitApiDriftTests(unittest.TestCase):
             "devices": ["/dev/a", "/dev/b"],
             "allowDestructiveStorage": True,
         }
-        # A concurrent worker failed into manual recovery between the first
-        # readiness check and this request's reservation.
         blocked = {"status": "manual-recovery-required", "message": "Setup stopped at storage"}
         for second in (blocked, {**self.prepared_first_start(), "planDigest": "b" * 64}):
             with (
