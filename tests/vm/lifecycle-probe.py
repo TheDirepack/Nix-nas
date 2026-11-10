@@ -44,6 +44,32 @@ def show(unit: str, prop: str) -> str:
     return command("systemctl", "show", unit, f"--property={prop}", "--value")
 
 
+def start_jobs(unit: str, *, since_us: int = 0) -> list[dict]:
+    """Return PID 1 start-job journal records for ``unit``.
+
+    Inactive oneshot gates and never-started units are garbage-collected, after
+    which systemctl show reports an empty InvocationID; the journal keeps an
+    exact record of every start job instead.
+    """
+    argv = ["journalctl", "--no-pager", "--output=json", f"--unit={unit}"]
+    if since_us:
+        argv.append(f"--since=@{since_us // 1_000_000}")
+    records = [json.loads(line) for line in command(*argv).splitlines() if line.startswith("{")]
+    return [
+        record
+        for record in records
+        if record.get("JOB_TYPE") == "start" and int(record["__REALTIME_TIMESTAMP"]) > since_us
+    ]
+
+
+def completed_starts(unit: str, *, since_us: int = 0) -> int:
+    return sum(1 for record in start_jobs(unit, since_us=since_us) if record.get("JOB_RESULT") == "done")
+
+
+def now_us() -> int:
+    return time.time_ns() // 1000
+
+
 def wait_for(description: str, predicate, timeout: float = 120.0) -> None:
     deadline = time.monotonic() + timeout
     while not predicate():
@@ -104,16 +130,11 @@ def create() -> None:
     require(show(TIMER, "ActiveState") == "active", "job timer is not active")
     require(show(UNITS[OFF], "ActiveState") == "inactive", "off daemon started")
     command("systemctl", "start", UNITS[JOB])
-    job = show(UNITS[JOB], "InvocationID")
-    require(bool(job) and show(UNITS[JOB], "Result") == "success", "job did not complete")
+    require(show(UNITS[JOB], "Result") == "success", "job did not complete")
+    require(completed_starts(UNITS[JOB]) == 1, "job did not record exactly one completed run")
+    require(not start_jobs(UNITS[OFF]), "off daemon received a start job")
     STATE.parent.mkdir(parents=True, exist_ok=True)
-    save(
-        {
-            "jobInvocation": job,
-            "offInvocation": show(UNITS[OFF], "InvocationID"),
-            "gateInvocation": show(GATE, "InvocationID"),
-        }
-    )
+    save({"since": now_us()})
     print("PASS: V2 lifecycle fixture declared", flush=True)
 
 
@@ -127,6 +148,7 @@ def locked() -> None:
     require(result.returncode == 0, "condition-skipped start should not fail")
     require(show(UNITS[HEALTHY], "ActiveState") == "inactive", "generated owner started while locked")
     require(show(UNITS[HEALTHY], "ConditionResult") == "no", "generated owner is not gated on secret readiness")
+    mark_recovery_window()
     print("PASS: generated V2 owners stopped before secrets were removed and stay down while locked", flush=True)
 
 
@@ -135,24 +157,24 @@ def status_row(name: str) -> dict:
     return next(row for row in rows if row.get("id") == name)
 
 
+def mark_recovery_window() -> None:
+    save({"since": now_us()})
+
+
 def recovered(*, flaky_failed: bool) -> None:
-    baseline = json.loads(STATE.read_text())
+    since = json.loads(STATE.read_text())["since"]
     # Queued recovery is asynchronous; wait for observed runtime outcomes.
     wait_for("copyparty recovery", lambda: show("copyparty.service", "ActiveState") == "active")
     wait_for("healthy daemon recovery", lambda: show(UNITS[HEALTHY], "ActiveState") == "active")
     # The queued owner's gate runs again: queued recovery is observed, not assumed.
     wait_for(
         "healthy readiness gate",
-        lambda: (
-            show(GATE, "InvocationID") != baseline["gateInvocation"]
-            and show(GATE, "ActiveState") == "inactive"
-            and show(GATE, "Result") == "success"
-        ),
+        lambda: completed_starts(GATE, since_us=since) >= 1 and show(GATE, "ActiveState") == "inactive",
     )
     require(show(TIMER, "ActiveState") == "active", "job timer is not active after recovery")
-    require(show(UNITS[JOB], "InvocationID") == baseline["jobInvocation"], "completed job was replayed")
+    require(completed_starts(UNITS[JOB]) == 1, "completed job was replayed")
     require(show(UNITS[OFF], "ActiveState") == "inactive", "off daemon was started")
-    require(show(UNITS[OFF], "InvocationID") == baseline["offInvocation"], "off daemon was started and stopped")
+    require(not start_jobs(UNITS[OFF]), "off daemon received a start job")
     if flaky_failed:
         wait_for("flaky daemon failure", lambda: show(UNITS[FLAKY], "ActiveState") == "failed")
         row = status_row(FLAKY)
@@ -160,8 +182,6 @@ def recovered(*, flaky_failed: bool) -> None:
         require(status_row(HEALTHY)["stateLabel"] == "Running", "V2 status did not report the healthy app")
     else:
         wait_for("flaky daemon recovery", lambda: show(UNITS[FLAKY], "ActiveState") == "active")
-    baseline["gateInvocation"] = show(GATE, "InvocationID")
-    save(baseline)
     print(
         f"PASS: V2 expected units recovered (flaky failed={flaky_failed}); off and completed job untouched", flush=True
     )
@@ -169,12 +189,14 @@ def recovered(*, flaky_failed: bool) -> None:
 
 def break_flaky() -> None:
     BROKEN_MARKER.touch()
+    mark_recovery_window()
 
 
 def fail_outpost() -> None:
     OUTPOST_FAILURE.parent.mkdir(parents=True, exist_ok=True)
     OUTPOST_FAILURE.write_text("[Service]\nExecStartPre=/run/current-system/sw/bin/false\n")
     command("systemctl", "daemon-reload")
+    mark_recovery_window()
 
 
 def repair() -> None:
