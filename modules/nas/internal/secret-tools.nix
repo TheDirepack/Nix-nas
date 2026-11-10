@@ -33,6 +33,8 @@ let
       # Nix substitutes the immutable library store path.
       # shellcheck disable=SC1091
       source ${../../../scripts/lib/nas-secret-runtime.sh}
+      # shellcheck disable=SC1091
+      source ${../../../scripts/lib/nas-secret-transaction.sh}
 
       database=${lib.escapeShellArg cfg.secrets.keepassDatabase}
       key_file=${lib.escapeShellArg (if cfg.secrets.keepassKeyFile == null then "" else cfg.secrets.keepassKeyFile)}
@@ -264,8 +266,7 @@ let
         acquire_lock
         prompt_unlock
 
-        local local_stage root_stage previous transaction_dir runtime_base v2_systemd_state
-        local -a v2_start_units=()
+        local local_stage root_stage previous transaction_dir runtime_base
         local bootstrap_token_reused=false
         local authentik_secret authentik_bootstrap_token authentik_bootstrap_password authentik_outpost_token
         ${lib.optionalString cfg.vaultwarden.enable ''local vaultwarden_client_secret vaultwarden_admin_token vaultwarden_admin_hash''}
@@ -288,9 +289,6 @@ let
         root_stage="$transaction_dir/new"
         previous="$transaction_dir/previous"
 
-        # Nix substitutes the immutable library store path.
-        # shellcheck disable=SC1091
-        source ${../../../scripts/lib/nas-secret-transaction.sh}
         nas_secret_tx_init "$secret_root" "$root_stage" "$previous" nas-protected-services.target "$transaction_dir"
 
         cleanup() {
@@ -426,25 +424,6 @@ NTFY_ENV
         ${lib.optionalString (cfg.power.ups.enable && cfg.power.ups.web.enable) ''install_secret "$local_stage/power/nut-webgui-server-key" "$root_stage/power/nut-webgui-server-key" root root''}
         sudo install -m 0400 -o root -g root /dev/null "$root_stage/ready"
 
-        v2_systemd_state=/run/nas-control/systemd-reconciled.json
-        if sudo test -f "$v2_systemd_state"; then
-          if ! sudo ${pkgs.jq}/bin/jq -e '
-            .schemaVersion == 1 and
-            (.startUnits | type == "array") and
-            all(.startUnits[]; type == "string")
-          ' "$v2_systemd_state" >/dev/null; then
-            echo "Refusing to activate secrets: Managed Services V2 runtime state is malformed." >&2
-            exit 70
-          fi
-          mapfile -t v2_start_units < <(sudo ${pkgs.jq}/bin/jq -r '.startUnits[]' "$v2_systemd_state")
-          for gated_unit in "''${v2_start_units[@]}"; do
-            [[ "$gated_unit" =~ ^[A-Za-z0-9_.@:-]+\.(service|socket|timer|path|target|mount)$ ]] || {
-              echo "Refusing to activate secrets: invalid V2 unit name: $gated_unit" >&2
-              exit 70
-            }
-          done
-        fi
-
         nas_secret_tx_swap
 
         sudo systemctl reset-failed \
@@ -460,14 +439,10 @@ NTFY_ENV
             exit 71
           fi
         elif ! sudo systemctl start nas-protected-services.target; then
+          # The target wants the V2 reconcile, which queues every expected V2
+          # unit; workload outcomes belong to V2 status, not this transaction.
           echo "Protected service target failed to start; inspect systemctl --failed." >&2
           exit 71
-        else
-          # Target activation does not pull V2-owned units. Restore only units
-          # selected by the current V2 projection after their secret gates hold.
-          for gated_unit in "''${v2_start_units[@]}"; do
-            sudo systemctl start "$gated_unit" || exit 71
-          done
         fi
 
         for unit in authentik.service authentik-worker.service caddy.service; do
@@ -504,8 +479,7 @@ NTFY_ENV
         done
 
         if [[ "$setup_activation" != true ]]; then
-          # Restarting Authentik stops its required outpost; the boot target
-          # does not pull that unit back in during runtime activation.
+          # The target wants the outpost; confirm it is running before commit.
           if ! sudo systemctl start nas-authentik-proxy-outpost.service; then
             echo "Authentik proxy outpost failed to restart after activation." >&2
             exit 71
@@ -533,7 +507,11 @@ NTFY_ENV
         # Path-triggered Caddy selection must see the locked state before
         # stopping units can publish changes that trigger reconciliation.
         sudo rm -f "$secret_root/ready"
-        sudo systemctl stop nas-protected-services.target
+        NAS_SECRET_TX_TARGET=nas-protected-services.target
+        if ! nas_secret_tx_stop_target; then
+          echo "Protected services did not stop completely; runtime secrets remain without their ready marker." >&2
+          exit 1
+        fi
         sudo rm -rf "$secret_root"
         echo "Protected services stopped and runtime secrets removed. KeePassXC was not modified."
       }

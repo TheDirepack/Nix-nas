@@ -1773,10 +1773,13 @@ protected_restart_ready
 pass "Cockpit GUI protected restart completes and Cockpit recovers with protected services ready"
 
 log "Secret stop/reactivation transaction"
+# Declared before the OCI baseline so that baseline's revision stays exact.
+python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" create
 python3 "$CONFIG_DIR/tests/vm/oci-probe.py" create
 run_as_admin nas-secrets stop
 wait_inactive nas-v2-vm-oci-persist.service
 python3 "$CONFIG_DIR/tests/vm/oci-probe.py" locked
+python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" locked
 wait_inactive caddy.service
 wait_inactive copyparty.service
 wait_inactive authentik.service
@@ -1791,12 +1794,32 @@ activate_secrets
 wait_active caddy.service
 wait_active copyparty.service
 wait_active authentik.service
+python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" recovered
 
 ! printf '%s\n' wrong-password | run_as_admin nas-secrets activate-stdin \
   >/tmp/nas-secrets-wrong-active.log 2>&1 || fail "wrong password was accepted while active"
 systemctl is-active --quiet nas-protected-services.target
 [[ -f /run/nas-secrets/ready ]]
 pass "secret stop, reactivation, and wrong-password rollback behavior passed"
+
+log "Managed Services recovery across secret activation and rollback"
+python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" break
+run_as_admin nas-secrets stop
+activate_secrets || fail "an unhealthy V2 application made secret activation fail"
+python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" recovered-failed
+python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" fail-outpost
+set +e
+activate_secrets >/tmp/nas-secrets-post-swap-failure.log 2>&1
+post_swap_status=$?
+set -e
+[[ "$post_swap_status" -eq 71 ]] || { cat /tmp/nas-secrets-post-swap-failure.log >&2; fail "post-swap activation failure returned $post_swap_status"; }
+grep -q 'outpost failed to restart' /tmp/nas-secrets-post-swap-failure.log || fail "post-swap failure was not the injected outpost failure"
+[[ -f /run/nas-secrets/ready ]] || fail "rollback did not restore the previous secret tree"
+systemctl is-active --quiet nas-protected-services.target || fail "rollback left the protected target stopped"
+python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" recovered-failed
+python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" repair
+wait_active nas-authentik-proxy-outpost.service
+pass "V2 applications recover after same-boot activation and activation rollback; workload failure stays in V2 status"
 
 log "Final state"
 python3 "$CONFIG_DIR/tests/vm/oci-probe.py" verify --stage secret-reactivation

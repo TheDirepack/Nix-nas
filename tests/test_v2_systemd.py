@@ -345,6 +345,69 @@ class V2SystemdProjectionTests(unittest.TestCase):
                 else:
                     self.assertNotIn(target, files)
 
+    def test_generated_workloads_share_protected_stop_and_unlock_scope(self):
+        scope = ("PartOf=nas-protected-services.target", "ConditionPathExists=/run/nas-secrets/ready")
+        effective = self.compile(
+            {
+                "daemon": {
+                    "name": "Daemon",
+                    "workload": {"kind": "daemon", "activation": "persistent"},
+                    "runtime": {"type": "exec", "command": ["/bin/true"]},
+                },
+                "job": {
+                    "name": "Job",
+                    "workload": {"kind": "job", "schedules": [{"calendar": "daily"}]},
+                    "runtime": {"type": "exec", "command": ["/bin/true"]},
+                },
+                "native": {
+                    "name": "Native",
+                    "workload": {"kind": "daemon", "activation": "persistent"},
+                    "runtime": {"type": "systemd", "unit": "native.service"},
+                    "resources": {"memoryHighBytes": 4096},
+                },
+            }
+        )
+        output = pathlib.Path("/run/nas-control/systemd")
+        files, manifest = self.generate(effective, output)
+        for owner in ("nas-v2-daemon.service", "nas-v2-job.service"):
+            unit = files[output / "units" / owner].decode().split("[Service]", 1)[0]
+            for line in scope:
+                self.assertIn(line, unit, owner)
+        # Nix owns native units' lifecycle declarations; V2 adds only policy.
+        dropin = files[output / "units/native.service.d/50-nas-v2.conf"].decode()
+        self.assertNotIn("PartOf=", dropin)
+        self.assertNotIn("ConditionPathExists=", dropin)
+        # Recovery after unlock only starts long-running expected units: the
+        # job's timer, never the job itself.
+        self.assertEqual(
+            manifest["startUnits"], ["nas-v2-daemon.service", "nas-v2-timer-job-0.timer", "native.service"]
+        )
+        vm = systemd._vm_unit(
+            effective,
+            {
+                "name": "VM",
+                "managed": True,
+                "workload": {"kind": "daemon", "activation": "persistent"},
+                "dependencies": [],
+            },
+            python_bin="/run/current-system/sw/bin/python3",
+            source_dir=pathlib.Path("/nix/store/v2/services"),
+            descriptor_path=pathlib.Path("/run/nas-control/systemd/descriptors/vm.vm.json"),
+        ).decode()
+        aggregate = systemd._aggregate_unit(
+            effective,
+            {
+                "name": "Stack",
+                "managed": True,
+                "workload": {"kind": "daemon", "activation": "persistent"},
+                "dependencies": [],
+            },
+            ["nas-v2-stack-web.service"],
+        ).decode()
+        for unit in (vm, aggregate):
+            for line in scope:
+                self.assertIn(line, unit.split("[Service]", 1)[0])
+
     def test_ready_dependency_uses_transient_gate(self):
         effective = self.compile(
             {

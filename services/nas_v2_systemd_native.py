@@ -40,6 +40,13 @@ _SAFE_IDENTITY = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_.-]{0,63}|[0-9]{1,10})$")
 APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
 # Individual probes stay bounded; activation budgets also cover dependencies.
 PERSISTENT_READINESS_TIMEOUT_MAX = 150
+# Generated workloads are protected services: they stop with the protected
+# target when secrets are removed or swapped and are skipped while locked.
+# The target-wanted V2 reconcile restores the expected ones after activation.
+PROTECTED_STACK_LINES = (
+    "PartOf=nas-protected-services.target",
+    "ConditionPathExists=/run/nas-secrets/ready",
+)
 _CTRL = ("\x00", "\r", "\n")
 
 
@@ -212,6 +219,7 @@ def _restart_lines(service: dict[str, Any], runtime: dict[str, Any]) -> list[str
 def _unit_header(effective: dict[str, Any], service: dict[str, Any]) -> list[str]:
     return [
         "Description=" + _single_line(service["name"], field="service name"),
+        *PROTECTED_STACK_LINES,
         *(["StopWhenUnneeded=yes"] if _is_on_demand(service) else []),
         *_dependency_lines(effective, service),
     ]
@@ -343,8 +351,7 @@ def _existing_dropin(effective: dict[str, Any], service: dict[str, Any]) -> byte
 def _quadlet_source(effective: dict[str, Any], service_id: str, service: dict[str, Any]) -> bytes:
     unit_lines = [
         "Description=" + _single_line(service["name"], field="service name"),
-        "PartOf=nas-protected-services.target",
-        "ConditionPathExists=/run/nas-secrets/ready",
+        *PROTECTED_STACK_LINES,
         *(["StopWhenUnneeded=yes"] if _is_on_demand(service) else []),
         *_dependency_lines(effective, service),
     ]
@@ -379,6 +386,7 @@ def _vm_unit(
             [
                 "[Unit]",
                 "Description=" + _single_line(service["name"], field="service name"),
+                *PROTECTED_STACK_LINES,
                 f"Requires={libvirt_unit}",
                 f"After={libvirt_unit}",
                 *(["StopWhenUnneeded=yes"] if _is_on_demand(service) else []),
@@ -604,6 +612,7 @@ def _aggregate_unit(
     lines = [
         "[Unit]",
         "Description=" + _unit_value(service["name"], label="Compose service name"),
+        *PROTECTED_STACK_LINES,
     ]
     workload = service["workload"]
     if service["managed"] and workload["kind"] == "daemon" and workload.get("activation") == "on-demand":

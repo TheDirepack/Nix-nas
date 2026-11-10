@@ -34,8 +34,19 @@ class SecretTransactionShellTests(unittest.TestCase):
                     #!/usr/bin/env bash
                     printf '%s\\n' "$*" >> "$NAS_TX_LOG"
                     case "$1" in
-                      is-active) [[ "${NAS_TX_ACTIVE:-1}" == 1 && ! -e "$NAS_TX_INACTIVE_MARKER" ]] ;;
+                      is-active)
+                        if [[ "${3:-}" != nas-protected-services.target && -n "${NAS_TX_MEMBERS:-}" ]]; then
+                          [[ "${NAS_TX_MEMBER_STUCK:-0}" == 1 ]]
+                          exit
+                        fi
+                        [[ "${NAS_TX_ACTIVE:-1}" == 1 && ! -e "$NAS_TX_INACTIVE_MARKER" ]] ;;
+                      show) printf '%s\n' "${NAS_TX_MEMBERS:-}" ;;
                       stop)
+                        if [[ "${2:-}" == -- ]]; then
+                          [[ "${NAS_TX_MEMBER_STUCK:-0}" != 1 ]] || exit 1
+                          touch "$NAS_TX_MEMBERS_STOPPED"
+                          exit 0
+                        fi
                         if [[ "${NAS_TX_STOP_FAIL:-0}" == 1 ]]; then
                           [[ "${NAS_TX_STOP_LEFT_INACTIVE:-0}" != 1 ]] || touch "$NAS_TX_INACTIVE_MARKER"
                           exit 1
@@ -62,6 +73,9 @@ class SecretTransactionShellTests(unittest.TestCase):
                     [[ ! -f "$NAS_TX_MV_COUNT" ]] || count=$(cat "$NAS_TX_MV_COUNT")
                     count=$((count + 1))
                     printf '%s' "$count" > "$NAS_TX_MV_COUNT"
+                    if [[ -n "${{NAS_TX_MEMBERS:-}}" && ! -e "$NAS_TX_MEMBERS_STOPPED" ]]; then
+                      touch "$NAS_TX_MOVED_EARLY"
+                    fi
                     if [[ "${{NAS_TX_MV_FAIL_AT:-0}}" == "$count" ]]; then
                       exit 74
                     fi
@@ -99,6 +113,8 @@ class SecretTransactionShellTests(unittest.TestCase):
                 export NAS_TX_MV_COUNT={work / "mv.count"!s}
                 export NAS_TX_PRIV_LOG={work / "priv.log"!s}
                 export NAS_TX_INACTIVE_MARKER={work / "inactive-after-stop"!s}
+                export NAS_TX_MEMBERS_STOPPED={work / "members-stopped"!s}
+                export NAS_TX_MOVED_EARLY={work / "moved-early"!s}
                 {shell_export}
                 source {LIBRARY!s}
                 {body}
@@ -366,6 +382,47 @@ nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.
             set -e
             [[ $swap_rc -ne 0 && $cleanup_rc -eq 125 ]]
             [[ -f root/old && ! -e root/new && ! -e previous ]]
+            """
+        )
+        self.assert_ok(result)
+
+    def test_swap_waits_for_protected_members_before_moving_secrets(self) -> None:
+        result = self.run_scenario(
+            """
+            export NAS_TX_MEMBERS="copyparty.service nas-v2-app.service"
+            nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+            nas_secret_tx_swap
+            [[ -f root/new && -f previous/old && -e members-stopped && ! -e moved-early ]]
+            grep -qx 'stop -- copyparty.service nas-v2-app.service' systemctl.log
+            """
+        )
+        self.assert_ok(result)
+
+    def test_member_still_running_aborts_before_secrets_move(self) -> None:
+        result = self.run_scenario(
+            """
+            export NAS_TX_MEMBERS="nas-v2-app.service" NAS_TX_MEMBER_STUCK=1
+            nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+            set +e
+            nas_secret_tx_swap 2>swap.err; swap_rc=$?
+            set -e
+            [[ $swap_rc -ne 0 && -f root/old && -f stage/new && ! -e previous ]]
+            grep -q 'still active: nas-v2-app.service' swap.err
+            """
+        )
+        self.assert_ok(result)
+
+    def test_invalid_member_names_are_rejected(self) -> None:
+        result = self.run_scenario(
+            """
+            export NAS_TX_MEMBERS="--now.service"
+            nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+            set +e
+            nas_secret_tx_swap 2>swap.err; swap_rc=$?
+            set -e
+            [[ $swap_rc -ne 0 && -f root/old ]]
+            grep -q 'invalid protected member unit' swap.err
+            ! grep -q -- '^stop -- ' systemctl.log
             """
         )
         self.assert_ok(result)

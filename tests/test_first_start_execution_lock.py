@@ -71,7 +71,6 @@ def mutation_boundary(_args):
 setup._first_run_locked=mutation_boundary
 setup.run_root=lambda *_args,**_kwargs:None
 setup.run_root_noninteractive=lambda *_args,**_kwargs:type('Result',(),{'returncode':0})()
-setup.ensure_secret_gated_services=lambda:None
 setup.run_first_start_job(root/'request.json',root/'password.json')
 """
         return subprocess.run(

@@ -13,11 +13,34 @@ nas_secret_tx_systemctl() {
   nas_secret_tx_privileged "${NAS_SECRET_TX_SYSTEMCTL:-systemctl}" "$@"
 }
 
+nas_secret_tx_stop_members() {
+  local members unit
+  members="$(nas_secret_tx_systemctl show --property=ConsistsOf --value -- "$NAS_SECRET_TX_TARGET")" || return 1
+  for unit in $members; do
+    [[ "$unit" =~ ^[A-Za-z0-9_.@:-]+$ && "$unit" != -* ]] || {
+      printf 'nas-secret-transaction: invalid protected member unit: %s\n' "$unit" >&2
+      return 1
+    }
+  done
+  [[ -n "${members//[[:space:]]/}" ]] || return 0
+  # A target's stop job completes before PartOf members finish stopping.
+  # Joining their stop jobs keeps secrets in place until every member is down.
+  # shellcheck disable=SC2086
+  nas_secret_tx_systemctl stop -- $members && return 0
+  for unit in $members; do
+    if nas_secret_tx_systemctl is-active --quiet "$unit"; then
+      printf 'nas-secret-transaction: protected member is still active: %s\n' "$unit" >&2
+      return 1
+    fi
+  done
+}
+
 nas_secret_tx_stop_target() {
-  if nas_secret_tx_systemctl stop "$NAS_SECRET_TX_TARGET"; then
-    return 0
+  if ! nas_secret_tx_systemctl stop "$NAS_SECRET_TX_TARGET" \
+    && nas_secret_tx_systemctl is-active --quiet "$NAS_SECRET_TX_TARGET"; then
+    return 1
   fi
-  ! nas_secret_tx_systemctl is-active --quiet "$NAS_SECRET_TX_TARGET"
+  nas_secret_tx_stop_members
 }
 
 nas_secret_tx_realpath_lexical() {

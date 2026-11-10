@@ -389,6 +389,41 @@ On-demand means V2 generates native configuration so an already-authorized reque
 
 V2 must not run a permanent central reaper.
 
+### 7.1.1 Expected units and protected-stack recovery
+
+The systemd projection's `startUnits` is the only start authority for enabled
+V2 workloads: persistent owners, on-demand activation sockets, and job timers.
+It never contains a job owner, an on-demand owner, or a disabled (`off`)
+service. Readiness gates are listed in `startUnits` but are not separately
+recovered.
+
+Every reconcile, including an unchanged one, queues `systemctl --no-block start`
+for each expected unit that is cleanly `inactive`, together with that owner's
+readiness gate. This happens after the transactional apply has committed, or
+when it is a no-op. Queueing is recovery only, not a readiness result. It never
+waits, resets, rolls back, or rejects the apply. Failed, transitional, or
+unqueryable units keep their state and are reported as diagnostics. V2 status
+and the systemd journal report what each queued unit actually did. A running
+owner's unchanged gate is never rerun.
+
+`nas-protected-services.target` wants the reconcile, so whenever the target
+starts, every expected V2 unit is restored. That includes secret activation,
+secret-activation rollback, protected restart, and first-start completion.
+Setup and secret activation therefore keep no unit lists of their own. A
+workload that fails to start is a V2 status failure, not a secret-activation
+failure.
+
+Generated workload owners (exec, Python, OCI/Quadlet, VM, and Compose
+aggregates) are protected services. Each has
+`PartOf=nas-protected-services.target` and
+`ConditionPathExists=/run/nas-secrets/ready`. They stop with the target and
+never start while locked. Before secrets are moved or removed, secret stop and
+swap wait for every member of the target (systemd `ConsistsOf`), because the
+target's own stop job can complete before its members finish stopping. Units
+that NixOS owns keep their NixOS lifecycle declarations; V2 adds only explicit
+drop-in policy to them. Transient session targets are not part of the target,
+because restarting a target cannot recreate their instances.
+
 ### 7.2 Job
 
 Finite operation.
