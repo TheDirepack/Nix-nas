@@ -1,4 +1,4 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, nasInternal ? null, ... }:
 
 let
   cfg = config.nas;
@@ -122,10 +122,13 @@ let
       ${lib.optionalString (cfg.backup.repositoryFile != "") ''
         check_file ${lib.escapeShellArg cfg.backup.repositoryFile} "Restic repository file" private
       ''}
-      ${lib.optionalString (cfg.backup.remote.enable && cfg.backup.remote.rcloneConfigFile != "") ''
-        check_file ${lib.escapeShellArg cfg.backup.remote.rcloneConfigFile} "rclone configuration" private
+      ${lib.optionalString (cfg.backup.rcloneConfigFile != "") ''
+        check_file ${lib.escapeShellArg cfg.backup.rcloneConfigFile} "rclone configuration" private
       ''}
     ''}
+    # The repository string is secret, so only its location can be checked
+    # here: a repository file naming the managed pool is not off-pool.
+    ${nasInternal.nasBackupStatus}/bin/nas-backup-status check-readiness
     ${lib.optionalString cfg.power.ups.enable ''
       check_file ${lib.escapeShellArg cfg.power.ups.passwordFile} "UPS password file" private
     ''}

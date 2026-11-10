@@ -103,7 +103,10 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn("stagingMinFreeBytes", options)
         self.assertIn("backupStage", storage)
         self.assertNotIn("/run/nas-backup-stage", storage)
-        self.assertIn("allowSamePoolRepository", validation)
+        policy = text("modules/nas/internal/backup-policy.nix")
+        self.assertIn("import ../internal/backup-policy.nix", validation)
+        self.assertIn("backupPolicy.assertions", validation)
+        self.assertIn("backup.allowSamePoolRepository", policy)
 
     def test_firewall_baseline_is_exact_and_cockpit_fails_closed(self) -> None:
         firewall = text("modules/nas/config/network-firewall.nix")

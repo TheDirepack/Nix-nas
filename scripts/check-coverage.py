@@ -44,6 +44,7 @@ COMBINED_FLOORS = {
     "services/nas_v2_systemd_reconcile.py": 68.0,
 }
 FLOORS = {
+    "services/nas_backup_status.py": 90.0,
     "services/nas_cockpit_api.py": 79.0,
     "services/nas_common.py": 95.0,
     "services/nas_doctor.py": 81.0,

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  backupRows,
   managedApplicationLinks,
   managedServiceMap,
   managedServiceOperationsBusy,
@@ -136,4 +137,30 @@ test("backend link destinations remain same-origin root-relative paths", () => {
   ]) {
     assert.equal(safeInternalPath(value), null, String(value));
   }
+});
+
+test("backup rows render CLI observations and never infer success", () => {
+  const rows = backupRows({
+    backup: {
+      rows: [
+        {id: "repository", label: "Restic repository", state: "attention", summary: "Same pool", detail: "x"},
+        {id: "last-backup", label: "Last backup", state: "succeeded", summary: "Succeeded"},
+        null,
+        {label: "missing id"},
+      ],
+    },
+  });
+  assert.deepEqual(
+    rows.map((row) => [row.id, row.state]),
+    [
+      ["repository", "attention"],
+      ["last-backup", "unavailable"],
+    ],
+  );
+  for (const data of [{}, {backup: null}, {backup: {rows: []}}, {backup: {ok: false, error: "Policy missing", rows: []}}]) {
+    const [row] = backupRows(data);
+    assert.equal(row.state, "unavailable");
+    assert.equal(row.summary, "Status unavailable");
+  }
+  assert.equal(backupRows({backup: {error: "Policy missing", rows: []}})[0].detail, "Policy missing");
 });

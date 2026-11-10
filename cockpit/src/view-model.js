@@ -151,6 +151,35 @@ export function setupModel(data = {}) {
   };
 }
 
+const BACKUP_ROW_STATES = new Set(["ok", "attention", "unavailable"]);
+
+export function backupRows(data = {}) {
+  const backup = data?.backup;
+  if (!backup || typeof backup !== "object" || !Array.isArray(backup.rows) || !backup.rows.length) {
+    return [
+      {
+        id: "unavailable",
+        label: "Backup",
+        state: "unavailable",
+        summary: "Status unavailable",
+        detail:
+          typeof backup?.error === "string" && backup.error
+            ? backup.error
+            : "Backup status is unavailable. Refresh to retry.",
+      },
+    ];
+  }
+  return backup.rows
+    .filter((row) => row && typeof row === "object" && typeof row.id === "string")
+    .map((row) => ({
+      id: row.id,
+      label: typeof row.label === "string" ? row.label : row.id,
+      state: BACKUP_ROW_STATES.has(row.state) ? row.state : "unavailable",
+      summary: typeof row.summary === "string" ? row.summary : "Status unavailable",
+      detail: typeof row.detail === "string" ? row.detail : "",
+    }));
+}
+
 export function managedServiceUnitState(service = {}) {
   service = service && typeof service === "object" && !Array.isArray(service) ? service : {};
   return typeof service.stateLabel === "string" ? service.stateLabel : "Status unavailable";

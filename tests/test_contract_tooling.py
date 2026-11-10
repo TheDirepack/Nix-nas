@@ -625,6 +625,12 @@ class ContractTests(unittest.TestCase):
         self.assertIn("firewall-without-networking.nix", negative)
         self.assertIn("failed for the wrong reason", negative)
         self.assertIn('NAS_NEGATIVE_ROOT="$ROOT" NAS_NEGATIVE_FIXTURE="$fixture"', negative)
+        for directory in ("invalid", "valid"):
+            for fixture in sorted((ROOT / "tests/nixos" / directory).glob("*.nix")):
+                with self.subTest(fixture=fixture.name):
+                    self.assertIn(f"tests/nixos/{directory}/{fixture.name}", negative)
+        self.assertIn("import ./tests/nixos/backup-policy-eval.nix", negative)
+        self.assertIn("valid Nix fixture ok", negative)
         negative_eval = text("tests/nixos/negative-eval.nix")
         self.assertIn('builtins.getEnv "NAS_NEGATIVE_ROOT"', negative_eval)
         self.assertIn('builtins.getEnv "NAS_NEGATIVE_FIXTURE"', negative_eval)

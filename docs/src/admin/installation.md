@@ -141,7 +141,7 @@ Everything below happens after setup completes and the system reboots.
 
 3. **Harden the Authentik API token.** Run `sudo nas-secrets status` to inspect the runtime token warning. If rotation is required, follow the [Authentik token procedure](authentik.md#service-token). Bootstrap and runtime credentials have separate lifecycles; do not reuse retired bootstrap credentials.
 
-4. **Enable backups deliberately.** Same-pool Restic requires `backup.allowSamePoolRepository = true` and is rollback protection only. Production readiness requires an external Restic repository or enabled ZFS replication, which the readiness assertions from Phase 1 already enforce.
+4. **Enable backups deliberately.** Configure an off-pool repository through `backup.repositoryFile` (see [Backups](backups.md#off-pool-repository)). Same-pool Restic requires `backup.allowSamePoolRepository = true` and is rollback protection only. Production readiness requires an off-pool repository file or enabled ZFS replication, which the readiness assertions from Phase 1 already enforce. Check the **Backup** card on the Cockpit overview after the first scheduled run.
 
 5. **Record recovery material offline.** Keep the list in the [Recovery runbook](../../operator/recovery.md): host ID, `/dev/disk/by-id/...` paths, exact pool topology, KeePassXC database location and an independent copy of its password, backup snapshot IDs, and Authentik recovery material. Update it after every storage or identity change, and perform a quarterly restore drill against disposable media or a VM.
 

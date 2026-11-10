@@ -427,20 +427,6 @@ def normalize(document: dict[str, Any]) -> dict[str, Any]:
     result.setdefault("storageResources", {})
     result.setdefault("credentials", {})
     result.setdefault("networkProfiles", {})
-    # Backup remote descriptor — optional, defaults to local config-only.
-    # This drives the rclone provider/scope UI and Nix restic wiring; the
-    # compiler itself treats it as passthrough (no storage projection).
-    if "backup" not in result or not isinstance(result["backup"], dict):
-        result["backup"] = {}
-    backup = result["backup"]
-    backup.setdefault("remote", {})
-    remote = backup["remote"] if isinstance(backup["remote"], dict) else {}
-    backup["remote"] = remote
-    remote.setdefault("provider", "local")
-    remote.setdefault("scope", "config-only")
-    remote.setdefault("rcloneRemote", "")
-    remote.setdefault("rcloneConfigFile", "")
-
     for resource in result["storageResources"].values():
         resource.setdefault("scope", "system")
         resource.setdefault("capabilities", ["read"])
@@ -1239,12 +1225,53 @@ def build_effective(document: dict[str, Any]) -> dict[str, Any]:
     return effective
 
 
+_RETIRED_BACKUP_REMOTE_DEFAULTS = {
+    "provider": "local",
+    "scope": "config-only",
+    "rcloneRemote": "",
+    "rcloneConfigFile": "",
+}
+
+
+def retire_backup_remote(document: dict[str, Any]) -> dict[str, Any]:
+    """Remove the retired top-level ``backup`` block when it requests nothing.
+
+    Nothing ever consumed ``$.backup.remote``; the Restic repository is the
+    Nix option ``nas.backup.repositoryFile``. A block holding only the former
+    defaults is dropped. Any other value is rejected so a document cannot
+    appear to configure an off-pool backup or a narrower scope.
+    """
+    if "backup" not in document:
+        return document
+    block = document["backup"]
+    remote = block.get("remote", {}) if isinstance(block, dict) else None
+    inert = (
+        isinstance(block, dict)
+        and set(block) <= {"remote"}
+        and isinstance(remote, dict)
+        and set(remote) <= set(_RETIRED_BACKUP_REMOTE_DEFAULTS)
+        and all(remote[key] == _RETIRED_BACKUP_REMOTE_DEFAULTS[key] for key in remote)
+    )
+    if not inert:
+        raise ManagedServicesV2Error(
+            "$.backup.remote was never applied and is retired. Configure an off-pool Restic repository "
+            "with the Nix option nas.backup.repositoryFile (rclone: and other Restic backends are "
+            "supported), then remove $.backup from the desired state.",
+            path="$.backup",
+            code="retired-field",
+        )
+    result = dict(document)
+    del result["backup"]
+    return result
+
+
 def compile_document(
     document: dict[str, Any],
     schema: dict[str, Any],
     *,
     platform_capabilities: set[str] | None = None,
 ) -> dict[str, Any]:
+    document = retire_backup_remote(document)
     validate_schema(document, schema)
     normalized = normalize(document)
     validate_schema(normalized, schema)

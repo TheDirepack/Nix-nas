@@ -7,6 +7,7 @@ let
     copypartyDataDir
     copypartyUserConfigDir
     failureAlert
+    nasBackupStatus
     sanoidPolicy
   ;
   backupStage = cfg.backup.stagingPath;
@@ -17,41 +18,23 @@ let
   v2BackupInventory = "/run/nas-control/backup-resources.json";
   v2BackupRuntimePaths = "/run/nas-control/restic-v2-runtime-paths";
   v2BackupRuntimeState = "/run/nas-control/backup-runtime-state.json";
-  localResticRepository =
-    if cfg.backup.localRepository != "" then cfg.backup.localRepository
-    else "${cfg.zfsRoot}/backups/restic-system";
-  # Remote backup via rclone (gdrive, icloud, pcloud, s3, b2). Restic natively
-  # supports `rclone:<remote>:<path>` when rclone is on PATH and config is
-  # available. We keep repositoryFile authoritative when set; otherwise the
-  # remote provider selects an rclone repo. `scope` controls which V2 resources
-  # are emitted to restic (config-only = system substrate needed for Authentik
-  # remote sign-in: Caddy, Authentik DB dump, Keepass DB; all = also user app
-  # data via derived backupResources).
-  remoteEnabled = cfg.backup.remote.enable && cfg.backup.remote.provider != "local";
-  # A repository file can select an rclone: repository without remote mode, so
-  # rclone availability follows the configured repository, not just the toggle.
-  rcloneRequired = remoteEnabled || cfg.backup.repositoryFile != "";
-  derivedRcloneRemote =
-    if cfg.backup.remote.rcloneRemote != "" then cfg.backup.remote.rcloneRemote
-    else if cfg.backup.remote.provider == "gdrive" then "gdrive:nas-backup"
-    else if cfg.backup.remote.provider == "pcloud" then "pcloud:nas-backup"
-    else if cfg.backup.remote.provider == "s3" then "s3:nas-backup"
-    else if cfg.backup.remote.provider == "b2" then "b2:nas-backup"
-    else if cfg.backup.remote.provider == "icloud" then "icloud:nas-backup"
-    else "rclone:nas-backup";
-  rcloneRepository = "rclone:${derivedRcloneRemote}";
-  effectiveRepository =
-    if cfg.backup.repositoryFile != "" then null
-    else if remoteEnabled then rcloneRepository
-    else localResticRepository;
+  backupPolicy = import ../internal/backup-policy.nix { inherit lib; } cfg;
+  localResticRepository = backupPolicy.localRepository;
+  inherit (backupPolicy) usesLocalRepository;
+  # Any repository file may name an rclone: repository, which Restic resolves
+  # through rclone on PATH.
+  rcloneRequired = !usesLocalRepository;
+  rcloneEnvironment = lib.optionalAttrs (cfg.backup.rcloneConfigFile != "") {
+    RCLONE_CONFIG = cfg.backup.rcloneConfigFile;
+  };
   resticRepository =
-    if cfg.backup.repositoryFile != ""
-    then { repositoryFile = cfg.backup.repositoryFile; }
-    else { repository = effectiveRepository; };
+    if usesLocalRepository
+    then { repository = localResticRepository; }
+    else { repositoryFile = cfg.backup.repositoryFile; };
   resticRepositoryArgs =
-    if cfg.backup.repositoryFile != ""
-    then [ "--repository-file" cfg.backup.repositoryFile ]
-    else [ "--repo" effectiveRepository ];
+    if usesLocalRepository
+    then [ "--repo" localResticRepository ]
+    else [ "--repository-file" cfg.backup.repositoryFile ];
   resticCommand = "${pkgs.restic}/bin/restic ${lib.escapeShellArgs resticRepositoryArgs}";
   restoreVerifyPath = cfg.backup.restoreVerification.targetPath;
 
@@ -167,15 +150,13 @@ in
 
     services.smartd.enable = lib.mkDefault false;
 
+    environment.etc."nas-control/backup-policy.json".text = builtins.toJSON backupPolicy.runtime;
+    environment.systemPackages = [ nasBackupStatus ];
+
      services.restic.backups = lib.mkIf cfg.backup.enable {
       nas-boot-system = ({
         initialize = true;
         inhibitsSleep = true;
-        # Scope handling: config-only retains boot system, Caddy, Authentik,
-        # Keepass key, Syncthing config, and firewall/identity substrate which
-        # are sufficient for Authentik remote sign-in recovery. `all` also
-        # pulls V2 derived resources (app data) via dynamicFilesFrom which
-        # respects storageResources backup.enabled.
         paths = [
           "/boot"
           "/etc/machine-id"
@@ -207,11 +188,6 @@ in
           ${pkgs.coreutils}/bin/cat ${lib.escapeShellArg v2BackupRuntimePaths}
         '';
         passwordFile = cfg.backup.passwordFile;
-        # Rclone is used only when provider != local; restic invokes `rclone`
-        # for `rclone:` repositories. Scope is operator-visible documentation:
-        # config-only keeps the static substrate (Caddy, Authentik, Keepass) and
-        # dynamic system resources; `all` also includes user app data already
-        # emitted via backupResources.
         backupPrepareCommand = ''
           #!${pkgs.runtimeShell}
           set -euo pipefail
@@ -220,7 +196,7 @@ in
           install -d -m 0700 "$backup_stage"
           available=$(${pkgs.coreutils}/bin/df --output=avail -B1 "$backup_stage" | ${pkgs.coreutils}/bin/tail -n 1 | ${pkgs.coreutils}/bin/tr -d "[:space:]")
           [[ "$available" =~ ^[0-9]+$ && "$available" -ge ${toString cfg.backup.stagingMinFreeBytes} ]] || { echo "Insufficient free space in $backup_stage" >&2; exit 1; }
-          ${lib.optionalString (cfg.backup.repositoryFile == "" && !remoteEnabled) ''
+          ${lib.optionalString usesLocalRepository ''
           install -d -m 0700 ${lib.escapeShellArg localResticRepository}
           ''}
 
@@ -252,22 +228,18 @@ in
 
     systemd.services.restic-backups-nas-boot-system = lib.mkIf cfg.backup.enable {
       requires = [ "nas-managed-services-reconcile.service" ]
-        ++ lib.optional (cfg.backup.repositoryFile == "" && !remoteEnabled) "nas-zfs-mount-guard.service";
+        ++ lib.optional usesLocalRepository "nas-zfs-mount-guard.service";
       after = [ "nas-managed-services-reconcile.service" ]
-        ++ lib.optional (cfg.backup.repositoryFile == "" && !remoteEnabled) "nas-zfs-mount-guard.service";
+        ++ lib.optional usesLocalRepository "nas-zfs-mount-guard.service";
       unitConfig = {
-        RequiresMountsFor = [ backupStage ] ++ lib.optional (cfg.backup.repositoryFile == "" && !remoteEnabled) cfg.zfsRoot;
+        RequiresMountsFor = [ backupStage ] ++ lib.optional usesLocalRepository cfg.zfsRoot;
         ConditionPathExists = [ cfg.backup.passwordFile v2BackupInventory ];
       };
-      # When a rclone remote is configured, restic needs rclone on PATH and
-      # optionally RCLONE_CONFIG. The service inherits PATH from the restic
-      # module; we augment it with rclone and set config location if provided.
-      path = lib.mkIf remoteEnabled [ pkgs.rclone ];
-      environment = lib.mkIf remoteEnabled (
-        lib.optionalAttrs (cfg.backup.remote.rcloneConfigFile != "") {
-          RCLONE_CONFIG = cfg.backup.remote.rcloneConfigFile;
-        }
-      );
+      path = lib.mkIf rcloneRequired [ pkgs.rclone ];
+      environment = rcloneEnvironment;
+      # Durable result for nas-backup-status; a recording failure must not
+      # change the backup result.
+      serviceConfig.ExecStopPost = [ "-${nasBackupStatus}/bin/nas-backup-status record backup" ];
     };
 
     systemd.services.nas-backup-authentik-dump = {
@@ -312,18 +284,17 @@ in
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
       unitConfig.RequiresMountsFor = [ restoreVerifyPath ]
-        ++ lib.optional (cfg.backup.repositoryFile == "" && !remoteEnabled) localResticRepository;
+        ++ lib.optional usesLocalRepository localResticRepository;
       serviceConfig = {
         Type = "oneshot";
         Nice = 15;
         IOSchedulingClass = "idle";
         TimeoutStartSec = "6h";
         UMask = "0077";
+        ExecStopPost = [ "-${nasBackupStatus}/bin/nas-backup-status record restore-verify" ];
       };
       path = [ pkgs.coreutils ] ++ lib.optional rcloneRequired pkgs.rclone;
-      environment = lib.mkIf (rcloneRequired && cfg.backup.remote.rcloneConfigFile != "") {
-        RCLONE_CONFIG = cfg.backup.remote.rcloneConfigFile;
-      };
+      environment = rcloneEnvironment;
       script = ''
         set -euo pipefail
         verify_root=${lib.escapeShellArg restoreVerifyPath}

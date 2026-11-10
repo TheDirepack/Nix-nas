@@ -23,6 +23,40 @@ If no external repository is configured, the default repository is `<nas.zfsRoot
 
 CopyParty SQLite databases are staged with online backups instead of copying the entire live state tree, which also contains the mounted NAS data hierarchy.
 
+### Off-pool repository
+
+Restic reads the repository from `nas.backup.repositoryFile`, a root-owned `0600` file holding one repository string. Any Restic backend works, including `sftp:`, `rest:`, `s3:`, `b2:` and `rclone:<remote>:<path>`. Keep the file out of Git and the Nix store, because a repository string can contain credentials.
+
+```nix
+nas.backup = {
+  enable = true;
+  passwordFile = "/run/secrets/restic-password";
+  repositoryFile = "/run/secrets/restic-repository"; # contains e.g. rclone:gdrive:nas-backup
+  rcloneConfigFile = "/run/secrets/rclone.conf";     # only for rclone: repositories
+};
+```
+
+The job always backs up its complete profile. There is no partial or "config-only" mode.
+
+**Migrating from `nas.backup.remote.*`.** These options are retired, and evaluation stops until you remove them:
+
+- `remote.enable`, `remote.provider` and `remote.rcloneRemote`: write the repository to the file above. The old default was `rclone:<rcloneRemote>`, or `rclone:<provider>:nas-backup` when `rcloneRemote` was empty.
+- `remote.scope`: delete it. It never limited what was backed up.
+- `remote.rcloneConfigFile`: still accepted, with a warning, as `nas.backup.rcloneConfigFile`. It is valid only with `repositoryFile`.
+
+A top-level `backup.remote` block in `services.yaml` was never applied. A block that only holds the old defaults is dropped. Any other value stops validation until you remove it and configure the repository in Nix.
+
+### Status in Cockpit
+
+The **Backup** card on the Cockpit overview shows what `nas-backup-status status` reports, as separate observations:
+
+- **Restic repository**: where the configured repository is. *Off-pool* means a network backend or a local path outside the managed pool. *Same pool* is rollback storage only. *System disk* means the path is on the root filesystem; check that its intended disk is mounted. The repository string itself is never displayed.
+- **Last backup**: the result systemd recorded for the last `nas-boot-system` run.
+- **Restore verification**: the last isolated restore and validation of the latest snapshot on this host.
+- **Independent restore**: always *Not proven*. Only the boot-device replacement drill in the [Recovery runbook](../reference/project-RECOVERY.md) proves it.
+
+Start a backup or restore verification from **Operations**.
+
 ## Durable OCI application state
 
 Keep the V2 service ID stable when replacing an image. Store the application's
@@ -152,6 +186,6 @@ sudo systemctl start nas-syncoid.service
 sudo systemctl start restic-backups-nas-boot-system.service
 ```
 
-Also verify the scheduled restore-check service. A backup is not considered proven merely because the backup command exited successfully; the restore verifier must be able to reconstruct the protected state in isolated scratch storage.
+Also verify the scheduled restore-check service. A backup is not considered proven merely because the backup command exited successfully; the restore verifier must be able to reconstruct the protected state in isolated scratch storage. `sudo nas-backup-status status` prints the same observations as the Cockpit card.
 
 For disaster-recovery order and independent-storage requirements, use the [Recovery runbook](../reference/project-RECOVERY.md).
