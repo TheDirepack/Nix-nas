@@ -310,6 +310,14 @@ The final installed-command workload also records curl-based HTTP adversarial ev
 
 The official-installer path additionally runs `tests/vm/setup-reboot-e2e.py` after the first-run guest suite. It writes a ZFS-backed sentinel, checks the completed V2 service set (including CopyParty and Syncthing), performs authenticated browser checks, reboots twice, and repeats those storage, service, and browser assertions after each boot. The Python runner writes one machine-readable result for the QEMU wrapper; no interactive continuation is required.
 
+The disposable OCI persistence dataset has a native mount in `vm-common.nix`.
+After the reboot harness imports the pool with `-N`, that mount starts after the
+root dataset guard and before reconciliation or the OCI owner. It follows the
+protected target through stop/reactivation and is conditional on the completed
+fixture baseline, so initial setup does not require a nonexistent dataset.
+V2 storage declarations do not create or mount host datasets, and persistence
+verification observes the exact mount without repairing it.
+
 ### VM failure and handoff contracts
 
 The fast PR contract includes executable process-level failure injection, not

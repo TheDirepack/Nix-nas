@@ -309,10 +309,10 @@ def verify(stage: str) -> None:
         value["document"]["storageResources"][RESOURCE] == baseline["resource"],
         f"OCI storage declaration changed after {stage}",
     )
+    mount = command("findmnt", "-n", "-o", "FSTYPE,SOURCE,TARGET", "--target", str(DATA.parent)).split()
     require(
-        command("findmnt", "-n", "-o", "FSTYPE,SOURCE,TARGET", "--target", str(DATA.parent)).split()
-        == ["zfs", "tank/nas/vm-oci-persist", str(DATA.parent)],
-        f"OCI data is not on its declared ZFS dataset after {stage}",
+        mount == ["zfs", "tank/nas/vm-oci-persist", str(DATA.parent)],
+        f"OCI data is not on its declared ZFS dataset after {stage}: {mount!r}",
     )
     require(data_state() == baseline["data"], f"OCI data or ownership changed after {stage}")
     wait_ready(stage)

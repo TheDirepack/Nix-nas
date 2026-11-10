@@ -155,6 +155,11 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_unit("multi-user.target")
     machine.succeed("busctl --system call org.freedesktop.UDisks2 /org/freedesktop/UDisks2 org.freedesktop.DBus.ObjectManager GetManagedObjects >/dev/null")
     machine.succeed("test $(systemctl show -p Result --value nas-vm-test-repository.service) = success")
+    oci_mount = r"tank-vm\x2doci\x2dpersist.mount"
+    machine.succeed(f"systemctl start '{oci_mount}'")
+    machine.succeed(f"test $(systemctl show -p ConditionResult --value '{oci_mount}') = no")
+    machine.succeed(f"test $(systemctl show -p ActiveState --value '{oci_mount}') = inactive")
+    machine.succeed("test ! -e /tank/vm-oci-persist")
     machine.succeed("${pkgs.python3}/bin/python ${deviceAllowProbe}")
     machine.succeed("test ! -e /run/nas-secret-runtime/live/ready")
     # The dirty service must gate reconciliation on the secret-ready marker:
@@ -202,6 +207,7 @@ pkgs.testers.runNixOSTest {
     machine.succeed("NAS_INSTALLED_FUZZ_SMOKE=1 timeout --signal=TERM --kill-after=${toString outerKillAfter}s ${toString timeoutBudget.timeouts.installedSmoke}s python3 /var/lib/nas-test/repo/tests/vm/adversarial-installed.py >/tmp/nas-installed-command-smoke.json")
     machine.succeed("jq -e '.ok == true and .smoke == true and .commands > 0' /tmp/nas-installed-command-smoke.json >/dev/null")
     machine.succeed("nas-vm-guest-test --oci-probe verify --stage native-final")
+    machine.succeed(f"systemctl is-active --quiet '{oci_mount}'")
     machine.succeed("nas-vm-guest-test --oci-probe remove")
   '';
 }

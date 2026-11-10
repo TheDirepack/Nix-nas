@@ -149,6 +149,31 @@ in
   networking.extraHosts = "127.0.0.1 nas-test.local";
   boot.supportedFilesystems = [ "zfs" ];
 
+  # Pool import uses -N after reboot; V2 storage declarations do not own mounts.
+  systemd.mounts = [
+    {
+      what = "tank/nas/vm-oci-persist";
+      where = "/tank/vm-oci-persist";
+      type = "zfs";
+      options = "zfsutil";
+      requiredBy = [ "nas-protected-services.target" ];
+      partOf = [ "nas-protected-services.target" ];
+      requires = [ "nas-zfs-mount-guard.service" ];
+      after = [ "nas-zfs-mount-guard.service" ];
+      before = [
+        "nas-managed-services-reconcile.service"
+        "nas-v2-vm-oci-persist.service"
+        "umount.target"
+      ];
+      conflicts = [ "umount.target" ];
+      unitConfig = {
+        # This mount starts after unlock, outside the boot local-fs transaction.
+        DefaultDependencies = false;
+        ConditionPathExists = "/var/lib/nas-test/oci-probe-baseline.json";
+      };
+    }
+  ];
+
   # The NixOS test kernel does not expose the per-service cgroup pressure file
   # that systemd 260 otherwise tries to bind into copyparty's private mount
   # namespace. The production service keeps its normal host accounting policy.
