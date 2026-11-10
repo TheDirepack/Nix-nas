@@ -29,7 +29,8 @@ Options:
                 Permit --apply while KeePassXC-gated services are stopped.
   --allow-local-health-only
                 Advanced recovery override: persist after local-only health checks.
-                Normal deployment requires NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON.
+                Normal deployment requires NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON,
+                which the installed command sets from nas.update.externalProbeCommand.
   --status      Inspect the protected configuration checkout without building.
   --json        Emit machine-readable status; valid only with --status.
   -h, --help    Show this help.
@@ -86,6 +87,17 @@ firewall_enabled="${NAS_FIREWALL_ENABLED:-1}"
 firewall_zone="${NAS_FIREWALL_ZONE:-nas-lan}"
 lan_host="${NAS_LAN_HOST:-$(cat /proc/sys/kernel/hostname).local}"
 trusted_interfaces="${NAS_TRUSTED_INTERFACES:-}"
+v2_systemd_state="${NAS_V2_SYSTEMD_STATE:-/run/nas-control/systemd-reconciled.json}"
+v2_reconcile_pending="${NAS_V2_RECONCILE_PENDING:-/run/nas-control/reconcile.pending}"
+copyparty_expected=false
+application_settle_seconds="${NAS_UPDATE_APPLICATION_SETTLE_SECONDS:-300}"
+if ! [[ "$application_settle_seconds" =~ ^[0-9]+$ ]] || ((10#$application_settle_seconds < 1 || 10#$application_settle_seconds > 3600)); then
+  echo "NAS_UPDATE_APPLICATION_SETTLE_SECONDS must be an integer between 1 and 3600." >&2
+  exit 2
+fi
+application_settle_seconds=$((10#$application_settle_seconds))
+copyparty_socket=/run/copyparty/http.sock
+cockpit_socket=/run/nas-cockpit-sso/ws.sock
 
 require_commands() {
   local command
@@ -117,6 +129,226 @@ cleanup_candidate() {
 }
 trap cleanup_candidate EXIT
 
+listener_present() {
+  local port=$1
+  ss -ltnH | awk -v expected=":$port" '$4 ~ expected "$" { found=1 } END { exit !found }'
+}
+
+management_route_reachable() {
+  [[ -r "$caddy_ca_file" ]] || { echo "Caddy CA export is unavailable at $caddy_ca_file" >&2; return 1; }
+  local status
+  status="$(curl --silent --show-error --max-time 10 \
+    --cacert "$caddy_ca_file" \
+    --resolve "$lan_host:443:127.0.0.1" \
+    --output /dev/null --write-out '%{http_code}' \
+    "https://$lan_host/")"
+  [[ "$status" =~ ^[1-4][0-9][0-9]$ ]] || {
+    echo "Caddy management route returned HTTP $status" >&2
+    return 1
+  }
+}
+
+external_management_probe() {
+  local raw="${NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON:-}"
+  local validate_only=false
+  [[ "${1:-}" == "--validate" ]] && validate_only=true
+  if [[ -z "$raw" ]]; then
+    $allow_local_health_only && {
+      echo "WARNING: persisting after local-only management checks by explicit override." >&2
+      return 0
+    }
+    echo "Persistent deployment requires NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON (nas.update.externalProbeCommand) from an independent management path, or --allow-local-health-only for recovery." >&2
+    return 1
+  fi
+  local -a probe=()
+  local decoder_output decoder_pid decoder_status=0
+  # The decoder cannot be read from a pipeline or process substitution: both
+  # discard its exit status, and only bash >= 5.3 records a substitution's pid
+  # in $!. A background job keeps a portable pid and a file keeps the NUL
+  # separated argv, so a failing decoder is always observed before any launch.
+  decoder_output="$(mktemp "${TMPDIR:-/tmp}/nas-probe-argv.XXXXXX")" || return 1
+  python3 - "$raw" >"$decoder_output" <<'PY_EXTERNAL_PROBE' &
+import json
+import sys
+
+try:
+    value = json.loads(sys.argv[1])
+except (json.JSONDecodeError, RecursionError):
+    raise SystemExit("external probe command must be valid JSON")
+if not isinstance(value, list) or not value or not all(isinstance(item, str) and item for item in value):
+    raise SystemExit("external probe command must be a nonempty JSON string array")
+encoded = []
+for item in value:
+    if "\x00" in item:
+        raise SystemExit("external probe argument contains NUL")
+    try:
+        encoded.append(item.encode())
+    except UnicodeEncodeError:
+        raise SystemExit("external probe argument must be UTF-8 encodable") from None
+sys.stdout.buffer.write(b"\0".join(encoded) + b"\0")
+PY_EXTERNAL_PROBE
+  decoder_pid=$!
+  wait "$decoder_pid" || decoder_status=$?
+  if ((decoder_status != 0)); then
+    rm -f -- "$decoder_output"
+    return "$decoder_status"
+  fi
+  mapfile -d '' -t probe <"$decoder_output" || decoder_status=$?
+  rm -f -- "$decoder_output"
+  ((decoder_status == 0)) || return "$decoder_status"
+  ((${#probe[@]})) || {
+    echo "External management probe command is empty." >&2
+    return 1
+  }
+  [[ "${probe[0]}" == /* && -f "${probe[0]}" && -x "${probe[0]}" ]] || {
+    echo "External management probe executable is not an absolute executable file: ${probe[0]}" >&2
+    return 1
+  }
+  $validate_only && return 0
+  timeout 60 "${probe[@]}"
+}
+
+# V2 owns application lifecycle. The reconciler's committed start set names the
+# exact native units it expects to run, so modes such as "off" are honored
+# without re-encoding application policy here. Readiness gates are oneshot
+# units that are inactive once passed; they are listed separately and only
+# must not be failed. Every command reports its own failure: callers also use
+# these functions in conditional context.
+v2_expected_units() {
+  [[ -f "$v2_systemd_state" && -r "$v2_systemd_state" ]] || {
+    echo "Managed Services V2 start state is unavailable at $v2_systemd_state; refusing to guess which applications must run." >&2
+    return 1
+  }
+  jq -r '
+    # Same unit-name contract as nas_v2_systemd_reconcile; callers pass units after "--".
+    def unit_name: type == "string" and test("\\A[A-Za-z0-9_.@:-]+[.](service|socket|timer|path|target)\\z");
+    if type == "object" and .schemaVersion == 1 and (.startUnits | type) == "array" and all(.startUnits[]; unit_name)
+      and ((.readinessUnits // []) | type) == "array" and all((.readinessUnits // [])[]; unit_name)
+    then (.readinessUnits // []) as $gates
+      | .startUnits[] | if IN($gates[]) then "gate " + . else "run " + . end
+    else error("schemaVersion must be 1 and startUnits and readinessUnits must be arrays of unit names")
+    end' "$v2_systemd_state" || {
+    echo "Managed Services V2 start state at $v2_systemd_state is invalid." >&2
+    return 1
+  }
+}
+
+# Classifies V2 units without waiting. With --wait it polls until every running
+# unit is active and every gate has finished, up to the settle deadline: units
+# that recovery started with --no-block may still be activating. Sets
+# copyparty_expected for application_health.
+application_units_active() {
+  local wait=false listing entry kind unit state deadline
+  local -a expected=() pending=() next=() unsettled=() failed=()
+  [[ "${1:-}" == --wait ]] && wait=true
+  copyparty_expected=false
+  deadline=$((SECONDS + application_settle_seconds))
+  if $wait; then
+    until managed_services_settled 2>/dev/null; do
+      ((SECONDS < deadline)) || { managed_services_settled; return 1; }
+      sleep 2
+    done
+  fi
+  listing="$(v2_expected_units)" || return 1
+  [[ -z "$listing" ]] || mapfile -t expected <<<"$listing"
+  for entry in "${expected[@]}"; do
+    [[ "$entry" == "run copyparty.service" ]] && copyparty_expected=true
+  done
+  pending=("${expected[@]}")
+  while :; do
+    next=()
+    unsettled=()
+    for entry in "${pending[@]}"; do
+      kind="${entry%% *}"
+      unit="${entry#* }"
+      state="$(systemctl is-active -- "$unit" 2>/dev/null || true)"
+      case "$kind:$state" in
+        run:active | gate:active | gate:inactive) ;;
+        *:failed) failed+=("$unit") ;;
+        *)
+          next+=("$entry")
+          unsettled+=("$unit (${state:-unknown})")
+          ;;
+      esac
+    done
+    if ((${#failed[@]})); then
+      echo "Managed Services V2 units failed: ${failed[*]}" >&2
+      return 1
+    fi
+    ((${#unsettled[@]})) || return 0
+    if ! $wait; then
+      echo "Managed Services V2 expects these units to run, but they are not active: ${unsettled[*]}" >&2
+      return 1
+    fi
+    if ((SECONDS >= deadline)); then
+      echo "Managed Services V2 units did not become active within ${application_settle_seconds}s: ${unsettled[*]}" >&2
+      return 1
+    fi
+    pending=("${next[@]}")
+    sleep 2
+  done
+}
+
+# A pending or running reconcile can still stop units or replace the start set.
+managed_services_settled() {
+  local state
+  state="$(systemctl is-active nas-managed-services-reconcile.service 2>/dev/null || true)"
+  if [[ -e "$v2_reconcile_pending" || "$state" =~ ^(active|activating|deactivating|reloading)$ ]]; then
+    echo "Managed Services reconciliation is pending or running; retry after it settles, or inspect nas-managed-services-reconcile.service." >&2
+    return 1
+  fi
+}
+
+application_health() {
+  application_units_active "$@" || return 1
+  if $copyparty_expected; then
+    [[ -S "$copyparty_socket" ]] || { echo "CopyParty Unix listener is missing" >&2; return 1; }
+    curl --fail --silent --show-error --max-time 10 --unix-socket "$copyparty_socket" http://localhost/ >/dev/null || {
+      echo "CopyParty did not answer on its Unix listener" >&2
+      return 1
+    }
+  fi
+}
+
+health_check() {
+  systemctl is-active --quiet sshd.service
+  zpool status -x >/dev/null
+  zfs list >/dev/null
+
+  local interface current_zone
+  for interface in $trusted_interfaces; do
+    ip link show "$interface" >/dev/null
+    ip -o address show dev "$interface" scope global | grep -q . || {
+      echo "Trusted interface $interface has no global address" >&2
+      return 1
+    }
+    ip route show dev "$interface" | grep -q . || {
+      echo "Trusted interface $interface has no route" >&2
+      return 1
+    }
+    if [[ "$firewall_enabled" == "1" ]]; then
+      current_zone="$(firewall-cmd --get-zone-of-interface="$interface")"
+      [[ "$current_zone" == "$firewall_zone" ]] || {
+        echo "Trusted interface $interface is in $current_zone instead of $firewall_zone" >&2
+        return 1
+      }
+    fi
+  done
+
+  listener_present 22 || { echo "sshd is not listening" >&2; return 1; }
+  if $protected_was_active; then
+    for unit in postgresql.service authentik-worker.service authentik.service nas-cockpit-sso.socket nas-cockpit-sso.service caddy.service; do
+      systemctl is-active --quiet "$unit" || { echo "$unit is not active" >&2; return 1; }
+    done
+    application_health --wait || return 1
+    [[ -S "$cockpit_socket" ]] || { echo "Cockpit Unix listener is missing" >&2; return 1; }
+    listener_present 443 || { echo "Caddy is not listening on 443" >&2; return 1; }
+    curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:${authentik_port}${authentik_path}-/health/ready/" >/dev/null
+    curl --fail --silent --show-error --max-time 10 --unix-socket "$cockpit_socket" http://localhost/console/ >/dev/null
+    management_route_reachable
+  fi
+}
+
 inside_git=false
 if git_safe rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   inside_git=true
@@ -144,6 +376,40 @@ if $status_only; then
     fi
   fi
   current_system="$(readlink -f /run/current-system 2>/dev/null || true)"
+  # Report the admission checks --apply performs, without launching the probe
+  # or contacting applications, so clients can explain why persistent
+  # deployment is unavailable. Recovery overrides are deliberately ignored.
+  apply_blockers='[]'
+  add_apply_blocker() {
+    apply_blockers="$(jq -c --arg code "$1" --arg message "$2" '. + [{code:$code, message:$message}]' <<<"$apply_blockers")"
+  }
+  probe_configured=false
+  probe_valid=null
+  probe_error=''
+  if [[ -n "${NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON:-}" ]]; then
+    probe_configured=true
+    if probe_error="$(external_management_probe --validate 2>&1 >/dev/null)"; then
+      probe_valid=true
+    else
+      probe_valid=false
+      [[ -n "$probe_error" ]] || probe_error="external probe command is invalid"
+      add_apply_blocker external-probe-invalid "The configured independent management probe is invalid: $probe_error"
+    fi
+  else
+    add_apply_blocker external-probe-unconfigured \
+      "Applying an update requires an independent management probe. Set nas.update.externalProbeCommand in the NixOS configuration."
+  fi
+  if ! command -v systemctl >/dev/null 2>&1; then
+    add_apply_blocker runtime-state-unavailable "systemctl is unavailable, so protected-service state cannot be inspected."
+  elif ! systemctl is-active --quiet nas-protected-services.target; then
+    add_apply_blocker protected-services-stopped \
+      "Protected services are stopped. Unlock KeePassXC and activate secrets before applying an update."
+  elif ! runtime_detail="$(managed_services_settled 2>&1 >/dev/null)"; then
+    add_apply_blocker managed-services-reconciling "$runtime_detail"
+  elif ! runtime_detail="$(application_units_active 2>&1 >/dev/null)"; then
+    add_apply_blocker applications-unhealthy \
+      "$runtime_detail. Repair them or turn their applications off in Managed Services first."
+  fi
   if $json_output; then
     jq -n \
       --arg configurationDir "$config_dir" \
@@ -151,14 +417,28 @@ if $status_only; then
       --arg branch "$branch" \
       --arg upstream "$upstream" \
       --arg currentSystem "$current_system" \
+      --arg probeError "$probe_error" \
       --argjson git "$inside_git" \
       --argjson dirty "$dirty" \
       --argjson ahead "$ahead" \
       --argjson behind "$behind" \
-      '{configurationDir:$configurationDir, git:$git, revision:$revision, branch:$branch, upstream:(if $upstream == "" then null else $upstream end), ahead:$ahead, behind:$behind, dirty:$dirty, currentSystem:$currentSystem}'
+      --argjson probeConfigured "$probe_configured" \
+      --argjson probeValid "$probe_valid" \
+      --argjson applyBlockers "$apply_blockers" \
+      '{configurationDir:$configurationDir, git:$git, revision:$revision, branch:$branch, upstream:(if $upstream == "" then null else $upstream end), ahead:$ahead, behind:$behind, dirty:$dirty, currentSystem:$currentSystem,
+        externalProbe:{configured:$probeConfigured, valid:$probeValid, error:(if $probeError == "" then null else $probeError end)},
+        applyBlockers:$applyBlockers}'
   else
-    printf 'Configuration: %s\nRevision: %s\nBranch: %s\nUpstream: %s\nDirty: %s\nCurrent system: %s\n' \
-      "$config_dir" "$revision" "$branch" "${upstream:-none}" "$dirty" "$current_system"
+    if ! $probe_configured; then
+      probe_summary="not configured"
+    elif [[ "$probe_valid" == true ]]; then
+      probe_summary=configured
+    else
+      probe_summary="invalid: $probe_error"
+    fi
+    apply_summary="$(jq -r 'if length == 0 then "no known blockers" else "unavailable: " + (map(.message) | join(" ")) end' <<<"$apply_blockers")"
+    printf 'Configuration: %s\nRevision: %s\nBranch: %s\nUpstream: %s\nDirty: %s\nCurrent system: %s\nExternal probe: %s\nApply: %s\n' \
+      "$config_dir" "$revision" "$branch" "${upstream:-none}" "$dirty" "$current_system" "$probe_summary" "$apply_summary"
   fi
   exit 0
 fi
@@ -217,121 +497,6 @@ if $apply && ! $non_interactive; then
   read -r -p "Build and deploy the reviewed candidate at $deployment_dir? [y/N] " answer
   [[ "$answer" =~ ^[Yy]$ ]] || exit 0
 fi
-
-listener_present() {
-  local port=$1
-  ss -ltnH | awk -v expected=":$port" '$4 ~ expected "$" { found=1 } END { exit !found }'
-}
-
-management_route_reachable() {
-  [[ -r "$caddy_ca_file" ]] || { echo "Caddy CA export is unavailable at $caddy_ca_file" >&2; return 1; }
-  local status
-  status="$(curl --silent --show-error --max-time 10 \
-    --cacert "$caddy_ca_file" \
-    --resolve "$lan_host:443:127.0.0.1" \
-    --output /dev/null --write-out '%{http_code}' \
-    "https://$lan_host/")"
-  [[ "$status" =~ ^[1-4][0-9][0-9]$ ]] || {
-    echo "Caddy management route returned HTTP $status" >&2
-    return 1
-  }
-}
-
-external_management_probe() {
-  local raw="${NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON:-}"
-  local validate_only=false
-  [[ "${1:-}" == "--validate" ]] && validate_only=true
-  if [[ -z "$raw" ]]; then
-    $allow_local_health_only && {
-      echo "WARNING: persisting after local-only management checks by explicit override." >&2
-      return 0
-    }
-    echo "Persistent deployment requires NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON from an independent management path, or --allow-local-health-only for recovery." >&2
-    return 1
-  fi
-  local -a probe=()
-  local decoder_output decoder_pid decoder_status=0
-  # The decoder cannot be read from a pipeline or process substitution: both
-  # discard its exit status, and only bash >= 5.3 records a substitution's pid
-  # in $!. A background job keeps a portable pid and a file keeps the NUL
-  # separated argv, so a failing decoder is always observed before any launch.
-  decoder_output="$(mktemp "${TMPDIR:-/tmp}/nas-probe-argv.XXXXXX")" || return 1
-  python3 - "$raw" >"$decoder_output" <<'PY_EXTERNAL_PROBE' &
-import json
-import sys
-
-try:
-    value = json.loads(sys.argv[1])
-except (json.JSONDecodeError, RecursionError):
-    raise SystemExit("external probe command must be valid JSON")
-if not isinstance(value, list) or not value or not all(isinstance(item, str) and item for item in value):
-    raise SystemExit("external probe command must be a nonempty JSON string array")
-encoded = []
-for item in value:
-    if "\x00" in item:
-        raise SystemExit("external probe argument contains NUL")
-    try:
-        encoded.append(item.encode())
-    except UnicodeEncodeError:
-        raise SystemExit("external probe argument must be UTF-8 encodable") from None
-sys.stdout.buffer.write(b"\0".join(encoded) + b"\0")
-PY_EXTERNAL_PROBE
-  decoder_pid=$!
-  wait "$decoder_pid" || decoder_status=$?
-  if ((decoder_status != 0)); then
-    rm -f -- "$decoder_output"
-    return "$decoder_status"
-  fi
-  mapfile -d '' -t probe <"$decoder_output" || decoder_status=$?
-  rm -f -- "$decoder_output"
-  ((decoder_status == 0)) || return "$decoder_status"
-  ((${#probe[@]})) || {
-    echo "External management probe command is empty." >&2
-    return 1
-  }
-  $validate_only && return 0
-  timeout 60 "${probe[@]}"
-}
-
-health_check() {
-  systemctl is-active --quiet sshd.service
-  zpool status -x >/dev/null
-  zfs list >/dev/null
-
-  local interface current_zone
-  for interface in $trusted_interfaces; do
-    ip link show "$interface" >/dev/null
-    ip -o address show dev "$interface" scope global | grep -q . || {
-      echo "Trusted interface $interface has no global address" >&2
-      return 1
-    }
-    ip route show dev "$interface" | grep -q . || {
-      echo "Trusted interface $interface has no route" >&2
-      return 1
-    }
-    if [[ "$firewall_enabled" == "1" ]]; then
-      current_zone="$(firewall-cmd --get-zone-of-interface="$interface")"
-      [[ "$current_zone" == "$firewall_zone" ]] || {
-        echo "Trusted interface $interface is in $current_zone instead of $firewall_zone" >&2
-        return 1
-      }
-    fi
-  done
-
-  listener_present 22 || { echo "sshd is not listening" >&2; return 1; }
-  if $protected_was_active; then
-    for unit in postgresql.service authentik-worker.service authentik.service copyparty.service nas-cockpit-sso.socket nas-cockpit-sso.service caddy.service; do
-      systemctl is-active --quiet "$unit" || { echo "$unit is not active" >&2; return 1; }
-    done
-    [[ -S /run/copyparty/http.sock ]] || { echo "CopyParty Unix listener is missing" >&2; return 1; }
-    [[ -S /run/nas-cockpit-sso/ws.sock ]] || { echo "Cockpit Unix listener is missing" >&2; return 1; }
-    listener_present 443 || { echo "Caddy is not listening on 443" >&2; return 1; }
-    curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:${authentik_port}${authentik_path}-/health/ready/" >/dev/null
-    curl --fail --silent --show-error --max-time 10 --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null
-    curl --fail --silent --show-error --max-time 10 --unix-socket /run/nas-cockpit-sso/ws.sock http://localhost/console/ >/dev/null
-    management_route_reachable
-  fi
-}
 
 restart_protected() {
   $protected_was_active || return 0
@@ -448,6 +613,15 @@ if $apply; then
   # Reject an unusable independent-management probe before any build, snapshot,
   # or activation work; the launch still happens at each health gate.
   external_management_probe --validate
+  # A pre-existing application failure is not evidence against the candidate;
+  # refuse before any mutation instead of rolling back state afterwards.
+  if $protected_was_active; then
+    managed_services_settled || exit 1
+    application_health || {
+      echo "Refusing to apply: repair the units above or turn their applications off in Managed Services first." >&2
+      exit 1
+    }
+  fi
 fi
 
 echo "Evaluating reviewed flake inputs without modifying flake.lock..."

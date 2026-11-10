@@ -53,6 +53,8 @@ cases=(
   'tests/nixos/invalid/installation-ready-no-recovery.nix|installationReady requires an administrator SSH key with OpenSSH enabled'
   'tests/nixos/invalid/installation-ready-ssh-group-denied.nix|installationReady requires an administrator SSH key with OpenSSH enabled'
   'tests/nixos/invalid/installation-ready-unencrypted.nix|ZFS encryption is disabled. Enable nas.zfsEncryption.enable or explicitly set nas.zfsEncryption.acknowledgeUnencrypted = true'
+  'tests/nixos/invalid/update-probe-relative.nix|nas.update.externalProbeCommand must start with an absolute executable path'
+  'tests/nixos/invalid/auto-update-apply-without-probe.nix|nas.autoUpdate.apply requires nas.update.externalProbeCommand'
 )
 
 # AllowGroups/DenyGroups wildcard and negation cases are decided by pattern
@@ -62,6 +64,10 @@ nix eval --impure --json --expr '
     lib = (builtins.getFlake (toString ./.)).inputs.nixpkgs.lib;
   }
 '
+
+# The positive counterpart: a configured probe must reach the installed wrapper.
+NAS_NEGATIVE_ROOT="$ROOT" nix eval --impure --json --file tests/nixos/update-probe-eval.nix
+printf '\n'
 
 for row in "${cases[@]}"; do
   fixture=${row%%|*}

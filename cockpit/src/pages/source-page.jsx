@@ -20,7 +20,7 @@ import {
 import {apiInput} from "../api.js";
 import {OutputBlock} from "../components/output-block.jsx";
 import {pretty} from "../lib/format.js";
-import {revisionModel} from "../view-model.js";
+import {revisionModel, updateApplyModel} from "../view-model.js";
 
 const READ_ONLY = ["status", "diff", "log"];
 const UPDATE_OPS = [
@@ -43,6 +43,7 @@ const UPDATE_OPS = [
 
 export function SourcePage({data, mutate, busy}) {
   const revision = revisionModel(data?.update || {});
+  const applyModel = updateApplyModel(data?.update || {});
   const update = data?.update || {};
   const manualRecovery = update.manualRecovery;
   const operations = data?.operations || {};
@@ -134,13 +135,22 @@ export function SourcePage({data, mutate, busy}) {
             Candidate preparation, health checks, state capture, rollback, and recovery evidence
             belong exclusively to nas-update.
           </p>
+          {applyModel.available ? null : (
+            <Alert variant="warning" isInline title="Applying updates is unavailable">
+              {applyModel.reasons.map((reason) => (
+                <p key={reason}>{reason}</p>
+              ))}
+            </Alert>
+          )}
           <div className="nas-actions nas-actions--wrap">
             {UPDATE_OPS.map(({operation, label}) => (
               <React.Fragment key={operation}>
                 <Button
                   key={`${operation}-button`}
                   variant="primary"
-                  isDisabled={busy || applianceBusy}
+                  isDisabled={
+                    busy || applianceBusy || (operation === "apply" && !applyModel.available)
+                  }
                   onClick={() => setConfirmOperation(operation)}
                 >
                   {label}

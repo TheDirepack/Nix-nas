@@ -198,6 +198,15 @@ pkgs.testers.runNixOSTest {
     machine.succeed("systemctl start nas-v2-apply-failed.service")
     machine.succeed("test $(systemctl show -p ConditionResult --value nas-v2-apply-failed.service) = no")
     machine.succeed("! systemctl is-failed --quiet nas-v2-apply-failed.service")
+    # NixOS renders a disabled unit as a /dev/null mask in /etc/systemd/system,
+    # which outranks the V2 projection's /run/systemd/system units.
+    machine.succeed("test -z \"$(systemctl list-unit-files --no-legend --state=masked,masked-runtime 'nas-*')\"")
+    machine.succeed("printf '[Service]\\nType=oneshot\\nExecStart=${pkgs.coreutils}/bin/true\\n' >/run/systemd/system/nas-v2-firewall-rollback.service")
+    machine.succeed("systemctl daemon-reload")
+    machine.succeed("test $(systemctl show -p LoadState --value nas-v2-firewall-rollback.service) = loaded")
+    machine.succeed("systemctl start nas-v2-firewall-rollback.service")
+    machine.succeed("rm /run/systemd/system/nas-v2-firewall-rollback.service")
+    machine.succeed("systemctl daemon-reload")
     machine.succeed("systemctl restart firewalld.service nas-firewall-baseline.service")
     machine.succeed("systemctl is-active --quiet nas-firewall-baseline.service")
     machine.succeed("firewall-cmd --state")
