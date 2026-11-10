@@ -610,7 +610,9 @@ COCKPIT_TRANSPORT_CLOSED = (
     "Server has closed the connection",
     "Your session has been terminated",
     "Connection has timed out",
-    "disconnected",
+    "ERR_CONNECTION_CLOSED",
+    "ERR_CONNECTION_REFUSED",
+    "ERR_CONNECTION_RESET",
 )
 PROTECTED_READY_RE = re.compile(r"Protected services:\s*ready")
 
@@ -620,7 +622,9 @@ def protected_restart_outcome(text: str) -> str | None:
         raise RuntimeError("Cockpit reported a protected-restart API failure")
     if "Operation completed." in text and '"action": "protected-restart"' in text:
         return "completed"
-    if "Operation failed" in text and any(marker in text for marker in COCKPIT_TRANSPORT_CLOSED):
+    if any(marker in text for marker in COCKPIT_TRANSPORT_CLOSED):
+        return "transport-closed"
+    if "Operation failed" in text and "disconnected" in text:
         return "transport-closed"
     return None
 

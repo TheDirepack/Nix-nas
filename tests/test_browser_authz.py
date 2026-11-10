@@ -327,7 +327,15 @@ class BrowserAuthzInputTests(unittest.TestCase):
         self.assertEqual(
             outcome('Operation completed.\n{\n  "action": "protected-restart",\n  "ok": true\n}'), "completed"
         )
-        self.assertEqual(outcome("Operation failed\nServer has closed the connection."), "transport-closed")
+        for closed in (
+            "Operation failed\nServer has closed the connection.",
+            "Server has closed the connection.",
+            "This site can't be reached\nERR_CONNECTION_RESET",
+            "Operation failed\ndisconnected",
+        ):
+            with self.subTest(closed=closed):
+                self.assertEqual(outcome(closed), "transport-closed")
+        self.assertIsNone(outcome('Operation coordinator\n{"state": "disconnected"}'))
         for failure in (
             "Operation failed\nnas-cockpit-api: Operation failed (reference 0123456789ab)",
             "Operation failed\nnas-cockpit-api: Another privileged operation conflicts with protected-restart",
