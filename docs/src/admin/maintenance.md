@@ -90,12 +90,55 @@ activate a generation, or establish appliance health.
 
 Use **Preview and validate updates** before deployment. After applying an update, verify Cockpit, storage, authentication, and protected-service readiness before considering the deployment complete.
 
-Persistent deployment requires an independent management probe configured through
-`NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON`, a nonempty JSON array of nonempty command
-arguments. The updater must finish decoding successfully before running that
-command; invalid arguments or decoder failures cannot run a partial command.
-Probe failures stop deployment. `--allow-local-health-only` is an explicit recovery
-override for an absent probe, not permission to ignore an invalid configured probe.
+Persistent deployment requires an independent management probe. Declare it in
+the NixOS configuration as an argument vector whose first element is an absolute
+executable path:
+
+```nix
+nas.update.externalProbeCommand = [
+  "${pkgs.openssh}/bin/ssh" "-o" "BatchMode=yes" "probe@monitor.lan" "check-nas-reachability"
+];
+```
+
+The command must confirm from outside the NAS that its management path is
+reachable; a check that only contacts the NAS from itself is not independent.
+The arguments are stored in the Nix store, so let the probe read any credential
+from its own private file. The installed `nas-update` takes the probe only from
+this option and runs it without a shell after local health checks pass. A failing
+probe rolls the update back.
+
+`nas-update --status --json` lists every reason `--apply` would refuse in
+`applyBlockers`:
+
+- no probe is configured;
+- the configured probe is invalid, including a first element that is not an
+  existing executable;
+- protected services are stopped;
+- a Managed Services reconciliation is pending or running;
+- an application that Managed Services expects to run is down.
+
+**Source & updates** shows these reasons and disables Apply, and
+`nas.autoUpdate.apply` cannot be enabled without a probe. Validation and fetching
+remain available. Status never launches the probe or contacts applications.
+`--allow-local-health-only` is a recovery-plane override for an absent probe, not
+permission to ignore an invalid one; Cockpit never passes it.
+
+### Health checks after activation
+
+After activating a candidate, `nas-update` checks fixed infrastructure: SSH,
+storage, trusted interfaces, PostgreSQL, Authentik, Caddy, Cockpit and the
+management route. It also checks every unit that Managed Services V2 last
+committed to start. An application turned off in Managed Services is not
+required to run. Restarted applications may still be starting, so the check
+waits up to five minutes in total, one shared deadline, for Managed Services
+reconciliation to settle and for each unit to become active. A unit that fails,
+or is still not active at the deadline, fails the check. A readiness gate, which runs once and then stops,
+only has to finish without failing.
+The same application check runs before building. If an enabled application is
+already down, or a Managed Services reconciliation is still pending or running,
+`--apply` refuses before any snapshot or activation. Repair the application,
+turn it off, or wait for reconciliation to settle first. If the V2 start state is missing or invalid
+while protected services run, `--apply` refuses rather than guessing.
 
 ## Schedules
 

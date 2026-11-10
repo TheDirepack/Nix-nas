@@ -354,7 +354,11 @@
       "tests": [
         "tests/test_contract_operations.py",
         "tests/test_contract_tooling.py",
-        "tests/test_maintainer_scripts.py"
+        "tests/test_maintainer_scripts.py",
+        "tests/test_update_external_probe.py",
+        "tests/test_update_readiness.py",
+        "tests/test_update_runtime.py",
+        "tests/test_update_status.py"
       ]
     },
     "scripts/validate-cockpit-jsx.cjs": {

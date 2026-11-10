@@ -321,6 +321,31 @@ test("unavailable CLI probes never render an empty successful health result", as
   await expect(backup.getByText("Succeeded")).toHaveCount(0);
 });
 
+test("source page explains and disables an update apply that nas-update would refuse", async ({
+  page,
+}) => {
+  const message =
+    "Applying an update requires an independent management probe. Set nas.update.externalProbeCommand in the NixOS configuration.";
+  const data = overview();
+  data.update.applyBlockers = [{code: "external-probe-unconfigured", message}];
+  await openApp(page, {payload: data});
+  await page.locator(".pf-v6-c-nav").getByText("Source & updates", {exact: true}).click();
+  await expect(page.getByText("Applying updates is unavailable")).toBeVisible();
+  await expect(page.getByText(message)).toBeVisible();
+  await expect(page.getByRole("button", {name: "Apply validated candidate"})).toBeDisabled();
+  await expect(page.getByRole("button", {name: "Validate candidate"})).toBeEnabled();
+  await expect(page.getByRole("button", {name: "Fetch approved update"})).toBeEnabled();
+});
+
+test("source page offers update apply only when nas-update reports no blockers", async ({page}) => {
+  const data = overview();
+  data.update.applyBlockers = [];
+  await openApp(page, {payload: data});
+  await page.locator(".pf-v6-c-nav").getByText("Source & updates", {exact: true}).click();
+  await expect(page.getByRole("button", {name: "Apply validated candidate"})).toBeEnabled();
+  await expect(page.getByText("Applying updates is unavailable")).toHaveCount(0);
+});
+
 for (const [name, payload] of hostileDisplayCorpus) {
   test(`overview, managed-service label, and source branch stay inert: ${name}`, async ({page}) => {
     const pageErrors = [];

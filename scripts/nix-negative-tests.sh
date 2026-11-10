@@ -57,6 +57,8 @@ cases=(
   'tests/nixos/invalid/backup-retired-remote-scope.nix|It never limited what was backed up'
   'tests/nixos/invalid/backup-local-unacknowledged.nix|nas.backup.localRepository is local rollback storage, not an independent backup.'
   'tests/nixos/invalid/backup-renamed-rclone-config-without-repository.nix|nas.backup.rcloneConfigFile is used only for an rclone: repository named by nas.backup.repositoryFile.'
+  'tests/nixos/invalid/update-probe-relative.nix|nas.update.externalProbeCommand must start with an absolute executable path'
+  'tests/nixos/invalid/auto-update-apply-without-probe.nix|nas.autoUpdate.apply requires nas.update.externalProbeCommand'
 )
 valid_cases=(
   tests/nixos/valid/backup-repository-file.nix
@@ -75,6 +77,10 @@ nix eval --impure --json --expr '
     lib = (builtins.getFlake (toString ./.)).inputs.nixpkgs.lib;
   }
 '
+
+# The positive counterpart: a configured probe must reach the installed wrapper.
+NAS_NEGATIVE_ROOT="$ROOT" nix eval --impure --json --file tests/nixos/update-probe-eval.nix
+printf '\n'
 
 for row in "${cases[@]}"; do
   fixture=${row%%|*}

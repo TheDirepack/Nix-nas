@@ -492,10 +492,41 @@ class CockpitApiDriftTests(unittest.TestCase):
             )
             with (
                 mock.patch.object(api, "CONFIG_DIR", root),
+                mock.patch.object(api, "update_status", return_value={"applyBlockers": []}),
                 mock.patch.object(api, "run", return_value=CommandResult(0, "ok", "")) as run,
             ):
                 result = api.update_control({"operation": "apply"})
             self.assertEqual(result["unit"], "nas-update-apply.service")
+
+    def test_update_apply_is_refused_when_nas_update_reports_a_blocker(self) -> None:
+        unconfigured = {
+            "code": "external-probe-unconfigured",
+            "message": "Applying an update requires an independent management probe.",
+        }
+        cases = (
+            ({"applyBlockers": [unconfigured]}, "requires an independent management probe"),
+            ({"ok": False, "error": "nas-update failed"}, "status is unavailable"),
+            ({"ok": True}, "status is unavailable"),
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            for status, expected in cases:
+                with self.subTest(status=status):
+                    with (
+                        mock.patch.object(api, "CONFIG_DIR", pathlib.Path(raw)),
+                        mock.patch.object(api, "update_status", return_value=status),
+                        mock.patch.object(api, "run") as run,
+                    ):
+                        with self.assertRaisesRegex(api.ApiError, expected):
+                            api.update_control({"operation": "apply"})
+                        run.assert_not_called()
+            # Validation and fetching never activate a generation, so they stay available.
+            with (
+                mock.patch.object(api, "CONFIG_DIR", pathlib.Path(raw)),
+                mock.patch.object(api, "update_status", return_value={"applyBlockers": [unconfigured]}) as status,
+                mock.patch.object(api, "run", return_value=CommandResult(0, "", "")),
+            ):
+                self.assertEqual(api.update_control({"operation": "sync"})["unit"], "nas-update-sync.service")
+                status.assert_not_called()
 
     def test_source_control_rejects_unknown_missing_directory_busy_and_failed_mutation(self) -> None:
         with self.assertRaisesRegex(api.ApiError, "Unsupported source-control"):

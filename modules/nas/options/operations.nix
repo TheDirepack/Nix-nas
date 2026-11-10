@@ -119,8 +119,31 @@ in
       apply = lib.mkOption {
         type = lib.types.bool;
         default = false;
-        description = "Automatically activate the exact reviewed checkout after successful build and health checks. When false, scheduled runs validate/fetch/build only and leave the active system unchanged.";
+        description = "Automatically activate the exact reviewed checkout after successful build and health checks. When false, scheduled runs validate/fetch/build only and leave the active system unchanged. Requires nas.update.externalProbeCommand.";
       };
+    };
+
+    update.externalProbeCommand = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = lib.literalExpression ''[ "''${pkgs.openssh}/bin/ssh" "-o" "BatchMode=yes" "probe@monitor.lan" "check-nas-reachability" ]'';
+      description = ''
+        Independent management reachability probe that nas-update runs, as an
+        argument vector without a shell, after a candidate generation passes
+        local health checks and again after it becomes persistent. A nonzero
+        exit rolls the update back. The command must confirm that the NAS
+        management path is reachable from outside this host, for example by
+        asking a second machine to load the NAS sign-in page.
+
+        The first element must be an absolute executable path. Arguments are
+        stored in the Nix store and the process environment, so they must not
+        contain credentials; let the probe read secrets from its own private file.
+
+        While this is empty, persistent deployment is unavailable: Cockpit
+        disables Apply, nas-update --apply refuses before building, and
+        nas.autoUpdate.apply cannot be enabled. Only an administrator on the
+        recovery plane may use nas-update --apply --allow-local-health-only.
+      '';
     };
   };
 }
