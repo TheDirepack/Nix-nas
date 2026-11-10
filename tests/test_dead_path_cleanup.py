@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import contextlib
 import json
 import os
 import subprocess
@@ -85,13 +84,13 @@ assert '[name, "custom_admin"]' in blueprint.render_blueprint(state, public_host
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_single_host_action_keeps_guard_and_result(self):
+    def test_single_host_action_keeps_admission_and_result(self):
         with (
-            mock.patch.object(api, "operation_guard", return_value=contextlib.nullcontext()) as guard,
+            mock.patch.object(api, "reserve_operation") as admission,
             mock.patch.object(api, "run", return_value=common.CommandResult(0, "ok", "")) as run,
         ):
             result = api.run_action("protected-restart")
-        guard.assert_called_once_with("protected-restart", ("identity", "runtime"))
+        admission.assert_called_once_with("protected-restart", ("identity", "runtime"))
         self.assertTrue(result["ok"])
         self.assertEqual(len(result["commands"]), 1)
         self.assertEqual(run.call_count, 1)

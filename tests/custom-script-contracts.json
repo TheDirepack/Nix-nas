@@ -44,7 +44,8 @@
       "systemTest": "tests/vm/guest-test.sh",
       "tests": [
         "tests/test_cockpit_api.py",
-        "tests/test_adversarial_security.py"
+        "tests/test_adversarial_security.py",
+        "tests/test_protected_restart_action.py"
       ]
     },
     "nas-doctor": {

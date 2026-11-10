@@ -1618,6 +1618,121 @@ find /nix/store -maxdepth 8 -type f \
   -path '/nix/store/*-cockpit-nas-management/share/cockpit/nas/docs/index.html' -print -quit | grep -q .
 pass "observability stack, notification delivery, and Cockpit assets are present"
 
+log "Cockpit protected-restart action"
+protected_restart_ready() {
+  wait_active nas-protected-services.target
+  wait_active caddy.service
+  wait_active copyparty.service
+  wait_active authentik.service
+  wait_active nas-authentik-proxy-outpost.service
+  wait_http "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping"
+}
+# The oneshot worker is unreferenced once inactive, so systemd unloads it and
+# its ExecMain/Result properties reset. Read the start-job outcome from PID 1's
+# journal records after a cursor instead.
+protected_restart_cursor() {
+  journalctl -n 1 -o json | jq -er '.__CURSOR'
+}
+protected_restart_job_results() {
+  journalctl --after-cursor="$1" -o json _PID=1 UNIT=nas-protected-restart.service JOB_TYPE=start |
+    jq -r '.JOB_RESULT // "queued"'
+}
+protected_restart_worker_finished() {
+  local cursor=$1 results deadline=$((SECONDS + TEST_TIMEOUT))
+  while ((SECONDS < deadline)); do
+    results="$(protected_restart_job_results "$cursor" | grep -vx queued || true)"
+    if [[ "$results" == "done" ]]; then
+      return 0
+    elif [[ -n "$results" ]]; then
+      journalctl --after-cursor="$cursor" -u nas-protected-restart.service --no-pager >&2 || true
+      fail "protected-restart worker start job finished with: ${results//$'\n'/,}"
+    fi
+    sleep 2
+  done
+  journalctl --after-cursor="$cursor" -u nas-protected-restart.service --no-pager >&2 || true
+  fail "timed out waiting for the protected-restart worker"
+}
+# Restarted target members (for example nas-syncthing-sync) retry with exit 75
+# while the worker holds the lock and take it once released. A launch during
+# that window is correctly refused, so wait for them before each launch.
+wait_operation_lock_idle() {
+  local deadline=$((SECONDS + TEST_TIMEOUT))
+  until nas-cockpit-api operations | jq -e '.active == [] and (has("error") | not)' >/dev/null; do
+    ((SECONDS < deadline)) || fail "privileged operations did not go idle: $(nas-cockpit-api operations | jq -c '{active, error}')"
+    sleep 2
+  done
+}
+stop_protected_restart_holder() {
+  rm -f /run/nas-vm-protected-restart-lock-held
+  [[ -n "${protected_restart_holder:-}" ]] || return 0
+  nas_vm_stop_process "$protected_restart_holder" "$(nas_vm_kill_after_seconds)" || true
+  protected_restart_holder=""
+}
+nas_vm_cleanup_add stop_protected_restart_holder
+protected_restart_ready
+copyparty_invocation="$(systemctl show copyparty.service --property=InvocationID --value)"
+[[ -n "$copyparty_invocation" ]] || fail "CopyParty has no invocation before protected restart"
+wait_operation_lock_idle
+restart_cursor="$(protected_restart_cursor)"
+rm -f /run/nas-vm-protected-restart-lock-held
+nas-operation-run --action vm-protected-restart-collision --class runtime -- \
+  sh -c 'touch /run/nas-vm-protected-restart-lock-held; while [ -e /run/nas-vm-protected-restart-lock-held ]; do sleep 1; done' &
+protected_restart_holder=$!
+timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+  "$TEST_TIMEOUT" bash -c 'until [[ -e /run/nas-vm-protected-restart-lock-held ]]; do sleep 1; done'
+if nas-cockpit-api action protected-restart >/tmp/nas-protected-restart-busy.json 2>/tmp/nas-protected-restart-busy.err; then
+  fail "protected restart ran while another privileged operation held the appliance lock"
+fi
+rm -f /run/nas-vm-protected-restart-lock-held
+wait "$protected_restart_holder"
+protected_restart_holder=""
+grep -F 'Another privileged operation conflicts with protected-restart' /tmp/nas-protected-restart-busy.err >/dev/null ||
+  fail "busy protected restart did not report the conflicting operation"
+restart_results="$(protected_restart_job_results "$restart_cursor")" ||
+  fail "could not read protected restart job results"
+[[ -z "$restart_results" ]] || fail "busy protected restart started its worker"
+[[ "$(systemctl show copyparty.service --property=InvocationID --value)" == "$copyparty_invocation" ]] ||
+  fail "busy protected restart restarted protected services"
+pass "Cockpit protected restart refuses a conflicting privileged operation before starting its worker"
+
+wait_operation_lock_idle
+restart_cursor="$(protected_restart_cursor)"
+nas-cockpit-api action protected-restart >/tmp/nas-protected-restart.json
+jq -e '.ok == true and .action == "protected-restart" and .commands[0].returncode == 0' \
+  /tmp/nas-protected-restart.json >/dev/null
+protected_restart_worker_finished "$restart_cursor"
+[[ "$(systemctl show copyparty.service --property=InvocationID --value)" != "$copyparty_invocation" ]] ||
+  fail "protected restart did not restart CopyParty"
+protected_restart_ready
+nas-cockpit-api operations | jq -e '(has("error") | not) and all(.active[]; .action != "protected-restart")' >/dev/null ||
+  fail "protected-restart worker still owns the operation lock after finishing"
+pass "Cockpit API protected restart runs under the systemd worker's operation lock and releases it"
+
+copyparty_invocation="$(systemctl show copyparty.service --property=InvocationID --value)"
+wait_operation_lock_idle
+restart_cursor="$(protected_restart_cursor)"
+protected_restart_secret_dir=$(mktemp -d /run/nas-protected-restart-browser.XXXXXX)
+cleanup_protected_restart_secrets() {
+  [[ -n "$protected_restart_secret_dir" ]] || return 0
+  rm -rf -- "$protected_restart_secret_dir"
+}
+nas_vm_cleanup_add cleanup_protected_restart_secrets
+chmod 0700 "$protected_restart_secret_dir"
+printf '%s\n' nasadmin-vm-password >"$protected_restart_secret_dir/administrator"
+chmod 0600 "$protected_restart_secret_dir/administrator"
+timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+  "$(nas_vm_timeout_value protectedRestartBrowser)" python3 /var/lib/nas-test/repo/tests/browser/authz.py \
+  --origin "https://$AUTHENTIK_PUBLIC_HOST" \
+  --cockpit-protected-restart-only \
+  --administrator-password-file "$protected_restart_secret_dir/administrator"
+cleanup_protected_restart_secrets
+protected_restart_secret_dir=""
+protected_restart_worker_finished "$restart_cursor"
+[[ "$(systemctl show copyparty.service --property=InvocationID --value)" != "$copyparty_invocation" ]] ||
+  fail "Cockpit GUI protected restart did not restart CopyParty"
+protected_restart_ready
+pass "Cockpit GUI protected restart completes and Cockpit recovers with protected services ready"
+
 log "Secret stop/reactivation transaction"
 run_as_admin nas-secrets stop
 wait_inactive caddy.service
