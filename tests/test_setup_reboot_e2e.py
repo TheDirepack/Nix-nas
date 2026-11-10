@@ -111,15 +111,60 @@ class SetupRebootE2eContracts(unittest.TestCase):
         with (
             mock.patch.object(runner, "require", side_effect=require),
             mock.patch.object(runner, "run", side_effect=run),
+            mock.patch.object(runner, "verify_locked_browser_surface") as locked_surface,
             mock.patch.object(runner, "wait_active") as wait_active,
         ):
             runner.activate_after_reboot()
+        locked_surface.assert_called_once_with()
         wait_active.assert_called_once_with("nas-authentik-proxy-outpost.service", timeout_seconds=120)
         self.assertEqual(calls[0], ("nas-setup", "status"))
         self.assertEqual(calls[2], ("zpool", "import", "-N", "tank"))
         self.assertEqual(
             calls[3][:8], ("runuser", "-u", "nasadmin", "--", "env", "-C", "/", "HOME=/tank/homes/nasadmin")
         )
+
+    def locked_surface(self, responses):
+        runner = self.runner()
+        requests = []
+
+        def run(*command, **_kwargs):
+            requests.append(command)
+            path = command[-1].removeprefix("https://nas-test.local")
+            method = "POST" if "--request" in command else "GET"
+            code, body = responses(method, path)
+            return subprocess.CompletedProcess(command, 0, f"{body}\n{code}", "")
+
+        with (
+            mock.patch.object(runner, "run", side_effect=run),
+            mock.patch.object(runner, "wait_active") as wait_active,
+        ):
+            try:
+                runner.verify_locked_browser_surface()
+            finally:
+                wait_active.assert_called_once_with("caddy.service")
+        return runner, requests
+
+    def test_locked_boot_serves_only_the_static_unlock_notice(self) -> None:
+        notice = '<h1 id="nas-locked">This NAS is locked</h1> run sudo nas-secrets activate'
+        _runner, requests = self.locked_surface(
+            lambda method, _path: ("405", "") if method == "POST" else ("503", notice)
+        )
+        paths = [command[-1].removeprefix("https://nas-test.local") for command in requests]
+        for route in ("/", "/console/", "/setup/api/first-start", "/identity/if/user/", "/setup/api/reboot"):
+            self.assertIn(route, paths)
+
+        for label, responses in (
+            ("Authentik redirect", lambda _m, path: ("303", "") if path == "/" else ("503", notice)),
+            ("Cockpit proxied", lambda _m, path: ("200", "cockpit") if path == "/console/" else ("503", notice)),
+            ("notice without guidance", lambda _m, _p: ("503", '<h1 id="nas-locked">')),
+            (
+                "setup API reachable",
+                lambda method, _p: ("200", '{"rebooting": true}') if method == "POST" else ("503", notice),
+            ),
+        ):
+            with self.subTest(label), self.assertRaisesRegex(Exception, "locked") as raised:
+                self.locked_surface(responses)
+            self.assertEqual(type(raised.exception).__name__, "CheckError")
 
     def test_runner_rechecks_storage_v2_apps_and_authenticated_routes_after_each_reboot(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")

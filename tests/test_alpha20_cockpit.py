@@ -173,7 +173,9 @@ class Alpha20CockpitContracts(unittest.TestCase):
         wizard = text("setup/first-run-wizard/src/steps/ConfirmStep.jsx")
         self.assertIn("password", wizard)
         self.assertIn("if (plan.requiresDestructiveConfirmation && !allowDestructive) {", wizard)
-        self.assertIn("if (!plan || !/^[0-9a-f]{64}$/.test(plan.planDigest || '')) {", wizard)
+        self.assertIn("const blocked = planProblem(plan);", wizard)
+        plan_state = text("setup/first-run-wizard/src/setup-state.js")
+        self.assertIn("if (!/^[0-9a-f]{64}$/.test(plan.planDigest || '')) return", plan_state)
         self.assertIn("planDigest: plan.planDigest,", wizard)
         self.assertIn("allowDestructiveStorage: allowDestructive,", wizard)
 

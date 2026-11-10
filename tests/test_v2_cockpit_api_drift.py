@@ -313,6 +313,30 @@ class CockpitApiDriftTests(unittest.TestCase):
                 api.start_first_start(request)
         cancel.assert_called_once_with("reservation-token")
 
+    def test_start_first_start_rechecks_recovery_after_reserving(self) -> None:
+        request = {
+            "password": "db-password",
+            "administrator": self.administrator(),
+            "planDigest": "a" * 64,
+            "devices": ["/dev/a", "/dev/b"],
+            "allowDestructiveStorage": True,
+        }
+        blocked = {"status": "manual-recovery-required", "message": "Setup stopped at storage"}
+        for second in (blocked, {**self.prepared_first_start(), "planDigest": "b" * 64}):
+            with (
+                self.subTest(second=second.get("status")),
+                mock.patch.object(api, "first_start_status", side_effect=[self.prepared_first_start(), second]),
+                mock.patch.object(api, "reserve_operation", return_value=self.active()),
+                mock.patch.object(api, "cancel_reservation") as cancel,
+                mock.patch.object(api, "_write_private_new") as write,
+                mock.patch.object(api, "_start_first_start_unit") as start,
+                self.assertRaises(api.ApiError),
+            ):
+                api.start_first_start(request)
+            cancel.assert_called_once_with("reservation-token")
+            write.assert_not_called()
+            start.assert_not_called()
+
     def test_reconcile_first_start_parses_object_and_fallback_and_errors(self) -> None:
         with mock.patch.object(api, "run", return_value=CommandResult(0, '{"ok":true}', "")):
             self.assertTrue(api.reconcile_first_start({"note": "fixed"})["ok"])

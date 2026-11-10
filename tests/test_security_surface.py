@@ -242,19 +242,16 @@ class SecuritySurfaceTests(unittest.TestCase):
         self.assertNotIn(".backup '$destination'", source)
         self.assertNotIn(".restore '$source'", source)
 
-    def test_portal_escapes_displayed_identity_and_compares_raw_user(self):
-        portal = (ROOT / "web" / "portal" / "index.html").read_text(encoding="utf-8")
-        # Displayed identity values must be HTML-escaped.
-        self.assertIn('placeholder "http.request.header.Remote-Name" | html', portal)
-        self.assertNotIn('placeholder "http.request.header.Remote-Name"}}</strong>', portal)
-        # The user header is only used for equality against the configured
-        # allow-list, so it must NOT be urlquery-escaped: escaping rewrites
-        # characters such as "@" and makes legitimate accounts fail to match.
-        self.assertIn('$user := placeholder "http.request.header.Remote-User"', portal)
-        self.assertNotIn('placeholder "http.request.header.Remote-User" | urlquery', portal)
-        # The raw user value must never be emitted into markup.
-        self.assertNotIn("{{ $user }}", portal)
-        self.assertNotIn("{{$user}}", portal)
+    def test_static_pages_render_no_identity_headers(self):
+        # The only Caddy-served static page is the locked notice; no static
+        # page interpolates proxy identity headers that would need escaping.
+        pages = list((ROOT / "web").rglob("*.html"))
+        self.assertEqual([page.relative_to(ROOT).as_posix() for page in pages], ["web/locked/index.html"])
+        for page in pages:
+            content = page.read_text(encoding="utf-8")
+            self.assertNotIn("{{", content)
+            self.assertNotIn("Remote-", content)
+            self.assertNotIn("X-Authentik", content)
 
     def test_nas_alert_rejects_crlf_in_header_value(self):
         source = (ROOT / "modules" / "nas" / "internal" / "maintenance-tools.nix").read_text(encoding="utf-8")

@@ -772,6 +772,33 @@ def ensure_setup_launcher(token: str) -> dict[str, Any]:
     )
 
 
+SETUP_APPLICATION_SLUG = "nas-setup"
+
+
+def _setup_application_present(token: str) -> bool:
+    # Authentik filters application lists by the caller's policy access unless
+    # a superuser requests the full list; absence must not depend on bindings.
+    applications = authentik_list(
+        token,
+        f"core/applications/?superuser_full_list=true&slug={urllib.parse.quote(SETUP_APPLICATION_SLUG)}",
+    )
+    return any(item.get("slug") == SETUP_APPLICATION_SLUG for item in applications)
+
+
+def retire_setup_application(token: str) -> dict[str, Any]:
+    """Delete the one-time setup application and prove its absence on the canonical API."""
+    if not _setup_application_present(token):
+        return {"slug": SETUP_APPLICATION_SLUG, "removed": False, "absent": True}
+    try:
+        authentik_request(token, f"core/applications/{SETUP_APPLICATION_SLUG}/", method="DELETE")
+    except SyncError:
+        if _setup_application_present(token):
+            raise
+    if _setup_application_present(token):
+        raise SyncError("Authentik still lists the setup application after deletion")
+    return {"slug": SETUP_APPLICATION_SLUG, "removed": True, "absent": True}
+
+
 AUTOMATION_ROLE = "NAS automation"
 AUTOMATION_USER = "nas-automation"
 AUTOMATION_TOKEN_IDENTIFIER = "nas-automation-api"
@@ -1824,6 +1851,7 @@ def main() -> int:
         "retire-bootstrap", help="Delete Authentik bootstrap administrator after replacement verification"
     )
     retire.add_argument("administrator")
+    sub.add_parser("retire-setup-application", help="Delete the one-time setup application using bootstrap authority")
     sub.add_parser("sync", help="Validate Authentik identity state and reconcile Syncthing when enabled")
     fixture = sub.add_parser("status-fixture", help="Report identity state from fixture JSON without touching services")
     fixture.add_argument("fixture", type=pathlib.Path)
@@ -1857,6 +1885,7 @@ def main() -> int:
             "bootstrap",
             "bootstrap-runtime-token",
             "retire-bootstrap",
+            "retire-setup-application",
             "apply-accounts",
             "cancel-failed-accounts",
             "sync",
@@ -1875,6 +1904,8 @@ def main() -> int:
                 result = provision_runtime_token(authentik_token(bootstrap=True))
             elif args.command == "retire-bootstrap":
                 result = retire_bootstrap_administrator(authentik_token(bootstrap=True), args.administrator)
+            elif args.command == "retire-setup-application":
+                result = retire_setup_application(authentik_token(bootstrap=True))
             elif args.command == "account-journal":
                 result = account_journal_status()
             elif args.command == "cancel-failed-accounts":
