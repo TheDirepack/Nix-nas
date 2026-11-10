@@ -1,6 +1,12 @@
 { pkgs, self, copyparty }:
 
 let
+  syncStopResult = pkgs.writeShellScript "nas-sync-stop-result" ''
+    {
+      printf 'Result=%s\n' "$SERVICE_RESULT"
+      ${pkgs.systemd}/bin/systemctl show -p ExecMainStatus nas-sync-stop-probe.service
+    } > /run/nas-sync-stop-probe.result
+  '';
   timeoutBudget = builtins.fromJSON (builtins.readFile ../vm/timeout-budget.json);
   outerKillAfter = timeoutBudget.timeouts.killAfter;
   phaseBudget = phase:
@@ -162,11 +168,10 @@ pkgs.testers.runNixOSTest {
     machine.succeed("test ! -e /tank/vm-oci-persist")
     sync_stop_status = machine.succeed("systemctl cat nas-syncthing-sync.service | sed -n 's/^SuccessExitStatus=//p'").strip()
     assert sync_stop_status == "SIGTERM", sync_stop_status
-    machine.succeed(f"systemd-run --no-block --unit=nas-sync-stop-probe --property=Type=oneshot --property=SuccessExitStatus={sync_stop_status} ${pkgs.coreutils}/bin/sleep 300")
+    machine.succeed(f"systemd-run --no-block --unit=nas-sync-stop-probe --property=Type=oneshot --property=SuccessExitStatus={sync_stop_status} --property=ExecStopPost=${syncStopResult} ${pkgs.coreutils}/bin/sleep 300")
     machine.wait_until_succeeds("test $(systemctl show -p MainPID --value nas-sync-stop-probe.service) -gt 0")
     machine.succeed("systemctl stop nas-sync-stop-probe.service")
-    machine.succeed("test $(systemctl show -p Result --value nas-sync-stop-probe.service) = success")
-    machine.succeed("test $(systemctl show -p ExecMainStatus --value nas-sync-stop-probe.service) = 15")
+    assert machine.succeed("cat /run/nas-sync-stop-probe.result") == "Result=success\nExecMainStatus=15\n"
     machine.succeed(f"systemd-run --no-block --unit=nas-sync-failure-probe --property=Type=oneshot --property=SuccessExitStatus={sync_stop_status} ${pkgs.coreutils}/bin/false")
     machine.wait_until_succeeds("systemctl is-failed --quiet nas-sync-failure-probe.service")
     machine.succeed("test $(systemctl show -p Result --value nas-sync-failure-probe.service) = exit-code")
