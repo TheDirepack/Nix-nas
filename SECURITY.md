@@ -56,7 +56,8 @@ Managed Services V2 compiles desired state from `/var/lib/nas-control/services.y
 - clean-tree and upstream fast-forward checks;
 - release-manifest verification for packaged trees;
 - local tests and Nix build validation;
-- protected-service readiness checks;
+- protected-service readiness checks, including every unit Managed Services V2 committed to start;
+- an independent management reachability probe (`nas.update.externalProbeCommand`) before a generation persists;
 - Nix-generation rollback.
 
 It intentionally does not enforce repository ownership, writable-parent, or repository-path symlink policy.

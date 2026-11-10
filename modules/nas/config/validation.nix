@@ -205,6 +205,17 @@ in
         message = "nas.zfsReplication.extraArgs may not contain empty strings or newlines.";
       }
       {
+        assertion =
+          cfg.update.externalProbeCommand == [ ]
+          || (lib.hasPrefix "/" (builtins.head cfg.update.externalProbeCommand)
+            && lib.all (argument: argument != "") cfg.update.externalProbeCommand);
+        message = "nas.update.externalProbeCommand must start with an absolute executable path and may not contain empty arguments.";
+      }
+      {
+        assertion = !(cfg.autoUpdate.enable && cfg.autoUpdate.apply) || cfg.update.externalProbeCommand != [ ];
+        message = "nas.autoUpdate.apply requires nas.update.externalProbeCommand; unattended activation cannot persist without an independent management probe.";
+      }
+      {
         assertion = !cfg.installationReady || cfg.trustedInterfaces != [ ];
         message = "Set nas.trustedInterfaces to the actual LAN interface before installation.";
       }

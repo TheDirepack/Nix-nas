@@ -538,6 +538,11 @@ pass "locked first boot runs isolated Authentik and routes browser access throug
 json="$(nas-update --status --json)"
 jq -e '.configurationDir and .currentSystem' <<<"$json" >/dev/null
 pass "nas-update status reports the protected checkout"
+# The test configuration declares no independent probe, so the installed CLI
+# must report apply as unavailable instead of offering a guaranteed failure.
+jq -e '.externalProbe.configured == false and any(.applyBlockers[]; .code == "external-probe-unconfigured")' <<<"$json" >/dev/null \
+  || fail "nas-update status did not report the unconfigured external probe: $json"
+pass "nas-update status reports apply unavailable without an independent probe"
 
 nas-operation-run --action vm-operation-run-smoke --class runtime -- true
 pass "shared operation runner executes an installed child under coordinator ownership"

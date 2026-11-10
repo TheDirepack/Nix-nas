@@ -59,6 +59,24 @@ export function revisionModel(update = {}) {
   };
 }
 
+// nas-update owns apply admission; this only renders what its status reported.
+// Missing or malformed status disables Apply because the API refuses it too.
+export function updateApplyModel(update = {}) {
+  update = update && typeof update === "object" && !Array.isArray(update) ? update : {};
+  if (!Array.isArray(update.applyBlockers)) {
+    return {
+      available: false,
+      reasons: [update.error || "nas-update did not report whether an update can be applied."],
+    };
+  }
+  const reasons = update.applyBlockers.map((blocker) =>
+    blocker && typeof blocker === "object"
+      ? String(blocker.message || blocker.code || "Unknown update blocker")
+      : String(blocker),
+  );
+  return {available: reasons.length === 0, reasons};
+}
+
 export function safeInternalPath(value) {
   if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) return null;
   if (value.includes("\\")) return null;
