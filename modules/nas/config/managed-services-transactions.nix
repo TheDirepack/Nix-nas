@@ -124,7 +124,10 @@ let
     if [ -n "$guard_unit" ]; then
       recovery_timeout=600
       if [ -r ${lib.escapeShellArg budgetFile} ]; then
-        recovery_timeout="$(${pkgs.jq}/bin/jq -er '.transactionSeconds + 30 | if . < 600 then 600 else . end' ${lib.escapeShellArg budgetFile})"
+        if observed_timeout="$(${pkgs.jq}/bin/jq -er '.transactionSeconds | select(type == "number" and . >= 0 and floor == .) | . + 30 | if . < 600 then 600 else . end' ${lib.escapeShellArg budgetFile} 2>/dev/null)" \
+          && [[ "$observed_timeout" =~ ^[0-9]+$ ]]; then
+          recovery_timeout="$observed_timeout"
+        fi
       fi
       if ${v2Python}/bin/python ${v2Source}/nas_guarded_apply.py \
         --state-dir ${lib.escapeShellArg guardStateDir} \
@@ -205,7 +208,8 @@ in
       ${pkgs.coreutils}/bin/mkdir -p ${lib.escapeShellArg guardStateDir}
       ${v2Python}/bin/python ${v2Source}/nas_v2_apply_budget.py \
         --desired ${lib.escapeShellArg desiredPath} \
-        --state ${lib.escapeShellArg systemdStatePath} > ${lib.escapeShellArg budgetFile}
+        --state ${lib.escapeShellArg systemdStatePath} \
+        --output ${lib.escapeShellArg budgetFile}
       guard_timeout="$(${pkgs.jq}/bin/jq -er '.transactionSeconds' ${lib.escapeShellArg budgetFile})"
       (
         ${pkgs.util-linux}/bin/flock -x 9

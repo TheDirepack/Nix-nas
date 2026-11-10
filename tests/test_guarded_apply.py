@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pathlib
 import fcntl
+import json
 import re
 import select
 import shlex
@@ -48,6 +49,55 @@ def _systemd_run(root: pathlib.Path, log: pathlib.Path) -> pathlib.Path:
 
 
 class GuardedApplyTests(unittest.TestCase):
+    def test_immediate_recovery_reaches_guard_with_missing_or_invalid_budget(self) -> None:
+        source = (ROOT / "modules/nas/config/managed-services-transactions.nix").read_text()
+        match = re.search(
+            r'pkgs\.writeShellScript\s+"nas-v2-rollback-with-guard"\s*\'\'(.*?)^\s*\'\';',
+            source,
+            re.DOTALL | re.MULTILINE,
+        )
+        if match is None:
+            self.fail("production rollback handler script was not found")
+        for content, expected in (
+            (None, 600),
+            ("", 600),
+            ('{"transactionSeconds":', 600),
+            ('{"transactionSeconds":"bad"}', 600),
+            ('{"transactionSeconds":1800}', 1830),
+        ):
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as raw:
+                root = pathlib.Path(raw)
+                marker = root / "current"
+                marker.write_text("old-guard")
+                packet = root / "budget.json"
+                if content is not None:
+                    packet.write_text(content)
+                captured = root / "argv.json"
+                observer = root / "guard.py"
+                observer.write_text(
+                    f"import json,pathlib,sys;pathlib.Path({str(captured)!r}).write_text(json.dumps(sys.argv[1:]))"
+                )
+                script = match.group(1)
+                values = {
+                    "${lib.escapeShellArg guardCurrentFile}": shlex.quote(str(marker)),
+                    "${lib.escapeShellArg budgetFile}": shlex.quote(str(packet)),
+                    "${lib.escapeShellArg guardStateDir}": shlex.quote(str(root)),
+                    '${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"}': "/systemctl",
+                    "${v2Python}/bin/python": shlex.quote(sys.executable),
+                    "${v2Source}/nas_guarded_apply.py": shlex.quote(str(observer)),
+                    "${rollbackToApplied}": "/rollback",
+                    "${clearGuardCurrent}": "true",
+                }
+                for package, tool in (("coreutils", "cat"), ("util-linux", "flock"), ("jq", "jq")):
+                    values[f"${{pkgs.{package}}}/bin/{tool}"] = shlex.quote(shutil.which(tool) or tool)
+                for key, value in values.items():
+                    script = script.replace(key, value)
+                self.assertNotIn("${", script)
+                subprocess.run(["bash", "-c", script], check=True, timeout=5)
+                arguments = json.loads(captured.read_text())
+                self.assertEqual(arguments[arguments.index("--rollback-timeout") + 1], str(expected))
+                self.assertIn("fired", arguments)
+
     def test_timer_retains_recovery_budget_without_armed_record_and_reports_timeout(self) -> None:
         for times_out in (False, True):
             with self.subTest(times_out=times_out), tempfile.TemporaryDirectory() as raw:
@@ -62,6 +112,7 @@ class GuardedApplyTests(unittest.TestCase):
 
                 def run(command, **kwargs):
                     claimed = guarded._read_state(guarded._state_path("nas-test-rollback", state))
+                    assert claimed is not None
                     self.assertEqual(claimed["rollbackTimeoutSeconds"], 1830)
                     self.assertEqual(kwargs["timeout"], 1830)
                     if times_out:
@@ -71,6 +122,7 @@ class GuardedApplyTests(unittest.TestCase):
                 with mock.patch.object(guarded.subprocess, "run", side_effect=run):
                     self.assertEqual(guarded.main(argv), int(times_out))
                 result = guarded._read_state(guarded._state_path("nas-test-rollback", state))
+                assert result is not None
                 self.assertEqual(result["exitCode"], 124 if times_out else 0)
                 if times_out:
                     self.assertIn("rollback timed out after 1830s", result["outputTail"])

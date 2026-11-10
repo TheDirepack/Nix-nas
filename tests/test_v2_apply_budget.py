@@ -20,6 +20,37 @@ from nas_v2_apply import ApplyPaths, apply, compile_paths  # noqa: E402
 
 
 class ApplyBudgetTests(unittest.TestCase):
+    def test_budget_publication_preserves_complete_packet_on_write_failure(self):
+        for fault in (None, "create", "replace"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as raw:
+                target = pathlib.Path(raw) / "budget.json"
+                old = {"transactionSeconds": 900}
+                candidate = {"transactionSeconds": 1800, "desiredSha256": "a" * 64}
+                target.write_text(json.dumps(old))
+                replace = budget.os.replace
+
+                def publish(source, destination):
+                    self.assertEqual(json.loads(target.read_text()), old)
+                    self.assertEqual(json.loads(pathlib.Path(source).read_text()), candidate)
+                    if fault == "replace":
+                        raise OSError("replace failed")
+                    replace(source, destination)
+
+                with mock.patch.object(budget.os, "replace", side_effect=publish):
+                    if fault == "create":
+                        with mock.patch.object(
+                            budget.tempfile, "NamedTemporaryFile", side_effect=OSError("create failed")
+                        ):
+                            with self.assertRaises(OSError):
+                                budget.publish_budget(target, candidate)
+                    elif fault:
+                        with self.assertRaises(OSError):
+                            budget.publish_budget(target, candidate)
+                    else:
+                        budget.publish_budget(target, candidate)
+                self.assertEqual(json.loads(target.read_text()), old if fault else candidate)
+                self.assertEqual(list(target.parent.glob(".budget.json.*")), [])
+
     def test_diamond_dependencies_are_counted_once_and_malformed_services_fail(self):
         document = {
             "services": {
@@ -171,6 +202,16 @@ class ApplyBudgetTests(unittest.TestCase):
             ):
                 self.assertEqual(budget.main(), 0)
             self.assertEqual(json.loads(output.getvalue()), json.loads(result.stdout))
+            packet = root / "budget.json"
+            with (
+                mock.patch.object(
+                    sys, "argv", ["budget", "--desired", str(desired), "--state", str(state), "--output", str(packet)]
+                ),
+                mock.patch.object(sys, "stdout", new_callable=io.StringIO) as output,
+            ):
+                self.assertEqual(budget.main(), 0)
+            self.assertEqual(output.getvalue(), "")
+            self.assertEqual(json.loads(packet.read_text()), json.loads(result.stdout))
             state.write_text('{"activationTimeoutSeconds":true}')
             with self.assertRaisesRegex(ValueError, "previous activation budget"):
                 budget.authority_budget(desired, state)

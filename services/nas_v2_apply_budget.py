@@ -7,8 +7,10 @@ import hashlib
 import json
 import os
 import pathlib
+import tempfile
 from typing import Any
 
+from nas_common import fsync_directory
 from nas_v2_spec import parse_yaml_text
 
 
@@ -94,12 +96,33 @@ def verify_budget_revision(raw: bytes) -> None:
             raise ValueError("desired state changed after apply budgeting; retry reconciliation")
 
 
+def publish_budget(path: pathlib.Path, value: dict[str, Any]) -> None:
+    payload = json.dumps(value, sort_keys=True) + "\n"
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, prefix=f".{path.name}.", delete=False) as output:
+            temporary = pathlib.Path(output.name)
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+        fsync_directory(path.parent)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--desired", type=pathlib.Path, required=True)
     parser.add_argument("--state", type=pathlib.Path, required=True)
+    parser.add_argument("--output", type=pathlib.Path)
     args = parser.parse_args()
-    print(json.dumps(authority_budget(args.desired, args.state), sort_keys=True))
+    value = authority_budget(args.desired, args.state)
+    if args.output is not None:
+        publish_budget(args.output, value)
+    else:
+        print(json.dumps(value, sort_keys=True))
     return 0
 
 
