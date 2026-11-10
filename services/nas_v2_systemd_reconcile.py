@@ -597,6 +597,34 @@ def reconcile(
     activated_units: set[str] = set()
     attempted_readiness: set[str] = set()
     state_commit_attempted = False
+
+    def discover_dependency_activations(*, include_readiness: bool) -> None:
+        for owner in sorted(set(readiness_owners.values()) - activated_units):
+            before = observed_readiness[owner]
+            if before not in {"inactive", "failed", "unknown"}:
+                continue
+            now = unit_state(owner)
+            if now is None:
+                state_snapshot[owner] = before
+                active_snapshot[owner] = False
+                raise SystemdReconcileError(f"unable to inspect dependency activation: {owner}")
+            if now not in _UNIT_QUERY_STATES[0] | {"activating"}:
+                continue
+            activated_units.add(owner)
+            state_snapshot[owner] = before
+            active_snapshot[owner] = False
+            if not include_readiness:
+                continue
+            for gate, gate_owner in readiness_owners.items():
+                if gate_owner != owner:
+                    continue
+                prior = observed_readiness[gate]
+                if prior is None or prior in _TRANSITIONAL_UNIT_STATES:
+                    raise SystemdReconcileError(f"unable to snapshot dependency readiness: {gate}")
+                state_snapshot[gate] = prior
+                active_snapshot[gate] = prior in _UNIT_QUERY_STATES[0]
+                readiness_to_run.add(gate)
+
     for unit, expected in state_snapshot.items():
         if unit_state(unit) != expected:
             raise SystemdReconcileError(f"systemd state changed before mutation: {unit}; retry after it settles")
@@ -645,29 +673,7 @@ def reconcile(
             activated_units.add(unit)
             _run_systemctl(systemctl, "start", unit, timeout_seconds=activation_timeout)
 
-        for owner in sorted(set(readiness_owners.values()) - activated_units):
-            before = observed_readiness[owner]
-            if before not in {"inactive", "failed", "unknown"}:
-                continue
-            now = unit_state(owner)
-            if now is None:
-                state_snapshot[owner] = before
-                active_snapshot[owner] = False
-                raise SystemdReconcileError(f"unable to inspect dependency activation: {owner}")
-            if now not in _UNIT_QUERY_STATES[0] | {"activating"}:
-                continue
-            activated_units.add(owner)
-            state_snapshot[owner] = before
-            active_snapshot[owner] = False
-            for gate, gate_owner in readiness_owners.items():
-                if gate_owner != owner:
-                    continue
-                prior = observed_readiness[gate]
-                if prior is None or prior in _TRANSITIONAL_UNIT_STATES:
-                    raise SystemdReconcileError(f"unable to snapshot dependency readiness: {gate}")
-                state_snapshot[gate] = prior
-                active_snapshot[gate] = prior in _UNIT_QUERY_STATES[0]
-                readiness_to_run.add(gate)
+        discover_dependency_activations(include_readiness=True)
         if readiness_to_run:
             attempted_readiness.update(readiness_to_run)
             _run_systemctl(systemctl, "restart", *sorted(readiness_to_run), timeout_seconds=activation_timeout)
@@ -697,6 +703,12 @@ def reconcile(
         }
     except Exception as exc:
         rollback_errors: list[str] = []
+        if activated_units:
+            # A failed consumer start can still have activated its dependencies.
+            try:
+                discover_dependency_activations(include_readiness=False)
+            except SystemdReconcileError as discovery_exc:
+                rollback_errors.append(str(discovery_exc))
         links_restored = False
         try:
             rollback_links()

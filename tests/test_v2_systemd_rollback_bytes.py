@@ -76,6 +76,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 "readiness",
                 "probe-only",
                 "dependency",
+                "dependency-start-error",
                 "readiness-existing-failure",
                 "query",
                 "reset",
@@ -85,14 +86,14 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 "durability",
             )
             for active, restore in ((True, False), (False, False), (True, True), (False, True))
-            if stage not in {"probe-only", "dependency"} or (not active and not restore)
+            if stage not in {"probe-only", "dependency", "dependency-start-error"} or (not active and not restore)
         ):
             with (
                 self.subTest(stage=failure_stage, active=initially_active, fail_restore=fail_restore),
                 tempfile.TemporaryDirectory() as raw,
             ):
-                dependency_only = failure_stage == "dependency"
-                probe_only = failure_stage in {"probe-only", "dependency"}
+                dependency_only = failure_stage in {"dependency", "dependency-start-error"}
+                probe_only = failure_stage in {"probe-only", "dependency", "dependency-start-error"}
                 root = pathlib.Path(raw)
                 control = root / "control"
                 runtime = root / "units"
@@ -179,6 +180,8 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     elif operation in {"start", "restart"} and units[0] == "nas-v2-trigger.service":
                         running["trigger_active"] = True
                         running["version"] = "healthy"
+                        if failure_stage == "dependency-start-error":
+                            code = 1
                     elif operation == "stop" and units[0] == "nas-v2-trigger.service":
                         running["trigger_active"] = False
                     elif operation == "restart" and units[0] == ready:
@@ -244,6 +247,8 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                         else (
                             "No space left"
                             if failure_stage in {"commit", "commit-existing-failure", "publish", "durability"}
+                            else "nas-v2-trigger.service"
+                            if failure_stage == "dependency-start-error"
                             else owner
                             if failure_stage == "restart"
                             else ready
