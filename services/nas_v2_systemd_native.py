@@ -47,6 +47,8 @@ PROTECTED_STACK_LINES = (
     "PartOf=nas-protected-services.target",
     "ConditionPathExists=/run/nas-secrets/ready",
 )
+# "@" is outside the attachment credential-id alphabet, so it cannot collide.
+EXEC_DESCRIPTOR_CREDENTIAL = "nas-v2@exec-descriptor"
 _CTRL = ("\x00", "\r", "\n")
 
 
@@ -241,7 +243,11 @@ def _exec_unit(
         "",
         "[Service]",
         "Type=oneshot" if kind == "job" else "Type=simple",
-        f"ExecStart={_exec_quote(python_bin)} {_exec_quote(str(source_dir / 'nas_v2_exec_runner.py'))} --config {_exec_quote(str(descriptor_path))}",
+        # Sealed generations are unreadable to the workload identity; systemd
+        # loads the descriptor as root into the unit's private credentials.
+        # LoadCredential= takes its path verbatim and does not unquote it.
+        f"LoadCredential={EXEC_DESCRIPTOR_CREDENTIAL}:{_single_line(str(descriptor_path), field='exec descriptor path')}",
+        f"ExecStart={_exec_quote(python_bin)} {_exec_quote(str(source_dir / 'nas_v2_exec_runner.py'))} --config %d/{EXEC_DESCRIPTOR_CREDENTIAL}",
         *_identity_lines(runtime),
         *_environment_lines(runtime),
         *_resource_lines(service),

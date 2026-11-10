@@ -131,6 +131,14 @@ class V2SystemdProjectionTests(unittest.TestCase):
         self.assertIn("TasksMax=32", unit)
         self.assertIn("nas_v2_exec_runner.py", unit)
         self.assertNotIn("hello; not-a-shell", unit)
+        # The dynamic identity cannot read sealed generations, so systemd loads
+        # the descriptor as root; LoadCredential= does not unquote its value.
+        self.assertIn(
+            "\nLoadCredential=nas-v2@exec-descriptor:/run/nas-control/systemd/descriptors/demo.exec.json\n", unit
+        )
+        exec_start = next(line for line in unit.splitlines() if line.startswith("ExecStart="))
+        self.assertTrue(exec_start.endswith(" --config %d/nas-v2@exec-descriptor"))
+        self.assertNotIn("demo.exec.json", exec_start)
         self.assertEqual(descriptor["command"][1], "hello; not-a-shell")
         self.assertEqual(manifest["startUnits"], ["nas-v2-demo.service"])
 
