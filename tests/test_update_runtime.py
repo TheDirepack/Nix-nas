@@ -254,14 +254,45 @@ class UpdateRuntimeTests(unittest.TestCase):
         "caddy.service",
     )
 
-    def protected_health(self, start_units, active, *, copyparty_socket: bool = False, raw_state: str | None = None):
-        """Run the unchanged health_check against a fake V2 start set and live units."""
-        if not (self.package_bin("pkgs.jq") / "jq").exists():
-            self.link_tool("pkgs.jq", "jq")
+    def protected_health(
+        self,
+        start_units,
+        active,
+        *,
+        copyparty_socket: bool = False,
+        raw_state: str | None = None,
+        states: dict[str, list[str]] | None = None,
+        readiness: list[str] | None = None,
+        pending: bool = False,
+        settle_seconds: int = 1,
+    ):
+        """Run the unchanged health_check against a fake V2 start set and live units.
+
+        ``states`` gives a unit a sequence of ``is-active`` answers; the last one
+        repeats. Other units are active exactly when listed in ``active``.
+        """
+        for command in ("jq", "sleep"):
+            if not (self.package_bin("pkgs.jq" if command == "jq" else "pkgs.coreutils") / command).exists():
+                self.link_tool("pkgs.jq" if command == "jq" else "pkgs.coreutils", command)
+        sequences = self.root / "unit-states"
+        shutil.rmtree(sequences, ignore_errors=True)
+        sequences.mkdir()
+        for unit, answers in (states or {}).items():
+            (sequences / unit).write_text("\n".join(answers) + "\n")
         self.stub(
             "pkgs.systemd",
             "systemctl",
-            'if [[ $1 == is-active ]]; then unit="${!#}"; [[ " $ACTIVE_UNITS " == *" $unit "* ]]; fi\n',
+            "if [[ $1 == is-active ]]; then\n"
+            '  unit="${!#}"\n'
+            '  if [[ -f "$UNIT_STATES/$unit" ]]; then\n'
+            '    mapfile -t answers < "$UNIT_STATES/$unit"\n'
+            '    state="${answers[0]}"\n'
+            '    ((${#answers[@]} < 2)) || printf "%s\\n" "${answers[@]:1}" > "$UNIT_STATES/$unit"\n'
+            '  elif [[ " $ACTIVE_UNITS " == *" $unit "* ]]; then state=active\n'
+            "  else state=inactive; fi\n"
+            '  [[ $2 == --quiet ]] || printf "%s\\n" "$state"\n'
+            "  [[ $state == active ]]\n"
+            "fi\n",
         )
         self.stub(
             "pkgs.iproute2",
@@ -284,7 +315,15 @@ class UpdateRuntimeTests(unittest.TestCase):
         for listener in bound:
             self.addCleanup(listener.close)
         state = self.root / "systemd-reconciled.json"
-        state.write_text(raw_state if raw_state is not None else json.dumps({"startUnits": start_units}))
+        document: dict[str, object] = {"schemaVersion": 1, "startUnits": start_units}
+        if readiness is not None:
+            document["readinessUnits"] = readiness
+        state.write_text(raw_state if raw_state is not None else json.dumps(document))
+        marker = self.root / "reconcile.pending"
+        if pending:
+            marker.write_text("")
+        else:
+            marker.unlink(missing_ok=True)
         ca = self.root / "ca.crt"
         ca.write_text("fixture CA\n")
         prelude = (
@@ -293,9 +332,16 @@ class UpdateRuntimeTests(unittest.TestCase):
             f"copyparty_socket={shlex.quote(str(copyparty))}\n"
             f"cockpit_socket={shlex.quote(str(cockpit))}\n"
             f"caddy_ca_file={shlex.quote(str(ca))}\n"
+            f"v2_reconcile_pending={shlex.quote(str(marker))}\n"
+            f"application_settle_seconds={settle_seconds}\n"
             "lan_host=fixture.invalid\nauthentik_port=9000\nauthentik_path=/identity/\n"
         )
-        return self.run_function(prelude + "health_check", ACTIVE_UNITS=" ".join(active), FIREWALL_ENABLED="0")
+        return self.run_function(
+            prelude + "health_check",
+            ACTIVE_UNITS=" ".join(active),
+            UNIT_STATES=str(sequences),
+            FIREWALL_ENABLED="0",
+        )
 
     def is_active_queries(self) -> list[str]:
         return [
@@ -315,9 +361,7 @@ class UpdateRuntimeTests(unittest.TestCase):
         units = ["copyparty.service", "syncthing.service"]
         result = self.protected_health(units, [*self.SUBSTRATE_UNITS, "syncthing.service"], copyparty_socket=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn(
-            "Managed Services V2 expects these units to run, but they are not active: copyparty.service", result.stderr
-        )
+        self.assertIn("did not become active within 1s: copyparty.service (inactive)", result.stderr)
         self.assertNotIn("--unix-socket", self.trace.read_text())
 
     def test_v2_enabled_copyparty_requires_its_listener_and_http_answer(self):
@@ -330,19 +374,95 @@ class UpdateRuntimeTests(unittest.TestCase):
         self.assertEqual(present.returncode, 0, present.stdout + present.stderr)
         self.assertIn(str(self.root / "sockets" / "copyparty.sock"), self.trace.read_text())
 
+    def test_units_still_activating_after_restart_are_polled_until_active(self):
+        units = ["syncthing.service", "nas-v2-photos.service"]
+        result = self.protected_health(
+            units,
+            self.SUBSTRATE_UNITS,
+            states={"syncthing.service": ["activating", "active"], "nas-v2-photos.service": ["inactive", "active"]},
+            settle_seconds=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.is_active_queries().count("nas-v2-photos.service"), 2)
+
+    def test_units_that_never_become_active_fail_at_the_deadline(self):
+        result = self.protected_health(
+            ["nas-v2-photos.service"], self.SUBSTRATE_UNITS, states={"nas-v2-photos.service": ["activating"]}
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("did not become active within 1s: nas-v2-photos.service (activating)", result.stderr)
+
+    def test_failed_unit_fails_without_waiting_for_the_deadline(self):
+        result = self.protected_health(
+            ["nas-v2-photos.service"],
+            self.SUBSTRATE_UNITS,
+            states={"nas-v2-photos.service": ["failed"]},
+            settle_seconds=3600,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Managed Services V2 units failed: nas-v2-photos.service", result.stderr)
+        self.assertEqual(self.is_active_queries().count("nas-v2-photos.service"), 1)
+
+    def test_readiness_gates_need_only_to_have_not_failed(self):
+        units = ["nas-v2-ready-metrics.service", "victoriametrics.service"]
+        passed = self.protected_health(
+            units,
+            [*self.SUBSTRATE_UNITS, "victoriametrics.service"],
+            readiness=["nas-v2-ready-metrics.service"],
+        )
+        self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)
+        self.trace.unlink()
+        running = self.protected_health(
+            units,
+            [*self.SUBSTRATE_UNITS, "victoriametrics.service"],
+            readiness=["nas-v2-ready-metrics.service"],
+            states={"nas-v2-ready-metrics.service": ["activating", "inactive"]},
+            settle_seconds=30,
+        )
+        self.assertEqual(running.returncode, 0, running.stdout + running.stderr)
+        self.trace.unlink()
+        failed = self.protected_health(
+            units,
+            [*self.SUBSTRATE_UNITS, "victoriametrics.service"],
+            readiness=["nas-v2-ready-metrics.service"],
+            states={"nas-v2-ready-metrics.service": ["failed"]},
+        )
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("units failed: nas-v2-ready-metrics.service", failed.stderr)
+        self.trace.unlink()
+        # Without readinessUnits the same oneshot gate would be required to stay active.
+        ungated = self.protected_health(units, [*self.SUBSTRATE_UNITS, "victoriametrics.service"])
+        self.assertIn("nas-v2-ready-metrics.service (inactive)", ungated.stderr)
+
+    def test_health_waits_for_reconciliation_to_settle_before_reading_v2_state(self):
+        result = self.protected_health(
+            ["syncthing.service"], [*self.SUBSTRATE_UNITS, "syncthing.service"], pending=True
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("reconciliation is pending or running", result.stderr)
+        self.assertNotIn("syncthing.service", self.is_active_queries())
+        self.trace.unlink()
+        settling = self.protected_health(
+            ["syncthing.service"],
+            [*self.SUBSTRATE_UNITS, "syncthing.service"],
+            states={"nas-managed-services-reconcile.service": ["activating", "inactive"]},
+            settle_seconds=30,
+        )
+        self.assertEqual(settling.returncode, 0, settling.stdout + settling.stderr)
+
     def test_v2_target_owner_units_are_accepted_and_required(self):
         units = ["nas-v2-wiki.target", "nas-v2-source-wiki.path"]
         result = self.protected_health(units, [*self.SUBSTRATE_UNITS, *units])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.trace.unlink()
         down = self.protected_health(units, [*self.SUBSTRATE_UNITS, "nas-v2-source-wiki.path"])
-        self.assertIn("not active: nas-v2-wiki.target", down.stderr)
+        self.assertIn("nas-v2-wiki.target (inactive)", down.stderr)
 
     def test_failed_custom_application_expected_by_v2_fails_health(self):
         units = ["nas-v2-photos.service", "nas-v2-activation-wiki-web.socket"]
         result = self.protected_health(units, [*self.SUBSTRATE_UNITS, "nas-v2-activation-wiki-web.socket"])
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not active: nas-v2-photos.service", result.stderr)
+        self.assertIn("nas-v2-photos.service (inactive)", result.stderr)
 
     def test_fixed_substrate_is_still_required_with_an_empty_v2_start_set(self):
         result = self.protected_health([], self.SUBSTRATE_UNITS)
@@ -359,11 +479,15 @@ class UpdateRuntimeTests(unittest.TestCase):
             "invalid-json": "{",
             "not-object": "[]",
             "missing": "{}",
-            "non-array": '{"startUnits": "copyparty.service"}',
-            "non-string": '{"startUnits": [3]}',
-            "option": '{"startUnits": ["--all.service"]}',
-            "shell": '{"startUnits": ["a;b.service"]}',
-            "not-a-unit": '{"startUnits": ["copyparty"]}',
+            "no-version": '{"startUnits": []}',
+            "wrong-version": '{"schemaVersion": 2, "startUnits": []}',
+            "non-array": '{"schemaVersion": 1, "startUnits": "copyparty.service"}',
+            "non-string": '{"schemaVersion": 1, "startUnits": [3]}',
+            "option": '{"schemaVersion": 1, "startUnits": ["--all.service"]}',
+            "shell": '{"schemaVersion": 1, "startUnits": ["a;b.service"]}',
+            "not-a-unit": '{"schemaVersion": 1, "startUnits": ["copyparty"]}',
+            "bad-readiness": '{"schemaVersion": 1, "startUnits": [], "readinessUnits": "nas-v2-ready-x.service"}',
+            "unsafe-readiness": '{"schemaVersion": 1, "startUnits": [], "readinessUnits": ["-x.service"]}',
         }
         for name, raw in cases.items():
             with self.subTest(case=name):
@@ -371,10 +495,15 @@ class UpdateRuntimeTests(unittest.TestCase):
                 result = self.protected_health([], self.SUBSTRATE_UNITS, raw_state=raw)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("Managed Services V2 start state", result.stderr)
-                self.assertEqual(self.is_active_queries(), list(self.SUBSTRATE_UNITS))
+                self.assertEqual(
+                    self.is_active_queries(), [*self.SUBSTRATE_UNITS, "nas-managed-services-reconcile.service"]
+                )
         (self.root / "systemd-reconciled.json").unlink()
         self.trace.unlink(missing_ok=True)
-        prelude = f"protected_was_active=true\nv2_systemd_state={shlex.quote(str(self.root / 'absent.json'))}\n"
+        prelude = (
+            f"protected_was_active=true\nv2_systemd_state={shlex.quote(str(self.root / 'absent.json'))}\n"
+            "application_settle_seconds=1\n"
+        )
         absent = self.run_function(prelude + "application_health")
         self.assertNotEqual(absent.returncode, 0)
         self.assertIn("start state is unavailable", absent.stderr)

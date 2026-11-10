@@ -90,6 +90,12 @@ trusted_interfaces="${NAS_TRUSTED_INTERFACES:-}"
 v2_systemd_state="${NAS_V2_SYSTEMD_STATE:-/run/nas-control/systemd-reconciled.json}"
 v2_reconcile_pending="${NAS_V2_RECONCILE_PENDING:-/run/nas-control/reconcile.pending}"
 copyparty_expected=false
+application_settle_seconds="${NAS_UPDATE_APPLICATION_SETTLE_SECONDS:-300}"
+if ! [[ "$application_settle_seconds" =~ ^[0-9]+$ ]] || ((10#$application_settle_seconds < 1 || 10#$application_settle_seconds > 3600)); then
+  echo "NAS_UPDATE_APPLICATION_SETTLE_SECONDS must be an integer between 1 and 3600." >&2
+  exit 2
+fi
+application_settle_seconds=$((10#$application_settle_seconds))
 copyparty_socket=/run/copyparty/http.sock
 cockpit_socket=/run/nas-cockpit-sso/ws.sock
 
@@ -204,39 +210,82 @@ PY_EXTERNAL_PROBE
 
 # V2 owns application lifecycle. The reconciler's committed start set names the
 # exact native units it expects to run, so modes such as "off" are honored
-# without re-encoding application policy here. Every command must report its own
-# failure: callers also use this function in conditional context.
+# without re-encoding application policy here. Readiness gates are oneshot
+# units that are inactive once passed; they are listed separately and only
+# must not be failed. Every command reports its own failure: callers also use
+# these functions in conditional context.
 v2_expected_units() {
   [[ -f "$v2_systemd_state" && -r "$v2_systemd_state" ]] || {
     echo "Managed Services V2 start state is unavailable at $v2_systemd_state; refusing to guess which applications must run." >&2
     return 1
   }
   jq -r '
-    if type == "object" and (.startUnits | type) == "array"
-      and all(.startUnits[]; type == "string" and test("^[A-Za-z0-9_][A-Za-z0-9:_.@\\\\-]*[.](service|socket|timer|path|target)$"))
-    then .startUnits[]
-    else error("startUnits must be an array of unit names")
+    def unit_name: type == "string" and test("^[A-Za-z0-9_][A-Za-z0-9:_.@\\\\-]*[.](service|socket|timer|path|target)$");
+    if type == "object" and .schemaVersion == 1 and (.startUnits | type) == "array" and all(.startUnits[]; unit_name)
+      and ((.readinessUnits // []) | type) == "array" and all((.readinessUnits // [])[]; unit_name)
+    then (.readinessUnits // []) as $gates
+      | .startUnits[] | if IN($gates[]) then "gate " + . else "run " + . end
+    else error("schemaVersion must be 1 and startUnits and readinessUnits must be arrays of unit names")
     end' "$v2_systemd_state" || {
     echo "Managed Services V2 start state at $v2_systemd_state is invalid." >&2
     return 1
   }
 }
 
-# Sets copyparty_expected for application_health; read-only, so status uses it too.
+# Classifies V2 units without waiting. With --wait it polls until every running
+# unit is active and every gate has finished, up to the settle deadline: units
+# that recovery started with --no-block may still be activating. Sets
+# copyparty_expected for application_health.
 application_units_active() {
-  local listing unit
-  local -a expected=() inactive=()
+  local wait=false listing entry kind unit state deadline
+  local -a expected=() pending=() next=() unsettled=() failed=()
+  [[ "${1:-}" == --wait ]] && wait=true
   copyparty_expected=false
+  deadline=$((SECONDS + application_settle_seconds))
+  if $wait; then
+    until managed_services_settled 2>/dev/null; do
+      ((SECONDS < deadline)) || { managed_services_settled; return 1; }
+      sleep 2
+    done
+  fi
   listing="$(v2_expected_units)" || return 1
   [[ -z "$listing" ]] || mapfile -t expected <<<"$listing"
-  for unit in "${expected[@]}"; do
-    [[ "$unit" == copyparty.service ]] && copyparty_expected=true
-    systemctl is-active --quiet -- "$unit" || inactive+=("$unit")
+  for entry in "${expected[@]}"; do
+    [[ "$entry" == "run copyparty.service" ]] && copyparty_expected=true
   done
-  if ((${#inactive[@]})); then
-    echo "Managed Services V2 expects these units to run, but they are not active: ${inactive[*]}" >&2
-    return 1
-  fi
+  pending=("${expected[@]}")
+  while :; do
+    next=()
+    unsettled=()
+    for entry in "${pending[@]}"; do
+      kind="${entry%% *}"
+      unit="${entry#* }"
+      state="$(systemctl is-active -- "$unit" 2>/dev/null || true)"
+      case "$kind:$state" in
+        run:active | gate:active | gate:inactive) ;;
+        *:failed) failed+=("$unit") ;;
+        *)
+          next+=("$entry")
+          unsettled+=("$unit (${state:-unknown})")
+          ;;
+      esac
+    done
+    if ((${#failed[@]})); then
+      echo "Managed Services V2 units failed: ${failed[*]}" >&2
+      return 1
+    fi
+    ((${#unsettled[@]})) || return 0
+    if ! $wait; then
+      echo "Managed Services V2 expects these units to run, but they are not active: ${unsettled[*]}" >&2
+      return 1
+    fi
+    if ((SECONDS >= deadline)); then
+      echo "Managed Services V2 units did not become active within ${application_settle_seconds}s: ${unsettled[*]}" >&2
+      return 1
+    fi
+    pending=("${next[@]}")
+    sleep 2
+  done
 }
 
 # A pending or running reconcile can still stop units or replace the start set.
@@ -250,7 +299,7 @@ managed_services_settled() {
 }
 
 application_health() {
-  application_units_active || return 1
+  application_units_active "$@" || return 1
   if $copyparty_expected; then
     [[ -S "$copyparty_socket" ]] || { echo "CopyParty Unix listener is missing" >&2; return 1; }
     curl --fail --silent --show-error --max-time 10 --unix-socket "$copyparty_socket" http://localhost/ >/dev/null || {
@@ -290,7 +339,7 @@ health_check() {
     for unit in postgresql.service authentik-worker.service authentik.service nas-cockpit-sso.socket nas-cockpit-sso.service caddy.service; do
       systemctl is-active --quiet "$unit" || { echo "$unit is not active" >&2; return 1; }
     done
-    application_health || return 1
+    application_health --wait || return 1
     [[ -S "$cockpit_socket" ]] || { echo "Cockpit Unix listener is missing" >&2; return 1; }
     listener_present 443 || { echo "Caddy is not listening on 443" >&2; return 1; }
     curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:${authentik_port}${authentik_path}-/health/ready/" >/dev/null

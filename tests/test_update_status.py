@@ -107,7 +107,7 @@ class UpdateStatusTests(unittest.TestCase):
 
     def running_stack(self, start_units: list[str], active: list[str], *, pending: bool = False) -> None:
         state = self.root / "systemd-reconciled.json"
-        state.write_text(json.dumps({"startUnits": start_units}), encoding="utf-8")
+        state.write_text(json.dumps({"schemaVersion": 1, "startUnits": start_units}), encoding="utf-8")
         marker = self.root / "reconcile.pending"
         if pending:
             marker.write_text("", encoding="utf-8")

@@ -78,7 +78,7 @@ class UpdateApplyAdmissionTests(unittest.TestCase):
         if start_units is None:
             self.state.unlink(missing_ok=True)
         else:
-            self.state.write_text(json.dumps({"startUnits": start_units}), encoding="utf-8")
+            self.state.write_text(json.dumps({"schemaVersion": 1, "startUnits": start_units}), encoding="utf-8")
         environment = {
             "PATH": str(self.bin),
             "HOME": str(self.root),
