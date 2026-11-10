@@ -507,8 +507,10 @@ def reconcile(
         state = result.stdout.strip()
         return state if state in _UNIT_QUERY_STATES.get(result.returncode, ()) else None
 
-    def is_active(unit: str) -> bool | None:
+    def is_active(unit: str, *, activating_is_active: bool = False) -> bool | None:
         state = unit_state(unit)
+        if activating_is_active and state == "activating":
+            return True
         return None if state is None or state in _TRANSITIONAL_UNIT_STATES else state in _UNIT_QUERY_STATES[0]
 
     planned_activations = ((changed_units & owned) - readiness - changed_sessions) | (
@@ -579,7 +581,7 @@ def reconcile(
             if unit in disrupted_sessions:
                 # Starting this target cannot recreate its lost transient instances.
                 continue
-            now_active = is_active(unit)
+            now_active = is_active(unit, activating_is_active=was_active is False and unit in activated_units)
             if was_active is None or now_active is None:
                 errors.append(f"unable to verify rollback active state for {unit}")
                 continue

@@ -77,6 +77,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 "probe-only",
                 "dependency",
                 "dependency-start-error",
+                "dependency-starting-error",
                 "readiness-existing-failure",
                 "query",
                 "reset",
@@ -86,14 +87,20 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 "durability",
             )
             for active, restore in ((True, False), (False, False), (True, True), (False, True))
-            if stage not in {"probe-only", "dependency", "dependency-start-error"} or (not active and not restore)
+            if stage not in {"probe-only", "dependency", "dependency-start-error", "dependency-starting-error"}
+            or (not active and not restore)
         ):
             with (
                 self.subTest(stage=failure_stage, active=initially_active, fail_restore=fail_restore),
                 tempfile.TemporaryDirectory() as raw,
             ):
-                dependency_only = failure_stage in {"dependency", "dependency-start-error"}
-                probe_only = failure_stage in {"probe-only", "dependency", "dependency-start-error"}
+                dependency_only = failure_stage in {"dependency", "dependency-start-error", "dependency-starting-error"}
+                probe_only = failure_stage in {
+                    "probe-only",
+                    "dependency",
+                    "dependency-start-error",
+                    "dependency-starting-error",
+                }
                 root = pathlib.Path(raw)
                 control = root / "control"
                 runtime = root / "units"
@@ -166,6 +173,8 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                             if running.get("trigger_active", False)
                             else "inactive"
                         )
+                        if units[0] == owner and active and running.get("owner_starting", False):
+                            output = "activating"
                         code = 0 if output == "active" else 3
                         if failure_stage == "query" and running.get("query_failure") and units[0] == owner:
                             code, output = 1, ""
@@ -180,7 +189,8 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     elif operation in {"start", "restart"} and units[0] == "nas-v2-trigger.service":
                         running["trigger_active"] = True
                         running["version"] = "healthy"
-                        if failure_stage == "dependency-start-error":
+                        if failure_stage in {"dependency-start-error", "dependency-starting-error"}:
+                            running["owner_starting"] = failure_stage == "dependency-starting-error"
                             code = 1
                     elif operation == "stop" and units[0] == "nas-v2-trigger.service":
                         running["trigger_active"] = False
@@ -207,6 +217,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                             code = 1
                         else:
                             running["version"] = None
+                            running["owner_starting"] = False
                     if code and check:
                         raise reconcile.SystemdReconcileError(f"systemctl {operation} {' '.join(units)} failed")
                     return subprocess.CompletedProcess([], code, output, "")
@@ -248,7 +259,7 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                             "No space left"
                             if failure_stage in {"commit", "commit-existing-failure", "publish", "durability"}
                             else "nas-v2-trigger.service"
-                            if failure_stage == "dependency-start-error"
+                            if failure_stage in {"dependency-start-error", "dependency-starting-error"}
                             else owner
                             if failure_stage == "restart"
                             else ready
