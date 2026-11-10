@@ -436,12 +436,12 @@ nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.
         # Mount and device units escape path characters, e.g. '-' as \\x2d.
         result = self.run_scenario(
             r"""
-            export NAS_TX_MEMBERS='var-lib-nas\x2dcontrol.mount   nas-v2-app.service'
-            touch 'var-lib-nas\x2dcontrol.mount.glob'
+            export NAS_TX_MEMBERS='tank-vm\x2doci\x2dpersist.mount   nas-v2-app.service'
+            touch 'tank-vm\x2doci\x2dpersist.mount.glob'
             nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
             nas_secret_tx_swap
             [[ -f root/new && -e members-stopped && ! -e moved-early ]]
-            grep -qxF 'stop -- var-lib-nas\x2dcontrol.mount nas-v2-app.service' systemctl.log
+            grep -qxF 'stop -- tank-vm\x2doci\x2dpersist.mount nas-v2-app.service' systemctl.log
             """
         )
         self.assert_ok(result)

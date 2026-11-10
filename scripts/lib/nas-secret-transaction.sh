@@ -41,6 +41,9 @@ nas_secret_tx_unit_stopped() {
 
 nas_secret_tx_stop_members() {
   local output unit stop_status=0 stopped=true status=0
+  # Passed verbatim to the regex engine: inline backslashes in [[ =~ ]] are
+  # requoted differently across bash builds.
+  local name_pattern='^[A-Za-z0-9_.@:\-]+$'
   local -a members=()
   output="$(nas_secret_tx_systemctl show --property=ConsistsOf --value -- "$NAS_SECRET_TX_TARGET")" || status=$?
   if ((status)); then
@@ -51,7 +54,7 @@ nas_secret_tx_stop_members() {
   read -r -a members <<<"$output" || true
   for unit in "${members[@]}"; do
     # systemd escapes unit names to this alphabet, e.g. \x2d for '-' in paths.
-    [[ "$unit" =~ ^[A-Za-z0-9_.@:\\-]+$ && "$unit" != -* ]] || {
+    [[ "$unit" =~ $name_pattern && "$unit" != -* ]] || {
       nas_secret_tx_report "invalid protected member unit: $(printf '%q' "$unit")"
       return 1
     }
