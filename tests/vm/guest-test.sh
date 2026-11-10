@@ -1637,6 +1637,10 @@ protected_restart_worker_finished() {
     state="$(systemctl show nas-protected-restart.service --property=ActiveState --value)"
     result="$(systemctl show nas-protected-restart.service --property=Result --value)"
     exit_status="$(systemctl show nas-protected-restart.service --property=ExecMainStatus --value)"
+    if [[ "$state" == failed ]]; then
+      systemctl status nas-protected-restart.service --no-pager >&2 || true
+      fail "protected-restart worker failed with result=$result status=$exit_status"
+    fi
     if [[ "$started" != "$previous_start" && "$started" != 0 && "$state" != activating ]]; then
       [[ "$result" == success && "$exit_status" == 0 ]] && return 0
       systemctl status nas-protected-restart.service --no-pager >&2 || true
@@ -1647,7 +1651,15 @@ protected_restart_worker_finished() {
   systemctl status nas-protected-restart.service --no-pager >&2 || true
   fail "timed out waiting for the protected-restart worker"
 }
+stop_protected_restart_holder() {
+  rm -f /run/nas-vm-protected-restart-lock-held
+  [[ -n "${protected_restart_holder:-}" ]] || return 0
+  nas_vm_stop_process "$protected_restart_holder" "$(nas_vm_kill_after_seconds)" || true
+  protected_restart_holder=""
+}
+nas_vm_cleanup_add stop_protected_restart_holder
 protected_restart_ready
+systemctl reset-failed nas-protected-restart.service >/dev/null 2>&1 || true
 copyparty_invocation="$(systemctl show copyparty.service --property=InvocationID --value)"
 [[ -n "$copyparty_invocation" ]] || fail "CopyParty has no invocation before protected restart"
 worker_start="$(protected_restart_worker_start)"
@@ -1662,6 +1674,7 @@ if nas-cockpit-api action protected-restart >/tmp/nas-protected-restart-busy.jso
 fi
 rm -f /run/nas-vm-protected-restart-lock-held
 wait "$protected_restart_holder"
+protected_restart_holder=""
 grep -F 'Another privileged operation conflicts with protected-restart' /tmp/nas-protected-restart-busy.err >/dev/null ||
   fail "busy protected restart did not report the conflicting operation"
 [[ "$(protected_restart_worker_start)" == "$worker_start" ]] || fail "busy protected restart started its worker"
