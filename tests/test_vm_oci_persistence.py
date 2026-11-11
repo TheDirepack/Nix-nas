@@ -31,36 +31,57 @@ class OciPersistenceTests(unittest.TestCase):
     def test_creation_serializes_snapshot_health_through_policy_initialization(self):
         probe = load_probe()
         with tempfile.TemporaryDirectory() as raw:
-            probe.BASELINE = pathlib.Path(raw) / "baseline"
+            root = pathlib.Path(raw)
+            probe.DATA = root / "data/sentinel"
+            probe.BASELINE = root / "baseline"
             lock = str(probe.BASELINE.parent / ".snapshot-health.lock")
             observed = []
 
-            def observe(*argv):
+            def observe(*argv, input_text=None, **kwargs):
                 status = subprocess.run(["flock", "-n", lock, "true"], check=False, timeout=5).returncode
                 self.assertEqual(status, 1, "snapshot health entered before fixture initialization finished")
                 observed.append(argv)
+                if argv == ("nas-managed-services-control", "document"):
+                    return json.dumps({"revision": "a" * 64, "document": {"services": {}, "storageResources": {}}})
+                return ""
 
             with (
-                mock.patch.object(probe, "create_fixture", side_effect=lambda: observe("create")),
                 mock.patch.object(probe, "command", side_effect=observe),
+                mock.patch.object(probe, "record"),
+                mock.patch.object(probe, "verify"),
             ):
                 probe.create()
-            self.assertEqual(observed, [("create",), ("nas-vm-initialize-oci-snapshots",)])
+            self.assertEqual(observed[1][:2], ("zfs", "create"))
+            self.assertEqual(observed[-1], ("nas-vm-initialize-oci-snapshots",))
             subprocess.run(["flock", "-n", lock, "true"], check=True, timeout=5)
 
     def test_snapshot_health_lock_is_released_when_initialization_fails(self):
-        probe = load_probe()
         for stage in ("create", "snapshots"):
             with self.subTest(stage=stage), tempfile.TemporaryDirectory() as raw:
-                probe.BASELINE = pathlib.Path(raw) / "baseline"
+                probe = load_probe()
+                root = pathlib.Path(raw)
+                probe.DATA = root / "mount/sentinel"
+                probe.BASELINE = root / "baseline"
                 lock = str(probe.BASELINE.parent / ".snapshot-health.lock")
+                live = {"document": {"services": {}, "storageResources": {}}, "revision": "a" * 64}
+
+                def command(*argv, input_text=None, **kwargs):
+                    if "replace-json-document" in argv:
+                        assert input_text is not None, "replacement did not send desired state on stdin"
+                        live["document"] = json.loads(input_text)
+                    elif argv == ("nas-vm-initialize-oci-snapshots",) and stage == "snapshots":
+                        raise RuntimeError("snapshots failed")
+                    return ""
+
                 with (
+                    mock.patch.object(probe, "document", side_effect=lambda: copy.deepcopy(live)),
+                    mock.patch.object(probe, "command", side_effect=command),
                     mock.patch.object(
                         probe,
-                        "create_fixture",
+                        "record",
                         side_effect=RuntimeError("create failed") if stage == "create" else None,
                     ),
-                    mock.patch.object(probe, "command", side_effect=RuntimeError("snapshots failed")),
+                    mock.patch.object(probe, "verify"),
                     self.assertRaisesRegex(RuntimeError, stage + " failed"),
                 ):
                     probe.create()
@@ -331,6 +352,7 @@ class OciPersistenceTests(unittest.TestCase):
             "snapshot",
             "record",
             "verify",
+            "initialize",
             "cleanup",
             "child",
             "mount-replaced",
@@ -383,6 +405,8 @@ class OciPersistenceTests(unittest.TestCase):
                         raise RuntimeError("fixture failure")
                     elif argv[:2] == ("zfs", "snapshot") and failure == "snapshot":
                         raise RuntimeError("fixture failure")
+                    elif argv == ("nas-vm-initialize-oci-snapshots",) and failure == "initialize":
+                        raise RuntimeError("fixture failure")
                     elif argv[:2] == ("zfs", "destroy"):
                         destroy_calls.append(argv)
                         if "@" in argv[-1]:
@@ -428,7 +452,7 @@ class OciPersistenceTests(unittest.TestCase):
                     self.assertEqual(live["document"], original)
                     self.assertTrue(probe.DATA.parent.exists())
                     self.assertFalse(destroyed)
-                    self.assertTrue(all("-r" not in call for call in destroy_calls))
+                    self.assertEqual(destroy_calls, [("zfs", "destroy", "-r", "tank/nas/vm-oci-persist")])
                 elif failure in {"mount-replaced", "mount-nonempty"}:
                     self.assertIn("manual recovery", str(caught.exception))
                     self.assertEqual((probe.DATA.parent / "unrelated").read_text(), "preserve")
@@ -480,6 +504,48 @@ class OciPersistenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "create failed"):
                     probe.create()
                 self.assertFalse(probe.DATA.parent.exists())
+                probe.create()
+            self.assertEqual(attempts, 2)
+
+    def test_failed_policy_initialization_compensates_and_allows_retry(self):
+        probe = load_probe()
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            probe.DATA = root / "mount/sentinel"
+            probe.BASELINE = root / "baseline"
+            original = {"services": {"unrelated": {"enabled": True}}, "storageResources": {}}
+            live = {"document": copy.deepcopy(original), "revision": "a" * 64}
+            attempts = 0
+            destroyed = []
+
+            def command(*argv, input_text=None, **kwargs):
+                nonlocal attempts
+                if argv == ("nas-vm-initialize-oci-snapshots",):
+                    attempts += 1
+                    if attempts == 1:
+                        raise RuntimeError("sanoid initialization failed")
+                elif "replace-json-document" in argv:
+                    assert input_text is not None, "replacement did not send desired state on stdin"
+                    live["document"] = json.loads(input_text)
+                elif argv[:3] == ("zfs", "destroy", "-r"):
+                    destroyed.append(argv[-1])
+                return ""
+
+            def record():
+                probe.BASELINE.write_text("recorded")
+
+            with (
+                mock.patch.object(probe, "document", side_effect=lambda: copy.deepcopy(live)),
+                mock.patch.object(probe, "command", side_effect=command),
+                mock.patch.object(probe, "record", side_effect=record),
+                mock.patch.object(probe, "verify"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "sanoid initialization failed"):
+                    probe.create()
+                self.assertFalse(probe.BASELINE.exists())
+                self.assertEqual(live["document"], original)
+                self.assertFalse(probe.DATA.parent.exists())
+                self.assertEqual(destroyed, ["tank/nas/vm-oci-persist"])
                 probe.create()
             self.assertEqual(attempts, 2)
 

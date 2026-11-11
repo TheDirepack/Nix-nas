@@ -145,7 +145,6 @@ def create() -> None:
     with (BASELINE.parent / ".snapshot-health.lock").open("a") as lease:
         fcntl.flock(lease, fcntl.LOCK_EX)
         create_fixture()
-        command("nas-vm-initialize-oci-snapshots")
 
 
 def create_fixture() -> None:
@@ -160,7 +159,6 @@ def create_fixture() -> None:
     ownership = str(uuid.uuid4())
     created = False
     published = False
-    snapshot_created = False
     mount_created = False
     mount_fd = None
     try:
@@ -183,9 +181,11 @@ def create_fixture() -> None:
             "podman", "exec", CONTAINER, "sh", "-c", "umask 077; printf '%s\n' nas-v2-persistent-data > /data/sentinel"
         )
         command("zfs", "snapshot", "tank/nas/vm-oci-persist@qualification")
-        snapshot_created = True
         record()
         verify("creation")
+        # Initialization is part of fixture creation: a partial fixture must not
+        # survive it, or a retry and snapshot health both read a half-built dataset.
+        command("nas-vm-initialize-oci-snapshots")
     except Exception as error:
         if not mount_created:
             raise
@@ -208,9 +208,9 @@ def create_fixture() -> None:
                         and RESOURCE not in current.get("storageResources", {}),
                         "failed document update left declarations with unconfirmed ownership",
                     )
-                if snapshot_created:
-                    command("zfs", "destroy", "tank/nas/vm-oci-persist@qualification")
-                command("zfs", "destroy", "tank/nas/vm-oci-persist")
+                # The dataset is owned by this fixture, so a recursive destroy
+                # also removes the qualification and policy snapshots.
+                command("zfs", "destroy", "-r", "tank/nas/vm-oci-persist")
                 BASELINE.unlink(missing_ok=True)
             if DATA.parent.exists() or DATA.parent.is_symlink():
                 if mount_fd is None:
