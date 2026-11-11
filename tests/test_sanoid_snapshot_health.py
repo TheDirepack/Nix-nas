@@ -36,6 +36,17 @@ class SanoidSnapshotHealthTests(unittest.TestCase):
             snapshot_health_arguments(), ["--monitor-snapshots", "--force-update", "--configdir", "CONFIG"]
         )
 
+    def test_vm_snapshot_health_override_uses_production_policy(self):
+        production = (ROOT / "modules/nas/config/systemd-services.nix").read_text(encoding="utf-8")
+        override = (ROOT / "tests/nixos/vm-common.nix").read_text(encoding="utf-8")
+        monitor = "--monitor-snapshots --force-update --configdir "
+        self.assertIn(f'sanoid {monitor}${{sanoidMonitorConfig}}"', production)
+        self.assertEqual(
+            re.findall(rf"/bin/sanoid {re.escape(monitor)}(\S+)\"", override),
+            ["${nasInternal.sanoidMonitorConfig}"],
+        )
+        self.assertIn("flock /var/lib/nas-test/.snapshot-health.lock", override)
+
     def run_monitor(self, *, cached: bool, live: bool) -> subprocess.CompletedProcess[str]:
         assert SANOID is not None
         with tempfile.TemporaryDirectory() as raw:
