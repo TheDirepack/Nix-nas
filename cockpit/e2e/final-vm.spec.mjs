@@ -613,7 +613,9 @@ test("installed Services editor reconciles form changes and preserves rejected e
         detail = String(error);
       }
       if (Date.now() >= deadline) {
-        throw new Error(`installed reconcile did not persist ${JSON.stringify(expected)}: ${detail}`);
+        throw new Error(
+          `installed reconcile did not persist ${JSON.stringify(expected)}: ${detail}`,
+        );
       }
       await target.waitForTimeout(5_000);
     }
