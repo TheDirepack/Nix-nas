@@ -585,8 +585,8 @@ test("installed Services editor reconciles form changes and preserves rejected e
   };
   // A committed reconcile reloads the Caddy configuration and terminates the
   // Cockpit transport, which detaches every open editor and makes the in-page
-  // "saving" state unobservable. This lane checks the durable document; the
-  // caller verifies the applied generation afterwards.
+  // "saving" state unobservable. Read desired and applied authority through a
+  // separate page before allowing the next mutation.
   const openEditorEventually = async (target, timeout = 60_000) => {
     const deadline = Date.now() + timeout;
     for (;;) {
@@ -617,7 +617,23 @@ test("installed Services editor reconciles form changes and preserves rejected e
         const value = await opened.name.inputValue();
         const alerts = await opened.frame.locator(".nas-editor-card .pf-v6-c-alert").count();
         detail = `editor shows ${JSON.stringify(value)} with ${alerts} alert(s)`;
-        if (value === expected && alerts === 0) return opened;
+        if (value === expected && alerts === 0) {
+          await opened.frame.locator("body").evaluate(async () => {
+            await globalThis.cockpit.spawn(
+              [
+                "bash",
+                "-ceu",
+                "! systemctl is-active --quiet nas-managed-services-reconcile.service; " +
+                  'test "$(systemctl show -p Result --value nas-managed-services-reconcile.service)" = success; ' +
+                  "test ! -e /run/nas-control/reconcile.pending; " +
+                  "cmp /var/lib/nas-control/services.yaml " +
+                  "<(git --git-dir=/tank/nas-control/config-history.git show refs/nas/applied:services.yaml)",
+              ],
+              {superuser: "require"},
+            );
+          });
+          return opened;
+        }
       } catch (error) {
         detail = String(error);
       }
@@ -663,7 +679,7 @@ test("installed Services editor reconciles form changes and preserves rejected e
       if ((await cleanup.name.inputValue()) !== original) {
         await cleanup.name.fill(original);
         await submitEdit(cleanup);
-        await expectPersistedName(probe, original);
+        await expectPersistedName(page, original);
       }
     } catch (error) {
       await testInfo.attach("editor-cleanup-error", {
