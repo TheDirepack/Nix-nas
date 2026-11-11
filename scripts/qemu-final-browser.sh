@@ -325,6 +325,21 @@ case "$WORKLOAD" in
     PLAYWRIGHT_HTML_OUTPUT_DIR="$EVIDENCE_DIR/playwright-report" \
     npm --prefix "$ROOT/cockpit" exec -- playwright test --config "$ROOT/cockpit/e2e/playwright.config.mjs" \
       --output "$EVIDENCE_DIR/test-results"
+    # The editor flow can only observe the desired document; a reconcile that
+    # fails before arming rollback leaves it changed without applying it.
+    log "Verify the installed authority for the edited service is applied"
+    ssh "${ssh_args[@]}" admin@"${HOST_BIND_ADDRESS:-127.0.0.1}" \
+      'sudo -n bash -s -- verify-applied-authority' <<'AUTHORITY'
+set -euo pipefail
+[[ ! -e /run/nas-control/reconcile.pending ]] || { echo "a reconcile is still pending" >&2; exit 1; }
+status=$(nas-managed-services-control status)
+jq -e '(.services | map(select(.id == "vm-oci-persist")) | length == 1)
+  and (.services[] | select(.id == "vm-oci-persist") | .verified == true)' <<<"$status" >/dev/null || {
+  jq '.services[] | select(.id == "vm-oci-persist")' <<<"$status" >&2
+  echo "the edited service is not verified against the applied generation" >&2
+  exit 1
+}
+AUTHORITY
     ssh "${ssh_args[@]}" admin@"${HOST_BIND_ADDRESS:-127.0.0.1}" \
       'sudo -n nas-vm-guest-test --oci-probe remove'
     ;;

@@ -36,6 +36,12 @@ exit "${FIXTURE_BOOT_EXIT:-0}"
             "ssh": """
 case "$*" in
   *'-O exit'*) printf 'close-master\n' >> "$FIXTURE_EVENTS" ;;
+  *'verify-applied-authority'*)
+    printf 'verify-applied\n' >> "$FIXTURE_EVENTS"
+    exit "${FIXTURE_APPLIED_EXIT:-0}" ;;
+  *'--oci-probe remove'*)
+    printf 'remove-fixture\n' >> "$FIXTURE_EVENTS"
+    exit 0 ;;
   *'sudo -n bash -s'*)
     printf 'guest-diagnostics\n' >> "$FIXTURE_EVENTS"
     bash ;;
@@ -232,6 +238,21 @@ exit "${FIXTURE_WORKLOAD_EXIT:-0}"
         self.assertEqual(len(paths), 1)
         self.assertEqual(paths[0].stat().st_mode & 0o777, 0o700)
         self.assertTrue((paths[0] / "result.tsv").is_file())
+
+    def test_edited_authority_is_verified_as_applied_before_fixture_removal(self) -> None:
+        result = self.run_workload()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        events = (self.root / "events").read_text().splitlines()
+        self.assertLess(events.index("browser"), events.index("verify-applied"))
+        self.assertLess(events.index("verify-applied"), events.index("remove-fixture"))
+
+    def test_unapplied_edited_authority_fails_the_installed_browser_lane(self) -> None:
+        result = self.run_workload(FIXTURE_APPLIED_EXIT="1")
+        self.assertNotEqual(result.returncode, 0)
+        events = (self.root / "events").read_text().splitlines()
+        self.assertIn("verify-applied", events)
+        self.assertNotIn("remove-fixture", events)
+        self.assertEqual(events[-1], "close-master")
 
     def test_termination_is_recorded_as_failure_even_when_the_child_exits_zero(self) -> None:
         result = self.run_workload(FIXTURE_SIGNAL="TERM")

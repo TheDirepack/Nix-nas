@@ -585,9 +585,8 @@ test("installed Services editor reconciles form changes and preserves rejected e
   };
   // A committed reconcile reloads the Caddy configuration and terminates the
   // Cockpit transport, which detaches every open editor and makes the in-page
-  // "saving" state unobservable. The durable document is the observable this
-  // lane can hold; revision-conflict handling is covered by the V2 authority
-  // tests, and the alert rendering by the editor e2e specs.
+  // "saving" state unobservable. This lane checks the durable document; the
+  // caller verifies the applied generation afterwards.
   const openEditorEventually = async (target, timeout = 60_000) => {
     const deadline = Date.now() + timeout;
     for (;;) {
