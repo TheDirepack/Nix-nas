@@ -598,6 +598,16 @@ test("installed Services editor reconciles form changes and preserves rejected e
       }
     }
   };
+  // The save spawn carries the mutation to the authority. Navigating the page
+  // that owns it detaches the Cockpit channel and abandons the write before it
+  // lands, so that page is never reused; the authority is read from a second
+  // page that shares the authenticated browser context.
+  const submitEdit = async (editor) => {
+    await editor.save.click();
+    await expect(editor.save)
+      .toBeDisabled({timeout: 10_000})
+      .catch(() => undefined);
+  };
   const expectPersistedName = async (target, expected) => {
     const deadline = Date.now() + reconcileTimeout;
     let detail = "the editor was never opened";
@@ -620,13 +630,16 @@ test("installed Services editor reconciles form changes and preserves rejected e
     }
   };
   await login(page);
+  // A second page reads the authority, because the page that submits the edit
+  // must not navigate while its save spawn is in flight.
+  const probe = await page.context().newPage();
   const first = await openEditor(page);
   const original = await first.name.inputValue();
   let primaryError;
   try {
     await first.name.fill("VM OCI edited through installed Cockpit");
-    await first.save.click();
-    const reconciled = await expectPersistedName(page, "VM OCI edited through installed Cockpit");
+    await submitEdit(first);
+    const reconciled = await expectPersistedName(probe, "VM OCI edited through installed Cockpit");
 
     await reconciled.frame.getByRole("button", {name: "Advanced YAML", exact: true}).click();
     const yaml = reconciled.frame.locator(".nas-editor-card textarea");
@@ -646,11 +659,11 @@ test("installed Services editor reconciles form changes and preserves rejected e
   } finally {
     try {
       // Restore the authoritative document even when the mutation above failed.
-      const cleanup = await openEditorEventually(page);
+      const cleanup = await openEditorEventually(probe);
       if ((await cleanup.name.inputValue()) !== original) {
         await cleanup.name.fill(original);
-        await cleanup.save.click();
-        await expectPersistedName(page, original);
+        await submitEdit(cleanup);
+        await expectPersistedName(probe, original);
       }
     } catch (error) {
       await testInfo.attach("editor-cleanup-error", {

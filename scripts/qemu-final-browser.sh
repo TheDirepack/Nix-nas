@@ -331,7 +331,15 @@ case "$WORKLOAD" in
     ssh "${ssh_args[@]}" admin@"${HOST_BIND_ADDRESS:-127.0.0.1}" \
       'sudo -n bash -s -- verify-applied-authority' <<'AUTHORITY'
 set -euo pipefail
-[[ ! -e /run/nas-control/reconcile.pending ]] || { echo "a reconcile is still pending" >&2; exit 1; }
+deadline=$((SECONDS + 300))
+while systemctl is-active --quiet nas-managed-services-reconcile.service \
+  || [[ -e /run/nas-control/reconcile.pending ]]; do
+  if ((SECONDS >= deadline)); then
+    echo "a reconcile did not settle after the browser suite" >&2
+    exit 1
+  fi
+  sleep 5
+done
 status=$(nas-managed-services-control status)
 jq -e '(.services | map(select(.id == "vm-oci-persist")) | length == 1)
   and (.services[] | select(.id == "vm-oci-persist") | .verified == true)' <<<"$status" >/dev/null || {
