@@ -110,8 +110,9 @@ record() {
 }
 record managed-apply-state systemctl show nas-managed-services-reconcile.service nas-v2-apply-failed.service \
   -p ActiveState -p SubState -p Result -p MainPID -p ExecMainStatus
-record managed-apply-journal journalctl -b --no-pager -n 180 \
-  -u nas-managed-services-reconcile.service -u nas-v2-apply-failed.service
+record managed-apply-journal journalctl -b --no-pager -n 2000 -o short-iso-precise \
+  -u nas-managed-services-reconcile.service -u nas-v2-apply-failed.service \
+  -u caddy.service -u nas-caddy.service -u nas-cockpit-sso.service
 record process-waits ps -eo user,pid,ppid,stat,wchan:32,comm
 record pending-systemd-jobs systemctl list-jobs --no-pager
 record failed-units systemctl --failed --no-legend --plain --no-pager
