@@ -1389,6 +1389,8 @@ jq '.document
         "capabilities": [{"id": "access", "title": "Access VM OCI lifecycle probe"}]
       },
       "network": {"mode": "isolated"},
+      "readiness": {"timeoutSeconds": 15, "intervalMilliseconds": 250,
+        "probes": [{"type": "http", "url": "http://127.0.0.1:18088/"}]},
       "storage": [{"resource": "vm-oci-state", "mountPath": "/state", "access": "write"}],
       "credentials": [{"credential": "vm-oci-token", "use": "file", "mountPath": "/run/secrets/token"}],
       "sandbox": {"tmpfs": [{"path": "/tmp", "sizeBytes": 67108864}]},
@@ -1404,6 +1406,7 @@ jq '.document
         "web": {
           "target": {"type": "http", "host": "127.0.0.1", "port": 18088},
           "exposure": {"type": "path", "paths": ["/vm-oci-probe/"]},
+          "proxy": {"stripPrefix": "/vm-oci-probe"},
           "auth": {"mode": "identity", "capability": "access"}
         }
       }
@@ -1488,6 +1491,42 @@ wait_http http://127.0.0.1:18088
   fail "failed OCI update did not restore the applied v2 runtime"
 pass "failed OCI update restored desired and live applied state"
 assert_oci_durable_state "task-1,task-2"
+
+oci_revision="$(nas-managed-services-control document | jq -er .revision)"
+oci_applied_hash="$(sha256sum /var/lib/nas-control/services.yaml | cut -d ' ' -f1)"
+jq '.services["vm-oci-probe"].runtime.command = ["/bin/sh", "-c", "printf started > /state/unhealthy-started; exec /bin/httpd -f -p 8080 -h /tmp"]' \
+  /tmp/nas-v2-oci-update.json >/tmp/nas-v2-oci-unhealthy.json
+if nas-managed-services-control replace-json-document - "$oci_revision" \
+  </tmp/nas-v2-oci-unhealthy.json >/tmp/nas-v2-oci-unhealthy-result.log 2>&1; then
+  fail "running OCI update without a healthy HTTP endpoint unexpectedly succeeded"
+fi
+wait_oneshot_completed nas-v2-apply-failed.service
+[[ "$(cat "$oci_state/unhealthy-started")" == started ]] || fail "unhealthy candidate never ran"
+journalctl --boot --unit=nas-v2-ready-vm-oci-probe.service --no-pager | grep -F 'readiness timed out' >/dev/null || \
+  fail "unhealthy update failed without exercising the readiness timeout"
+[[ "$(sha256sum /var/lib/nas-control/services.yaml | cut -d ' ' -f1)" == "$oci_applied_hash" ]] || \
+  fail "unhealthy OCI update did not restore exact desired bytes"
+wait_active nas-v2-vm-oci-probe.service
+wait_http http://127.0.0.1:18088
+[[ "$(curl --fail --silent --show-error http://127.0.0.1:18088)" == "nas-v2-oci-v2" ]] || \
+  fail "unhealthy OCI update did not restore the last healthy runtime"
+assert_oci_durable_state "task-1,task-2"
+pass "readiness timeout restored exact desired bytes, healthy HTTP and durable app state"
+
+authz_secret_dir=$(mktemp -d /run/nas-oci-authz-test.XXXXXX)
+printf '%s\n' nasadmin-vm-password > "$authz_secret_dir/administrator"
+printf '%s\n' baseline-vm-password > "$authz_secret_dir/baseline"
+printf '%s\n' alice-updated-password > "$authz_secret_dir/alice"
+chmod 0600 "$authz_secret_dir"/*
+timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+  "$(nas_vm_timeout_value browserAuthorization)" python3 /var/lib/nas-test/repo/tests/browser/authz.py \
+  --origin "https://$AUTHENTIK_PUBLIC_HOST" --oci-only \
+  --administrator-password-file "$authz_secret_dir/administrator" \
+  --baseline-password-file "$authz_secret_dir/baseline" \
+  --alice-password-file "$authz_secret_dir/alice"
+cleanup_authz_secrets
+authz_secret_dir=""
+pass "dynamic OCI route enforces administrator access, capability grants, unrelated denial and fresh-login revocation"
 
 systemctl stop nas-v2-vm-oci-probe.service
 ! podman container exists "$oci_container" || fail "OCI writer container survived stop before restore"
@@ -1734,7 +1773,10 @@ protected_restart_ready
 pass "Cockpit GUI protected restart completes and Cockpit recovers with protected services ready"
 
 log "Secret stop/reactivation transaction"
+python3 "$CONFIG_DIR/tests/vm/oci-probe.py" create
 run_as_admin nas-secrets stop
+wait_inactive nas-v2-vm-oci-persist.service
+python3 "$CONFIG_DIR/tests/vm/oci-probe.py" locked
 wait_inactive caddy.service
 wait_inactive copyparty.service
 wait_inactive authentik.service
@@ -1757,6 +1799,7 @@ systemctl is-active --quiet nas-protected-services.target
 pass "secret stop, reactivation, and wrong-password rollback behavior passed"
 
 log "Final state"
+python3 "$CONFIG_DIR/tests/vm/oci-probe.py" verify --stage secret-reactivation
 zpool status -x tank | grep -Eq 'pool .tank. is healthy|all pools are healthy'
 systemctl --failed --no-legend --plain | grep -Ev '(^$|nas-health-alert@)' >/tmp/nas-failed-final || true
 [[ ! -s /tmp/nas-failed-final ]] || { cat /tmp/nas-failed-final >&2; fail "unexpected failed units remain"; }

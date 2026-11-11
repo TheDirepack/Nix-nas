@@ -95,6 +95,117 @@ class BrowserAuthzInputTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.authz = load_authz()
 
+    def test_dynamic_oci_route_requires_exact_live_response_or_explicit_denial(self):
+        for allowed, status, body, accepted in (
+            (True, 200, "nas-v2-oci-v2\n", True),
+            (True, 200, "unrelated app", False),
+            (True, 302, "login", False),
+            (False, 403, "Forbidden", True),
+            (False, 200, "nas-v2-oci-v2", False),
+            (False, 503, "unavailable", False),
+            (False, 403, "nas-v2-oci-v2", False),
+        ):
+            with (
+                self.subTest(allowed=allowed, status=status, body=body),
+                mock.patch.object(self.authz, "browser") as browser,
+                mock.patch.object(self.authz, "login") as login,
+                mock.patch.object(self.authz, "close_browser") as close,
+                mock.patch.object(
+                    self.authz, "authenticated_https_request", return_value={"status": status, "body": body}
+                ),
+            ):
+                if accepted:
+                    self.authz.verify_oci_route_account("https://nas-test.local", "baseline", "password", allowed)
+                else:
+                    with self.assertRaises(RuntimeError):
+                        self.authz.verify_oci_route_account("https://nas-test.local", "baseline", "password", allowed)
+                login.assert_called_once_with(
+                    browser.return_value, "https://nas-test.local", "baseline", "password", "/vm-oci-probe/"
+                )
+                close.assert_called_once_with(browser.return_value)
+
+    def test_dynamic_oci_grant_is_revoked_even_if_granted_request_fails(self):
+        def probe(_origin, username, _password, allowed):
+            if username == "baseline" and allowed:
+                raise RuntimeError("granted app request failed")
+
+        with (
+            mock.patch.object(self.authz, "verify_oci_route_account", side_effect=probe),
+            mock.patch.object(self.authz, "assign_application_capabilities") as assign,
+            self.assertRaisesRegex(RuntimeError, "granted app request failed"),
+        ):
+            self.authz.verify_oci_authorization("https://nas-test.local", "admin", "baseline", "alice")
+        self.assertEqual(assign.call_count, 2)
+        for call in assign.call_args_list:
+            self.assertEqual(call.kwargs["scope"], ["application.vm-oci-probe.access"])
+        self.assertEqual(assign.call_args_list[0].args[-1], ["application.vm-oci-probe.access"])
+        self.assertEqual(assign.call_args_list[1].args[-1], [])
+
+    def test_scoped_capability_edit_preserves_unrelated_membership(self):
+        import json
+        import subprocess
+
+        driver = mock.MagicMock()
+        driver.execute_async_script.return_value = {"ok": True}
+        group = "application.vm-oci-probe.access"
+        with (
+            mock.patch.object(self.authz, "browser", return_value=driver),
+            mock.patch.object(self.authz, "login"),
+        ):
+            self.authz.assign_application_capabilities(
+                "https://nas-test.local", "nasadmin", "secret", "baseline", [group], scope=[group]
+            )
+        script, username, groups, scope = driver.execute_async_script.call_args.args
+        harness = r"""
+        const fs = require('node:fs');
+        const {script, username, groups, scope} = JSON.parse(fs.readFileSync(0, 'utf8'));
+        const membership = new Set(['other']);
+        const writes = [];
+        const pages = [];
+        global.document = {cookie: 'authentik_csrf=test-token'};
+        global.fetch = async (url, options) => {
+          let value;
+          if (url.includes('core/users/?')) value = {results: [{username, pk: 'user', num_pk: 7, groups: [...membership]}]};
+          else if (url.includes('core/groups/?')) {
+            const page = Number(new URL(url, 'https://nas-test.local').searchParams.get('page') || 1);
+            pages.push(page);
+            value = page === 1
+              ? {results: [{pk: 'other', name: 'application.other.access', attributes: {nasManagedCapability: true}}], pagination: {next: 2}}
+              : {results: [{pk: 'oci', name: scope[0], attributes: {nasManagedCapability: true}}], pagination: {next: 0}};
+          }
+          else {
+            writes.push({url, body: options.body});
+            if (url.includes('/add_user/')) membership.add('oci');
+            else membership.delete('oci');
+          }
+          return {ok: true, status: value ? 200 : 204, json: async () => value};
+        };
+        const run = names => new Promise(resolve => new Function(script)(username, names, scope, resolve));
+        (async () => {
+          const granted = await run(groups);
+          const during = [...membership];
+          const revoked = await run([]);
+          process.stdout.write(JSON.stringify({granted, revoked, during, after: [...membership], writes, pages}));
+        })().catch(error => {console.error(error); process.exitCode = 1});
+        """
+        result = subprocess.run(
+            ["node", "-e", harness],
+            input=json.dumps({"script": script, "username": username, "groups": groups, "scope": scope}),
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=True,
+        )
+        outcome = json.loads(result.stdout)
+        self.assertTrue(outcome["granted"]["ok"])
+        self.assertTrue(outcome["revoked"]["ok"])
+        self.assertEqual(set(outcome["during"]), {"other", "oci"})
+        self.assertEqual(outcome["after"], ["other"])
+        self.assertEqual(outcome["pages"], [1, 2, 1, 2])
+        self.assertEqual(len(outcome["writes"]), 2)
+        self.assertTrue(all("/oci/" in write["url"] for write in outcome["writes"]))
+        self.assertEqual([json.loads(write["body"]) for write in outcome["writes"]], [{"pk": 7}, {"pk": 7}])
+
     @staticmethod
     def secret(root: pathlib.Path, name: str, value: str) -> pathlib.Path:
         path = root / name
@@ -763,6 +874,44 @@ class BrowserAuthzInputTests(unittest.TestCase):
         reset_session.assert_called_once_with(driver, "https://nas-test.local")
         sleep.assert_called_once_with(1)
 
+    def test_login_handles_only_transient_authentik_certificate_verifier_changes(self) -> None:
+        origin = "https://nas-test.local:8443"
+        for fault in ("recovered", "persistent", "authority", "foreign", "rendered"):
+            with self.subTest(fault=fault):
+                driver = mock.Mock()
+                resource_origin = "https://other.local" if fault == "foreign" else origin
+                error_code = "ERR_CERT_AUTHORITY_INVALID" if fault == "authority" else "ERR_CERT_VERIFIER_CHANGED"
+                diagnostics = {
+                    "url": origin + "/identity/if/user/",
+                    "body": "Access denied" if fault == "rendered" else "",
+                    "console": [
+                        {
+                            "message": resource_origin
+                            + "/identity/static/dist/app.js - Failed to load resource: net::"
+                            + error_code
+                        }
+                    ],
+                }
+                with (
+                    mock.patch.object(
+                        self.authz,
+                        "_login_once",
+                        side_effect=[self.authz.TimeoutException(), None]
+                        if fault == "recovered"
+                        else self.authz.TimeoutException(),
+                    ) as login_once,
+                    mock.patch.object(self.authz, "browser_diagnostics", return_value=diagnostics),
+                    mock.patch.object(self.authz, "reset_browser_session") as reset_session,
+                    mock.patch.object(self.authz.time, "sleep"),
+                ):
+                    if fault == "recovered":
+                        self.authz.login(driver, origin, "nasadmin", "secret")
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "Authentik browser login did not complete"):
+                            self.authz.login(driver, origin, "nasadmin", "secret")
+                self.assertEqual(login_once.call_count, 2 if fault in {"recovered", "persistent"} else 1)
+                self.assertEqual(reset_session.call_count, 1 if fault in {"recovered", "persistent"} else 0)
+
     def test_login_fails_closed_after_persistent_authentik_flow_502(self) -> None:
         driver = mock.Mock()
         diagnostics = {
@@ -932,10 +1081,14 @@ class BrowserAuthzInputTests(unittest.TestCase):
 
     def test_authenticated_https_request_carries_browser_cookies_without_following_redirects(self) -> None:
         driver = mock.Mock()
-        driver.get_cookies.return_value = [
-            {"name": "authentik_session", "value": "session-value"},
-            {"name": "authentik_proxy", "value": "proxy-value"},
-        ]
+        driver.current_url = "chrome-error://chromewebdata/"
+        driver.get_cookies.side_effect = AssertionError("error-document cookie scope must not be used")
+        driver.execute_cdp_cmd.return_value = {
+            "cookies": [
+                {"name": "authentik_session", "value": "session-value"},
+                {"name": "authentik_proxy", "value": "proxy-value"},
+            ]
+        }
         response = mock.Mock()
         response.status = 302
         response.read.return_value = b"redirect"
@@ -954,6 +1107,9 @@ class BrowserAuthzInputTests(unittest.TestCase):
                 "blocked-write",
             )
 
+        driver.execute_cdp_cmd.assert_called_once_with(
+            "Network.getCookies", {"urls": ["https://nas-test.local:8443/shares/users/bob/isolation-e2e.txt"]}
+        )
         self.assertEqual(result["status"], 302)
         pinned.assert_called_once()
         self.assertEqual(pinned.call_args.args, ("nas-test.local", "127.0.0.1"))
@@ -1241,7 +1397,7 @@ class BrowserAuthzInputTests(unittest.TestCase):
         login.assert_called_once_with(driver, "https://nas-test.local", "nasadmin", "secret", "/identity/if/user/")
         self.assertIn("X-Authentik-Csrf", driver.execute_async_script.call_args.args[0])
         self.assertIn("remove_user", driver.execute_async_script.call_args.args[0])
-        self.assertEqual(driver.execute_async_script.call_args.args[1:], ("alice", groups))
+        self.assertEqual(driver.execute_async_script.call_args.args[1:], ("alice", groups, None))
         driver.quit.assert_called_once_with()
 
 

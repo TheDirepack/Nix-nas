@@ -28,7 +28,9 @@ class V2ComposeSystemdTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.schema = v2.load_schema(SCHEMA)
 
-    def fixture(self, root: pathlib.Path, *, on_demand: bool = False) -> tuple[dict, pathlib.Path]:
+    def fixture(
+        self, root: pathlib.Path, *, on_demand: bool = False, ready_chain: bool = False
+    ) -> tuple[dict, pathlib.Path]:
         app_root = root / "apps"
         service_root = app_root / "demo"
         service_root.mkdir(parents=True)
@@ -49,9 +51,29 @@ class V2ComposeSystemdTests(unittest.TestCase):
                     "auth": {"mode": "public"},
                 }
             }
+        services = {"demo": service}
+        if ready_chain:
+            service["dependencies"] = [{"service": "b", "condition": "ready"}]
+            for name, port in (("a", 8081), ("b", 8082)):
+                services[name] = {
+                    "name": name,
+                    "workload": {"kind": "daemon", "activation": "persistent"},
+                    "runtime": {"type": "systemd", "unit": f"dependency-{name}.service"},
+                    "readiness": {"timeoutSeconds": 100, "probes": [{"type": "tcp", "port": port}]},
+                }
+            services["b"]["dependencies"] = [{"service": "a", "condition": "ready"}]
         with mock.patch.object(v2, "APP_ROOT", pathlib.PurePosixPath(str(app_root))):
-            effective = v2.compile_document({"schemaVersion": 3, "services": {"demo": service}}, self.schema)
+            effective = v2.compile_document({"schemaVersion": 3, "services": services}, self.schema)
         return effective, source
+
+    def test_compose_aggregate_keeps_ordered_dependency_start_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            effective, _ = self.fixture(root, ready_chain=True)
+            files, manifest = self.generate(effective, root)
+            aggregate = files[root / "projection/units/nas-v2-demo.target"].decode()
+            self.assertIn("nas-v2-ready-b.service", aggregate)
+            self.assertGreaterEqual(manifest["activationTimeoutSeconds"], 3 * 180 + 2 * 110)
 
     def fake_tools(self, root: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
         root.mkdir(parents=True, exist_ok=True)

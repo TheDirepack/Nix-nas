@@ -28,6 +28,7 @@ REQUIRED_V2_MODULES = (
     "nas_v2_accelerator.py",
     "nas_v2_activation.py",
     "nas_v2_apply.py",
+    "nas_v2_apply_budget.py",
     "nas_v2_authentik_blueprint.py",
     "nas_v2_backup.py",
     "nas_v2_bootstrap.py",

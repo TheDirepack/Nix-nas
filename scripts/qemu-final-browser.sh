@@ -108,6 +108,13 @@ record() {
   printf 'exit\t%s\t%s\n' "$label" "$status"
   if ((status != 0)); then result=$status; fi
 }
+record managed-apply-state systemctl show nas-managed-services-reconcile.service nas-v2-apply-failed.service \
+  -p ActiveState -p SubState -p Result -p MainPID -p ExecMainStatus
+record managed-apply-journal journalctl -b --no-pager -n 2000 -o short-iso-precise \
+  -u nas-managed-services-reconcile.service -u nas-v2-apply-failed.service \
+  -u caddy.service -u nas-caddy.service -u nas-cockpit-sso.service
+record process-waits ps -eo user,pid,ppid,stat,wchan:32,comm
+record pending-systemd-jobs systemctl list-jobs --no-pager
 record failed-units systemctl --failed --no-legend --plain --no-pager
 record identity-unit-state systemctl show --no-pager \
   --property=Id,LoadState,ActiveState,SubState,Result,ExecMainCode,ExecMainStatus,InvocationID,ExecMainStartTimestampMonotonic,ExecMainExitTimestampMonotonic \
@@ -318,6 +325,31 @@ case "$WORKLOAD" in
     PLAYWRIGHT_HTML_OUTPUT_DIR="$EVIDENCE_DIR/playwright-report" \
     npm --prefix "$ROOT/cockpit" exec -- playwright test --config "$ROOT/cockpit/e2e/playwright.config.mjs" \
       --output "$EVIDENCE_DIR/test-results"
+    # The editor flow can only observe the desired document; a reconcile that
+    # fails before arming rollback leaves it changed without applying it.
+    log "Verify the installed authority for the edited service is applied"
+    ssh "${ssh_args[@]}" admin@"${HOST_BIND_ADDRESS:-127.0.0.1}" \
+      'sudo -n bash -s -- verify-applied-authority' <<'AUTHORITY'
+set -euo pipefail
+deadline=$((SECONDS + 300))
+while systemctl is-active --quiet nas-managed-services-reconcile.service \
+  || [[ -e /run/nas-control/reconcile.pending ]]; do
+  if ((SECONDS >= deadline)); then
+    echo "a reconcile did not settle after the browser suite" >&2
+    exit 1
+  fi
+  sleep 5
+done
+status=$(nas-managed-services-control status)
+jq -e '(.services | map(select(.id == "vm-oci-persist")) | length == 1)
+  and (.services[] | select(.id == "vm-oci-persist") | .verified == true)' <<<"$status" >/dev/null || {
+  jq '.services[] | select(.id == "vm-oci-persist")' <<<"$status" >&2
+  echo "the edited service is not verified against the applied generation" >&2
+  exit 1
+}
+AUTHORITY
+    ssh "${ssh_args[@]}" admin@"${HOST_BIND_ADDRESS:-127.0.0.1}" \
+      'sudo -n nas-vm-guest-test --oci-probe remove'
     ;;
   installed-command-fuzz)
     fuzz_out="${NAS_INSTALLED_FUZZ_OUT:-$ROOT/installed-command-fuzz.json}"

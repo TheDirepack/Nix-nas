@@ -135,5 +135,7 @@ NAS_INSTALLED_FUZZ_SMOKE=1 \
     python3 tests/vm/adversarial-installed.py >"$work/nas-installed-command-smoke.json"
 jq -e '.ok == true and .smoke == true and .commands > 0' \
   "$work/nas-installed-command-smoke.json" >/dev/null
+run_appliance nas-vm-guest-test --oci-probe verify --stage persistent-suite-final
+run_appliance nas-vm-guest-test --oci-probe remove
 
 printf '\nFULL NIXOS NAS VM SUITE PASSED\n'

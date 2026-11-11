@@ -118,9 +118,10 @@ class SetupRebootE2eContracts(unittest.TestCase):
         locked_surface.assert_called_once_with()
         wait_active.assert_called_once_with("nas-authentik-proxy-outpost.service", timeout_seconds=120)
         self.assertEqual(calls[0], ("nas-setup", "status"))
-        self.assertEqual(calls[2], ("zpool", "import", "-N", "tank"))
+        self.assertEqual(calls[2], ("nas-vm-guest-test", "--oci-probe", "locked"))
+        self.assertEqual(calls[3], ("zpool", "import", "-N", "tank"))
         self.assertEqual(
-            calls[3][:8], ("runuser", "-u", "nasadmin", "--", "env", "-C", "/", "HOME=/tank/homes/nasadmin")
+            calls[4][:8], ("runuser", "-u", "nasadmin", "--", "env", "-C", "/", "HOME=/tank/homes/nasadmin")
         )
 
     def locked_surface(self, responses):

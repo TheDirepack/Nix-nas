@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pathlib
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -38,6 +39,7 @@ class V2TransactionFaultTests(unittest.TestCase):
         rollback = source.split("rollbackToApplied = pkgs.writeShellScript \"nas-v2-rollback-to-applied\" ''", 1)[
             1
         ].split("  '';", 1)[0]
+        clear_guard = source.split("pkgs.writeShellScript \"nas-v2-clear-current-guard\" ''", 1)[1].split("  '';", 1)[0]
         stages = ("nmstate", "firewalld", "systemd", "caddy", "mark-applied", "ack-pending", "cancel")
         for established in (False, True):
             for stage in stages:
@@ -80,6 +82,7 @@ class V2TransactionFaultTests(unittest.TestCase):
                         "pkgs.jq": str(root / "tools"),
                         "caddyPackage": str(root / "tools"),
                         "guardUnitShell": "guard_unit=test-guard",
+                        "clearGuardCurrent": "bash " + shlex.quote(str(root / "clear-guard.sh")),
                         "lib.escapeShellArg planPath": shlex.quote(str(plan)),
                         "lib.escapeShellArg caddyActivePath": shlex.quote(str(root / "caddy.conf")),
                         "lib.escapeShellArg reconcilePendingPath": shlex.quote(str(root / "pending")),
@@ -94,6 +97,10 @@ class V2TransactionFaultTests(unittest.TestCase):
                     }
                     # The Python command prefix is replaced, not a second
                     # implementation of transaction ordering or history recovery.
+                    clear_script = clear_guard.replace(
+                        "${pkgs.util-linux}/bin/flock", shlex.quote(shutil.which("flock") or "flock")
+                    )
+                    (root / "clear-guard.sh").write_text(self.render(clear_script, replacements))
                     post_script = self.render(post, replacements).replace(str(root / "python/bin/python") + " ", "")
                     rollback_script = self.render(rollback, replacements).replace(
                         str(root / "python/bin/python") + " ", ""

@@ -4,6 +4,7 @@ import json
 import os
 import pathlib
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -66,6 +67,415 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 state_path=state,
                 systemctl=str(systemctl),
             )
+
+    def test_rejected_apply_restores_live_owner_as_well_as_links(self) -> None:
+        for failure_stage, initially_active, fail_restore in (
+            (stage, active, restore)
+            for stage in (
+                "restart",
+                "readiness",
+                "probe-only",
+                "dependency",
+                "dependency-start-error",
+                "dependency-starting-error",
+                "dependency-ungated-error",
+                "readiness-existing-failure",
+                "query",
+                "reset",
+                "commit",
+                "commit-existing-failure",
+                "publish",
+                "durability",
+            )
+            for active, restore in ((True, False), (False, False), (True, True), (False, True))
+            if stage
+            not in {
+                "probe-only",
+                "dependency",
+                "dependency-start-error",
+                "dependency-starting-error",
+                "dependency-ungated-error",
+            }
+            or (not active and not restore)
+        ):
+            with (
+                self.subTest(stage=failure_stage, active=initially_active, fail_restore=fail_restore),
+                tempfile.TemporaryDirectory() as raw,
+            ):
+                dependency_only = failure_stage in {
+                    "dependency",
+                    "dependency-start-error",
+                    "dependency-starting-error",
+                    "dependency-ungated-error",
+                }
+                probe_only = failure_stage in {
+                    "probe-only",
+                    "dependency",
+                    "dependency-start-error",
+                    "dependency-starting-error",
+                    "dependency-ungated-error",
+                }
+                root = pathlib.Path(raw)
+                control = root / "control"
+                runtime = root / "units"
+                quadlet = root / "quadlets"
+                runtime.mkdir()
+                quadlet.mkdir()
+                projection = control / "systemd"
+                state = control / "state.json"
+                owner = "nas-v2-demo.service"
+                ready = "nas-v2-ready-demo.service"
+                manifests = {}
+                sources = {}
+                for version in ("healthy", "candidate"):
+                    generation = control / "generations" / version / "systemd"
+                    generation.mkdir(parents=True)
+                    source = generation / "nas-v2-demo.container"
+                    source.write_text(f"[Container]\nImage={version}\n")
+                    gate = generation / ready
+                    gate.write_text(f"[Unit]\nRequires={owner}\nAfter={owner}\n[Service]\nExecStart=/bin/true\n")
+                    manifest = generation / "manifest.json"
+                    manifest.write_text(
+                        json.dumps(
+                            {
+                                "schemaVersion": 1,
+                                "activationTimeoutSeconds": 900,
+                                "links": [{"target": ready, "source": str(gate)}],
+                                "quadletLinks": [{"target": source.name, "source": str(source)}],
+                                "ownedUnits": [owner, ready],
+                                "startUnits": [owner, ready],
+                                "readinessUnits": [ready],
+                                "readinessOwners": {ready: owner},
+                                "stopUnits": [],
+                                "fingerprints": {owner: version, ready: "unchanged-probe"},
+                            }
+                        )
+                    )
+                    manifests[version] = manifest
+                    sources[version] = source
+                if failure_stage == "dependency-ungated-error":
+                    for manifest in manifests.values():
+                        value = json.loads(manifest.read_text())
+                        value["links"] = []
+                        value["ownedUnits"] = [owner]
+                        value["startUnits"] = [owner]
+                        value["readinessUnits"] = []
+                        value["readinessOwners"] = {}
+                        value["fingerprints"].pop(ready)
+                        manifest.write_text(json.dumps(value))
+                if probe_only:
+                    sources["candidate"].write_bytes(sources["healthy"].read_bytes())
+                    candidate = json.loads(manifests["candidate"].read_text())
+                    candidate["fingerprints"][owner] = "healthy"
+                    if dependency_only:
+                        trigger = manifests["candidate"].parent / "nas-v2-trigger.service"
+                        trigger.write_text(f"[Unit]\nRequires={owner}\n[Service]\nExecStart=/bin/true\n")
+                        candidate["links"].append({"target": trigger.name, "source": str(trigger)})
+                        candidate["ownedUnits"].append(trigger.name)
+                        candidate["startUnits"].append(trigger.name)
+                        candidate["fingerprints"][trigger.name] = "new-trigger"
+                    else:
+                        candidate["fingerprints"][ready] = "changed-probe"
+                    manifests["candidate"].write_text(json.dumps(candidate))
+                projection.symlink_to(manifests["healthy"].parent)
+                running = {"version": None, "allow_candidate": False, "fail_restore": False, "gate_state": "inactive"}
+                calls = []
+
+                def systemctl(_binary, operation, *units, check=True, timeout_seconds=180):
+                    if operation in {"start", "restart", "try-restart"}:
+                        self.assertGreaterEqual(timeout_seconds, 900)
+                    calls.append((operation, *units))
+                    code, output = 0, ""
+                    if operation == "is-active":
+                        active = units[0] == owner and running["version"] is not None
+                        output = (
+                            ("active" if active else "inactive")
+                            if units[0] == owner
+                            else running["gate_state"]
+                            if units[0] == ready
+                            else "active"
+                            if running.get("trigger_active", False)
+                            else "inactive"
+                        )
+                        if units[0] == owner and active and running.get("owner_starting", False):
+                            output = "activating"
+                        code = 0 if output == "active" else 3
+                        if failure_stage == "query" and running.get("query_failure") and units[0] == owner:
+                            code, output = 1, ""
+                    elif operation in {"restart", "start", "try-restart"} and units[0] == owner:
+                        desired = (quadlet / "nas-v2-demo.container").read_text().split("Image=", 1)[1].strip()
+                        if running["fail_restore"] and desired == "healthy":
+                            code = 1
+                        else:
+                            running["version"] = desired
+                            if desired == "candidate" and failure_stage == "restart":
+                                code = 1
+                    elif operation in {"start", "restart"} and units[0] == "nas-v2-trigger.service":
+                        running["trigger_active"] = True
+                        running["version"] = "healthy"
+                        if failure_stage in {
+                            "dependency-start-error",
+                            "dependency-starting-error",
+                            "dependency-ungated-error",
+                        }:
+                            running["owner_starting"] = failure_stage == "dependency-starting-error"
+                            code = 1
+                    elif operation == "stop" and units[0] == "nas-v2-trigger.service":
+                        running["trigger_active"] = False
+                    elif operation == "restart" and units[0] == ready:
+                        if probe_only and running["version"] is None:
+                            running["version"] = "healthy"
+                        code = int(
+                            (
+                                running["version"] == "candidate"
+                                or (probe_only and running.get("candidate_attempt", False))
+                            )
+                            and not running["allow_candidate"]
+                        )
+                        running["gate_state"] = "failed" if code else "inactive"
+                        if code and failure_stage == "query":
+                            running["query_failure"] = True
+                    elif operation == "reset-failed" and units[0] == ready:
+                        if failure_stage == "reset":
+                            code = 1
+                        else:
+                            running["gate_state"] = "inactive"
+                    elif operation == "stop" and units[0] == owner:
+                        if running["fail_restore"]:
+                            code = 1
+                        else:
+                            running["version"] = None
+                            running["owner_starting"] = False
+                    if code and check:
+                        raise reconcile.SystemdReconcileError(f"systemctl {operation} {' '.join(units)} failed")
+                    return subprocess.CompletedProcess([], code, output, "")
+
+                def apply(manifest: pathlib.Path) -> dict[str, object]:
+                    return reconcile.reconcile(
+                        manifest_path=manifest,
+                        projection_root=projection,
+                        systemd_runtime_dir=runtime,
+                        quadlet_runtime_dir=quadlet,
+                        state_path=state,
+                        systemctl="systemctl",
+                    )
+
+                with mock.patch.object(reconcile, "_run_systemctl", side_effect=systemctl):
+                    apply(manifests["healthy"])
+                    previous_state = state.read_bytes() + b"\n "
+                    state.write_bytes(previous_state)
+                    running["version"] = "healthy" if initially_active else None
+                    running["fail_restore"] = fail_restore
+                    running["candidate_attempt"] = True
+                    running["gate_state"] = (
+                        "failed"
+                        if failure_stage in {"readiness-existing-failure", "commit-existing-failure"}
+                        else "inactive"
+                    )
+                    running["allow_candidate"] = failure_stage in {
+                        "commit",
+                        "commit-existing-failure",
+                        "publish",
+                        "durability",
+                    }
+                    projection.unlink()
+                    projection.symlink_to(manifests["candidate"].parent)
+                    message = (
+                        "manual recovery required"
+                        if fail_restore or failure_stage in {"durability", "reset", "query"}
+                        else (
+                            "No space left"
+                            if failure_stage in {"commit", "commit-existing-failure", "publish", "durability"}
+                            else "nas-v2-trigger.service"
+                            if failure_stage
+                            in {"dependency-start-error", "dependency-starting-error", "dependency-ungated-error"}
+                            else owner
+                            if failure_stage == "restart"
+                            else ready
+                        )
+                    )
+                    write_state = reconcile._atomic_json
+                    sync_directory = reconcile._fsync_directory
+                    sync_calls = 0
+
+                    def sync(path):
+                        nonlocal sync_calls
+                        sync_calls += 1
+                        if failure_stage == "durability" or failure_stage == "publish" and sync_calls == 1:
+                            raise OSError(28, "No space left on device")
+                        sync_directory(path)
+
+                    with (
+                        mock.patch.object(reconcile, "_fsync_directory", side_effect=sync),
+                        mock.patch.object(
+                            reconcile,
+                            "_atomic_json",
+                            side_effect=OSError(28, "No space left on device")
+                            if failure_stage in {"commit", "commit-existing-failure"}
+                            else write_state,
+                        ),
+                        self.assertRaisesRegex(reconcile.SystemdReconcileError, message) as rejected,
+                    ):
+                        apply(manifests["candidate"])
+                    if failure_stage == "commit-existing-failure":
+                        self.assertIn("readiness units already failed before apply", str(rejected.exception))
+                        self.assertIn(ready, str(rejected.exception))
+                    self.assertEqual(state.read_bytes(), previous_state)
+                    self.assertEqual((quadlet / "nas-v2-demo.container").resolve(), sources["healthy"])
+                    for version, source in sources.items():
+                        self.assertEqual(
+                            source.read_text(), f"[Container]\nImage={'healthy' if probe_only else version}\n"
+                        )
+                    if fail_restore or failure_stage in {"durability", "reset", "query"}:
+                        continue
+                    self.assertEqual(running["version"], "healthy" if initially_active else None)
+                    self.assertEqual(
+                        running["gate_state"], "failed" if failure_stage == "readiness-existing-failure" else "inactive"
+                    )
+                    projection.unlink()
+                    projection.symlink_to(manifests["healthy"].parent)
+                    calls.clear()
+                    self.assertTrue(apply(manifests["healthy"])["noop"])
+                    self.assertEqual(calls, [])
+                    self.assertEqual(running["version"], "healthy" if initially_active else None)
+                    projection.unlink()
+                    projection.symlink_to(manifests["candidate"].parent)
+                    running["allow_candidate"] = True
+                    failure_stage = "retry"
+                    apply(manifests["candidate"])
+                    self.assertEqual(running["version"], "healthy" if probe_only else "candidate")
+
+    def test_unit_queries_require_recognized_states_and_exit_statuses(self) -> None:
+        for code, output, accepted in (
+            (1, "", False),
+            (3, "", False),
+            (0, "", False),
+            (1, "inactive", False),
+            (3, "garbled", False),
+            (3, "activating", False),
+            (3, "deactivating", False),
+            (0, "reloading", False),
+            (0, "refreshing", False),
+            (0, "active", True),
+            (3, "inactive", True),
+            (3, "failed", True),
+            (4, "unknown", True),
+        ):
+            with self.subTest(code=code, output=output), tempfile.TemporaryDirectory() as raw:
+                root = pathlib.Path(raw)
+                projection = root / "projection"
+                projection.mkdir()
+                source = projection / "nas-v2-demo.service"
+                source.write_text("[Service]\nExecStart=/bin/true\n")
+                manifest = projection / "manifest.json"
+                self._manifest(manifest, source)
+                state = root / "state.json"
+                runtime = root / "runtime"
+
+                def systemctl(_binary, operation, *units, check=True, timeout_seconds=180):
+                    return subprocess.CompletedProcess(
+                        [], code if operation == "is-active" else 0, output if operation == "is-active" else "", ""
+                    )
+
+                def apply() -> dict[str, object]:
+                    return reconcile.reconcile(
+                        manifest_path=manifest,
+                        projection_root=projection,
+                        systemd_runtime_dir=runtime,
+                        quadlet_runtime_dir=root / "quadlets",
+                        state_path=state,
+                        systemctl="systemctl",
+                    )
+
+                with mock.patch.object(reconcile, "_run_systemctl", side_effect=systemctl) as calls:
+                    if accepted:
+                        apply()
+                        self.assertTrue(state.exists())
+                        state.unlink()
+                        expected_active = output == "active"
+                        with mock.patch.object(reconcile, "_atomic_json", side_effect=OSError("commit failed")):
+                            with self.assertRaisesRegex(reconcile.SystemdReconcileError, "commit failed"):
+                                apply()
+                        restore_restarts = [c for c in calls.call_args_list if c.args[1] == "restart"]
+                        self.assertEqual(len(restore_restarts), 3 if expected_active else 2)
+                    else:
+                        with self.assertRaisesRegex(reconcile.SystemdReconcileError, "snapshot"):
+                            apply()
+                        self.assertFalse(state.exists())
+                        self.assertFalse((runtime / source.name).exists())
+                        self.assertTrue(all(call.args[1] == "is-active" for call in calls.call_args_list))
+
+    def test_state_change_after_snapshot_aborts_without_runtime_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            projection = root / "projection"
+            projection.mkdir()
+            source = projection / "nas-v2-demo.service"
+            source.write_text("[Service]\nExecStart=/bin/true\n")
+            manifest = projection / "manifest.json"
+            self._manifest(manifest, source)
+            states = iter(("inactive", "active"))
+
+            def systemctl(_binary, operation, *units, check=True, timeout_seconds=180):
+                self.assertEqual(operation, "is-active")
+                state = next(states)
+                return subprocess.CompletedProcess([], 0 if state == "active" else 3, state, "")
+
+            with (
+                mock.patch.object(reconcile, "_run_systemctl", side_effect=systemctl),
+                self.assertRaisesRegex(reconcile.SystemdReconcileError, "state changed before mutation"),
+            ):
+                reconcile.reconcile(
+                    manifest_path=manifest,
+                    projection_root=projection,
+                    systemd_runtime_dir=root / "runtime",
+                    quadlet_runtime_dir=root / "quadlets",
+                    state_path=root / "state.json",
+                    systemctl="systemctl",
+                )
+            self.assertFalse((root / "state.json").exists())
+            self.assertFalse((root / "runtime" / source.name).exists())
+
+    def test_failed_first_state_publication_restores_absence(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            projection = root / "projection"
+            projection.mkdir()
+            source = projection / "nas-v2-demo.service"
+            source.write_text("[Service]\nExecStart=/bin/true\n")
+            manifest = projection / "manifest.json"
+            self._manifest(manifest, source)
+            state = root / "state.json"
+            active = set()
+
+            def systemctl(_binary, operation, *units, check=True, timeout_seconds=180):
+                if operation in {"start", "restart"}:
+                    active.add(units[0])
+                elif operation == "stop":
+                    active.discard(units[0])
+                output = "active" if units and units[0] in active else "inactive"
+                return subprocess.CompletedProcess(
+                    [], 3 if operation == "is-active" and output != "active" else 0, output, ""
+                )
+
+            sync = reconcile._fsync_directory
+            with (
+                mock.patch.object(reconcile, "_run_systemctl", side_effect=systemctl),
+                mock.patch.object(reconcile, "_fsync_directory", side_effect=[OSError("sync failed"), None]),
+                self.assertRaisesRegex(reconcile.SystemdReconcileError, "sync failed"),
+            ):
+                reconcile.reconcile(
+                    manifest_path=manifest,
+                    projection_root=projection,
+                    systemd_runtime_dir=root / "runtime",
+                    quadlet_runtime_dir=root / "quadlets",
+                    state_path=state,
+                    systemctl="systemctl",
+                )
+            self.assertFalse(state.exists())
+            self.assertFalse(active)
+            self.assertFalse((root / "runtime" / source.name).exists())
+            sync(root)
 
     def test_restart_failure_restores_runtime_link_without_mutating_generations(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

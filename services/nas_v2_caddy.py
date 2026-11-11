@@ -129,7 +129,7 @@ def _render_identity_auth(
     for group in groups:
         if group != ADMIN_GROUP and not group.startswith("application."):
             raise CaddyProjectionError(f"Invalid service capability name {group!r}")
-    group_patterns = (re.escape(group).replace(r"\.", "[.]") for group in groups)
+    group_patterns = (re.escape(group).replace(r"\.", "[.]").replace(r"\-", "[-]") for group in groups)
     allowed_groups = rf"(^|[|,][[:space:]]*)({'|'.join(group_patterns)})([[:space:]]*[|,]|$)"
     lines.extend(
         [

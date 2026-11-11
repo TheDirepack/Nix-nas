@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import configparser
 import hashlib
 import json
 import os
@@ -36,23 +37,30 @@ _QUADLET_DIRECT_NETWORK = re.compile(r"^nas-v2-net-([a-z][a-z0-9-]{0,63})\.netwo
 _QUADLET_SESSION_NETWORK = re.compile(r"^nas-v2-snet-([a-z][a-z0-9-]{0,63})\.network$")
 _QUADLET = re.compile(r"^nas-v2-[A-Za-z0-9_.@:-]+\.(?:container|pod|network|volume|kube|image|build)$")
 _SYSTEMCTL_TIMEOUT_SECONDS = 180
+_TRANSITIONAL_UNIT_STATES = frozenset({"activating", "deactivating", "reloading", "refreshing"})
+_UNIT_QUERY_STATES = {
+    0: frozenset({"active", "reloading", "refreshing"}),
+    3: frozenset({"inactive", "failed", "activating", "deactivating", "maintenance"}),
+    4: frozenset({"unknown", "inactive"}),
+}
 # systemctl stop exits non-zero for units the manager cannot resolve; those
 # units cannot be running, so the reconcile's stop intent is already satisfied.
 _ALREADY_STOPPED_STATUSES = ("not found", "could not be found", "not loaded", "masked")
 
 
-def _read_json(path: pathlib.Path, *, required: bool) -> dict[str, Any]:
+def _read_json(path: pathlib.Path, *, required: bool) -> tuple[dict[str, Any], bytes | None]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+        value = json.loads(raw.decode("utf-8"))
     except FileNotFoundError:
         if not required:
-            return {}
+            return {}, None
         raise SystemdReconcileError(f"required state file does not exist: {path}") from None
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
         raise SystemdReconcileError(f"unable to read state file {path}: {exc}") from exc
     if not isinstance(value, dict):
         raise SystemdReconcileError(f"state file {path} must contain an object")
-    return value
+    return value, raw
 
 
 def _safe_target(root: pathlib.Path, relative: str) -> tuple[pathlib.Path, str]:
@@ -104,14 +112,13 @@ def _hash_file(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
-def _atomic_json(path: pathlib.Path, value: dict[str, Any]) -> None:
+def _atomic_bytes(path: pathlib.Path, value: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, raw_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temp = pathlib.Path(raw_name)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, indent=2, sort_keys=True)
-            handle.write("\n")
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(value)
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temp, 0o600)
@@ -119,6 +126,10 @@ def _atomic_json(path: pathlib.Path, value: dict[str, Any]) -> None:
         _fsync_directory(path.parent)
     finally:
         temp.unlink(missing_ok=True)
+
+
+def _atomic_json(path: pathlib.Path, value: dict[str, Any]) -> None:
+    _atomic_bytes(path, (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8"))
 
 
 def _projection_roots(projection_root: pathlib.Path) -> tuple[pathlib.Path, ...]:
@@ -264,14 +275,16 @@ def _parse_links(
     return links, affected_units, hashes, drift
 
 
-def _run_systemctl(systemctl: str, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+def _run_systemctl(
+    systemctl: str, *args: str, check: bool = True, timeout_seconds: int = _SYSTEMCTL_TIMEOUT_SECONDS
+) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
             [systemctl, *args],
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
-            timeout=_SYSTEMCTL_TIMEOUT_SECONDS,
+            timeout=timeout_seconds,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -345,10 +358,17 @@ def reconcile(
     systemctl: str,
 ) -> dict[str, Any]:
     """Apply native topology transactionally; lost transient sessions require manual recovery."""
-    manifest = _read_json(manifest_path, required=True)
-    previous = _read_json(state_path, required=False)
+    manifest, _ = _read_json(manifest_path, required=True)
+    previous, previous_bytes = _read_json(state_path, required=False)
     if manifest.get("schemaVersion") != 1:
         raise SystemdReconcileError("unsupported systemd projection manifest version")
+    activation_timeout = manifest.get("activationTimeoutSeconds", _SYSTEMCTL_TIMEOUT_SECONDS)
+    if not isinstance(activation_timeout, int) or isinstance(activation_timeout, bool) or activation_timeout < 180:
+        raise SystemdReconcileError("invalid activationTimeoutSeconds")
+    previous_timeout = previous.get("activationTimeoutSeconds", _SYSTEMCTL_TIMEOUT_SECONDS)
+    if not isinstance(previous_timeout, int) or isinstance(previous_timeout, bool) or previous_timeout < 180:
+        raise SystemdReconcileError("invalid previous activationTimeoutSeconds")
+    activation_timeout = max(activation_timeout, previous_timeout)
 
     links, affected_units, current_hashes, link_drift = _parse_links(
         manifest,
@@ -367,12 +387,36 @@ def reconcile(
 
     owned = _string_set("ownedUnits", manifest)
     start = _string_set("startUnits", manifest)
+    readiness = _string_set("readinessUnits", manifest)
     stop = _string_set("stopUnits", manifest)
     if not start <= owned or not stop <= owned:
         raise SystemdReconcileError("startUnits and stopUnits must be owned units")
+    if not readiness <= start:
+        raise SystemdReconcileError("readinessUnits must be started owned units")
+    readiness_owners = manifest.get("readinessOwners", {})
+    if (
+        not isinstance(readiness_owners, dict)
+        or set(readiness_owners) != readiness
+        or not all(isinstance(owner, str) and owner in start - readiness for owner in readiness_owners.values())
+    ):
+        raise SystemdReconcileError("readinessOwners must map each gate to a started owner")
+
+    for gate, owner in readiness_owners.items():
+        source = links.get(gate)
+        parser = configparser.ConfigParser(interpolation=None)
+        try:
+            if source is None:
+                raise SystemdReconcileError(f"readinessOwners gate has no generated unit: {gate}")
+            parser.read_string(source.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, configparser.Error) as error:
+            raise SystemdReconcileError(f"unable to validate readinessOwners for {gate}: {error}") from error
+        if any(parser.get("Unit", key, fallback="").split() != [owner] for key in ("Requires", "After")):
+            raise SystemdReconcileError(f"readinessOwners must match the declared gate owner: {gate}")
 
     previous_owned = _string_set("ownedUnits", previous) if previous else set()
     previous_start = _string_set("startUnits", previous) if previous else set()
+    previous_readiness = _string_set("readinessUnits", previous) if previous else set()
+    previous_readiness_owners = previous.get("readinessOwners", {}) if previous else {}
     previous_stop = _string_set("stopUnits", previous) if previous else set()
     previous_links_raw = previous.get("links", {}) if previous else {}
     previous_quadlet_links_raw = previous.get("quadletLinks", {}) if previous else {}
@@ -387,9 +431,14 @@ def reconcile(
             previous_hashes,
             previous_quadlet_hashes,
             previous_fingerprints,
+            previous_readiness_owners,
         )
     ):
         raise SystemdReconcileError("previous systemd reconcile state is malformed")
+    if previous:
+        _state_link_keys("readinessOwners", previous)
+        if not all(isinstance(owner, str) for owner in previous_readiness_owners.values()):
+            raise SystemdReconcileError("previous systemd reconcile field readinessOwners is malformed")
 
     previous_link_keys = _state_link_keys("links", previous) if previous else set()
     previous_quadlet_link_keys = _state_link_keys("quadletLinks", previous) if previous else set()
@@ -417,7 +466,13 @@ def reconcile(
         or link_drift
         or quadlet_drift
     )
-    lifecycle_changed = owned != previous_owned or start != previous_start or stop != previous_stop
+    lifecycle_changed = (
+        owned != previous_owned
+        or start != previous_start
+        or stop != previous_stop
+        or readiness != previous_readiness
+        or readiness_owners != previous_readiness_owners
+    )
     fingerprint_changed = fingerprints != previous_fingerprints
     if previous and not topology_changed and not lifecycle_changed and not fingerprint_changed:
         return {"stopped": [], "changed": [], "started": [], "noop": True}
@@ -444,15 +499,45 @@ def reconcile(
     }
     units_to_stop.update(changed_sessions)
 
-    def is_active(unit: str) -> bool | None:
+    def unit_state(unit: str) -> str | None:
         try:
             result = _run_systemctl(systemctl, "is-active", unit, check=False)
         except SystemdReconcileError:
             return None
-        return result.stdout.strip() == "active"
+        state = result.stdout.strip()
+        return state if state in _UNIT_QUERY_STATES.get(result.returncode, ()) else None
 
-    all_units = previous_owned | owned | previous_start | start | stop | units_to_stop | changed_units
-    active_snapshot = {unit: is_active(unit) for unit in sorted(all_units)}
+    def is_active(unit: str, *, activating_is_active: bool = False) -> bool | None:
+        state = unit_state(unit)
+        if activating_is_active and state == "activating":
+            return True
+        return None if state is None or state in _TRANSITIONAL_UNIT_STATES else state in _UNIT_QUERY_STATES[0]
+
+    planned_activations = ((changed_units & owned) - readiness - changed_sessions) | (
+        (start - previous_start) - readiness
+    )
+    # Unchanged probes still gate an activated owner, but unrelated applies
+    # must not be rejected by a workload they did not change or activate.
+    readiness_to_run = {
+        unit
+        for unit in readiness
+        if unit not in previous_readiness
+        or fingerprints.get(unit) != previous_fingerprints.get(unit)
+        or readiness_owners[unit] != previous_readiness_owners.get(unit)
+        or readiness_owners[unit] in planned_activations
+    }
+    all_units = units_to_stop | (changed_units & owned) | (start - previous_start) | readiness_to_run
+    all_units.update(readiness_owners[gate] for gate in readiness_to_run)
+    state_snapshot = {unit: unit_state(unit) for unit in sorted(all_units)}
+    unstable_units = [
+        unit for unit, state in state_snapshot.items() if state is None or state in _TRANSITIONAL_UNIT_STATES
+    ]
+    if unstable_units:
+        raise SystemdReconcileError(f"unable to snapshot stable systemd state: {', '.join(unstable_units)}")
+    active_snapshot = {unit: state in _UNIT_QUERY_STATES[0] for unit, state in state_snapshot.items()}
+    observed_units = dict(state_snapshot)
+    for unit in sorted(owned - set(observed_units)):
+        observed_units[unit] = unit_state(unit)
     # An interrupted or partially recorded apply can leave a target active with
     # no installed link. Stop it before installing the changed descriptor.
     active_unlinked_sessions = {
@@ -490,19 +575,61 @@ def reconcile(
 
     disrupted_sessions: set[str] = set()
 
-    def rollback_active_state() -> None:
+    def rollback_active_state(*, links_restored: bool) -> list[str]:
+        errors: list[str] = []
         for unit, was_active in active_snapshot.items():
-            if was_active is None or unit in disrupted_sessions:
+            if unit in disrupted_sessions:
                 # Starting this target cannot recreate its lost transient instances.
                 continue
-            now_active = is_active(unit)
-            if now_active is None or now_active == was_active:
+            now_active = is_active(unit, activating_is_active=was_active is False and unit in activated_units)
+            if was_active is None or now_active is None:
+                errors.append(f"unable to verify rollback active state for {unit}")
+                continue
+            if now_active == was_active:
+                continue
+            if was_active and not links_restored:
+                errors.append(f"cannot safely start {unit} without restored links")
                 continue
             try:
-                _run_systemctl(systemctl, "start" if was_active else "stop", unit)
-            except SystemdReconcileError:
-                continue
+                _run_systemctl(systemctl, "start" if was_active else "stop", unit, timeout_seconds=activation_timeout)
+            except SystemdReconcileError as error:
+                errors.append(str(error))
+        return errors
 
+    activated_units: set[str] = set()
+    attempted_readiness: set[str] = set()
+    state_commit_attempted = False
+
+    def discover_dependency_activations(*, include_readiness: bool) -> None:
+        for owner in sorted(owned - readiness - activated_units):
+            before = observed_units[owner]
+            if before not in {"inactive", "failed", "unknown"}:
+                continue
+            now = unit_state(owner)
+            if now is None:
+                state_snapshot[owner] = before
+                active_snapshot[owner] = False
+                raise SystemdReconcileError(f"unable to inspect dependency activation: {owner}")
+            if now not in _UNIT_QUERY_STATES[0] | {"activating"}:
+                continue
+            activated_units.add(owner)
+            state_snapshot[owner] = before
+            active_snapshot[owner] = False
+            if not include_readiness:
+                continue
+            for gate, gate_owner in readiness_owners.items():
+                if gate_owner != owner:
+                    continue
+                prior = observed_units[gate]
+                if prior is None or prior in _TRANSITIONAL_UNIT_STATES:
+                    raise SystemdReconcileError(f"unable to snapshot dependency readiness: {gate}")
+                state_snapshot[gate] = prior
+                active_snapshot[gate] = prior in _UNIT_QUERY_STATES[0]
+                readiness_to_run.add(gate)
+
+    for unit, expected in state_snapshot.items():
+        if unit_state(unit) != expected:
+            raise SystemdReconcileError(f"systemd state changed before mutation: {unit}; retry after it settles")
     try:
         for unit in sorted(units_to_stop):
             if _SESSION_TARGET.fullmatch(unit) and unit not in previous_links_raw and unit not in current_links:
@@ -532,31 +659,43 @@ def reconcile(
             _run_systemctl(systemctl, "daemon-reload")
 
         restarted: set[str] = set()
-        for unit in sorted(changed_units & owned):
+        for unit in sorted((changed_units & owned) - readiness):
             if unit in changed_sessions:
                 # A stopped transient must not be restarted with stale args.
                 continue
+            activated_units.add(unit)
             if unit in start:
-                _run_systemctl(systemctl, "restart", unit)
+                _run_systemctl(systemctl, "restart", unit, timeout_seconds=activation_timeout)
                 restarted.add(unit)
             else:
-                _run_systemctl(systemctl, "try-restart", unit)
+                _run_systemctl(systemctl, "try-restart", unit, timeout_seconds=activation_timeout)
 
-        units_to_start = (start - previous_start) - restarted
+        units_to_start = (start - previous_start) - restarted - readiness
         for unit in sorted(units_to_start):
-            _run_systemctl(systemctl, "start", unit)
+            activated_units.add(unit)
+            _run_systemctl(systemctl, "start", unit, timeout_seconds=activation_timeout)
+
+        discover_dependency_activations(include_readiness=True)
+        if readiness_to_run:
+            attempted_readiness.update(readiness_to_run)
+            _run_systemctl(systemctl, "restart", *sorted(readiness_to_run), timeout_seconds=activation_timeout)
+            restarted.update(readiness_to_run)
 
         state = {
             "schemaVersion": 1,
+            "activationTimeoutSeconds": manifest.get("activationTimeoutSeconds", _SYSTEMCTL_TIMEOUT_SECONDS),
             "links": current_links,
             "linkHashes": current_hashes,
             "quadletLinks": current_quadlet_links,
             "quadletHashes": current_quadlet_hashes,
             "ownedUnits": sorted(owned),
             "startUnits": sorted(start),
+            "readinessUnits": sorted(readiness),
+            "readinessOwners": readiness_owners,
             "stopUnits": sorted(stop),
             "fingerprints": fingerprints,
         }
+        state_commit_attempted = True
         _atomic_json(state_path, state)
         return {
             "stopped": sorted(units_to_stop),
@@ -565,26 +704,74 @@ def reconcile(
             "noop": False,
         }
     except Exception as exc:
-        rollback_error: Exception | None = None
+        rollback_errors: list[str] = []
+        if activated_units:
+            # A failed consumer start can still have activated its dependencies.
+            try:
+                discover_dependency_activations(include_readiness=False)
+            except SystemdReconcileError as discovery_exc:
+                rollback_errors.append(str(discovery_exc))
+        links_restored = False
         try:
             rollback_links()
-            rollback_active_state()
         except Exception as rollback_exc:  # noqa: BLE001
-            rollback_error = rollback_exc
+            rollback_errors.append(str(rollback_exc))
+        else:
+            links_restored = True
+            # Restoring links cannot replace a still-active candidate process,
+            # including when activation or the state commit reports failure.
+            for unit in sorted(activated_units):
+                if active_snapshot.get(unit) is True and unit not in disrupted_sessions:
+                    try:
+                        _run_systemctl(systemctl, "restart", unit, timeout_seconds=activation_timeout)
+                    except SystemdReconcileError as restart_exc:
+                        rollback_errors.append(str(restart_exc))
+        rollback_errors.extend(rollback_active_state(links_restored=links_restored))
+        if not rollback_errors:
+            for unit in sorted(attempted_readiness):
+                if active_snapshot.get(unit) is not False or state_snapshot.get(unit) == "failed":
+                    continue
+                try:
+                    state = unit_state(unit)
+                    if state is None:
+                        raise SystemdReconcileError(f"unable to verify readiness rollback state for {unit}")
+                    if state == "failed":
+                        _run_systemctl(systemctl, "reset-failed", unit)
+                except SystemdReconcileError as reset_exc:
+                    rollback_errors.append(str(reset_exc))
+        if state_commit_attempted:
+            try:
+                try:
+                    published = state_path.read_bytes()
+                except FileNotFoundError:
+                    published = None
+                if published != previous_bytes:
+                    if previous_bytes is None:
+                        state_path.unlink(missing_ok=True)
+                        _fsync_directory(state_path.parent)
+                    else:
+                        _atomic_bytes(state_path, previous_bytes)
+            except Exception as state_exc:  # noqa: BLE001
+                rollback_errors.append(f"unable to restore reconcile state: {state_exc}")
+        rollback_error = "; ".join(rollback_errors)
+        prior_failures = sorted(unit for unit in attempted_readiness if state_snapshot.get(unit) == "failed")
+        failure_detail = str(exc)
+        if prior_failures:
+            failure_detail += f"; readiness units already failed before apply: {', '.join(prior_failures)}"
         if disrupted_sessions:
             details = ", ".join(sorted(disrupted_sessions))
             rollback_detail = f"; native rollback failed: {rollback_error}" if rollback_error else ""
             raise SystemdReconcileError(
-                f"systemd reconcile failed: {exc}{rollback_detail}; transient instances may have been "
+                f"systemd reconcile failed: {failure_detail}{rollback_detail}; transient instances may have been "
                 f"terminated under {details} and cannot be recreated by target restart; manual recovery required"
             ) from exc
-        if rollback_error is not None:
+        if rollback_error:
             raise SystemdReconcileError(
-                f"systemd reconcile failed: {exc}; rollback failed: {rollback_error}; manual recovery required"
+                f"systemd reconcile failed: {failure_detail}; rollback failed: {rollback_error}; manual recovery required"
             ) from exc
-        if isinstance(exc, SystemdReconcileError):
+        if isinstance(exc, SystemdReconcileError) and not prior_failures:
             raise
-        raise SystemdReconcileError(str(exc)) from exc
+        raise SystemdReconcileError(failure_detail) from exc
 
 
 def build_parser() -> argparse.ArgumentParser:

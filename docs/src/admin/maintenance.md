@@ -22,6 +22,51 @@ For direct diagnosis, use the generated command reference and systemd journal ra
 
 For offline checks before installation or while debugging, use `nas-v2 validate`, `nas-v2 effective`, and `nas-v2 plan` with `--spec`, `--schema`, and `--platform` overrides as needed. `nas-v2 apply` delegates to the same finite reconciliation entry point used by systemd.
 
+## Rejected application updates
+
+Saving an always-on application's definition in Cockpit Services runs its declared
+readiness probes after activating an affected runtime. Persistent-daemon
+readiness budgets are limited to 150 seconds; longer budgets are rejected during
+projection validation before runtime activation. The generated gate includes
+a finite startup allowance for probe and process overhead. Affected gates run
+together in one systemd job. Before arming rollback, the command derives a finite
+budget from the desired dependency graph, declared readiness deadlines and prior
+owned units. It includes allowances for ordered dependency startup, sequential
+owner activation, compensation and other projections. The CLI and Cockpit wait
+beyond that same transaction budget so they can report its result. Large service
+graphs can therefore take longer before the rollback guard fires. A desired edit
+after budgeting rejects the transaction before compilation and runtime mutation;
+retry the edit after the current operation finishes. A probe failure rejects
+the apply. The controller attempts to restore the previous generation's runtime
+links, previously active owners, and recorded state. It reports failed or
+uncertain recovery explicitly; a rejected update must not be treated as healthy
+merely because the previous definition is visible again. Transient sessions
+that were terminated may need operator recovery.
+
+Generated OCI applications stop with the protected-service target when secrets
+are locked. Enabled persistent OCI applications and their readiness gates join
+that target again on secret activation. A generated OCI owner cannot start
+without the runtime secret-ready marker.
+
+Use the Services error and read-only status and journal information to identify
+the failed gate. Replace `APP` with the service identifier:
+
+```bash
+sudo nas-managed-services-control status
+sudo journalctl -b -u nas-v2-ready-APP.service -u nas-managed-services-reconcile.service
+```
+
+Check the declared endpoint, path or native-unit probe and the workload's own
+logs. Correct the application definition or its dependency, then retry through
+Services. An affected unit that is starting, stopping or reloading must settle
+before a safe snapshot can be taken. A changed state detected immediately before
+mutation also rejects the apply. Keep lifecycle changes on the coordinated
+Cockpit/CLI path; avoid direct concurrent `systemctl` changes during an apply.
+The final state recheck narrows the race but cannot lock arbitrary root actions. If the error reports manual recovery,
+inspect the named units before retrying. Do not clear a readiness failure just
+to make an update appear successful; earlier probe failures remain in the
+journal even when a later probe succeeds.
+
 ## Replication drill cleanup
 
 `./scripts/live-validation.sh syncoid` creates a disposable child dataset under `NAS_SYNCOID_SOURCE` and claims `<NAS_SYNCOID_TARGET>/nas-live-<timestamp>` on the receiving host. A successful drill destroys the source child and its snapshot, the clone, the replicated `@validation` snapshot, the replica, and the claim, all non-recursively. No replicated target dataset remains after a successful drill.

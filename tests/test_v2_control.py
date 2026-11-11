@@ -16,6 +16,14 @@ import nas_v2_control as control  # noqa: E402
 
 
 class ManagedServicesV2ControlTests(unittest.TestCase):
+    def test_reconcile_client_wait_covers_guarded_apply(self):
+        with (
+            mock.patch.object(control, "run_command", return_value=mock.Mock(returncode=0)) as run,
+            mock.patch.object(control, "client_timeout", return_value=1234),
+        ):
+            control._reconcile()
+        self.assertEqual(run.call_args.kwargs["timeout_seconds"], 1234)
+
     def test_no_legacy_control_module_or_script_alias_exists(self):
         self.assertFalse((SERVICES / "nas_feature_control.py").exists())
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")

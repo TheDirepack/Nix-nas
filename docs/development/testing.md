@@ -150,7 +150,9 @@ Behavioral adversarial tests additionally send SQL-, shell-, traversal-, CRLF-, 
 
 CI records branch coverage over the control-plane services and applies both an aggregate floor and service-specific floors with `scripts/check-coverage.py`. Every service module has an explicit floor, including alert routing, diagnostics, structured logging, state migration, and operation locking. Floors are regression guards rather than quality scores: raising them should follow added behavioral coverage, not exclusion of difficult branches.
 
-`tests/test_e2e_v2_lifecycle.py` is the single deterministic E2E that proves the full V2 pipeline (YAML -> effective -> plan -> Caddy/systemd/network/backup/authentik) across systemd, exec, quadlet, compose, VM, job, and OCI session services. Focused specification and editor tests cover normalization and round trips for every runtime type. The VM guest suite (`tests/vm/guest-test.sh`) additionally loads test-only OCI images without registry access and validates create, update, failed-update rollback, and removal through the installed control plane.
+`tests/test_e2e_v2_lifecycle.py` is a deterministic compiler/plan smoke test across runtime declarations; it does not apply or launch all native adapters. Focused specification/editor tests cover normalization and round trips. The guest suite additionally loads offline OCI images and tests live create/update/removal, SQLite durability, credential binding, isolation and quiesced ZFS snapshot recovery. It also rejects a running candidate that fails HTTP readiness, checking the candidate's startup witness, readiness timeout and restored desired bytes/live state.
+
+A separate `vm-oci-persist` fixture remains installed for secret lock/unlock, reboot and Nix generation/package transitions. Its verifier observes revision, image, HTTP, exact dataset mount, content/ownership and actual CPU/memory/PID limits without restarting the workload. The native test removes it after qualification; the installer retains it for final browser qualification, which removes it in its disposable overlay after the browser suite. The installed Chromium project alone mutates its metadata through the Services form/YAML editor, including stale-save and invalid-input rejection; the other browser projects share the appliance and keep their existing rendering/authentication responsibilities. See the [testing work list](testing-worklist.md) for remaining gaps.
 
 ```bash
 ./scripts/run-unit-tests.py --coverage coverage.json --quiet --jobs 4
@@ -307,6 +309,14 @@ container mount/device access.
 The final installed-command workload also records curl-based HTTP adversarial evidence from the same disposable VM. That keeps protocol checks on the real appliance without confusing them with browser-rendering tests.
 
 The official-installer path additionally runs `tests/vm/setup-reboot-e2e.py` after the first-run guest suite. It writes a ZFS-backed sentinel, checks the completed V2 service set (including CopyParty and Syncthing), performs authenticated browser checks, reboots twice, and repeats those storage, service, and browser assertions after each boot. The Python runner writes one machine-readable result for the QEMU wrapper; no interactive continuation is required.
+
+The disposable OCI persistence dataset has a native mount in `vm-common.nix`.
+After the reboot harness imports the pool with `-N`, that mount starts after the
+root dataset guard and before reconciliation or the OCI owner. It follows the
+protected target through stop/reactivation and is conditional on the completed
+fixture baseline, so initial setup does not require a nonexistent dataset.
+V2 storage declarations do not create or mount host datasets, and persistence
+verification observes the exact mount without repairing it.
 
 ### VM failure and handoff contracts
 

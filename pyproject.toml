@@ -45,6 +45,7 @@ py-modules = [
   "nas_v2_accelerator",
   "nas_v2_activation",
   "nas_v2_apply",
+  "nas_v2_apply_budget",
   "nas_v2_authentik_blueprint",
   "nas_v2_backup",
   "nas_v2_bootstrap",

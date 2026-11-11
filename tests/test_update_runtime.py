@@ -526,10 +526,6 @@ class UpdateRuntimeTests(unittest.TestCase):
         _, down = self.health_from_state(state, ["nas-v2-timer-demo-0.timer"])
         self.assertIn("nas-v2-demo.service (inactive)", down.stderr)
 
-    # The reconciler on main does not commit readinessUnits, so the gate is still
-    # required to be active and this fails. PR #206/#214 adds the field; the test
-    # then passes as an unexpected success, and this decorator must be removed.
-    @unittest.expectedFailure
     def test_reconciler_produced_readiness_gates_are_not_required_to_stay_active(self):
         state = self.reconciler_state(readiness=True)
         produced = json.loads(state.read_text(encoding="utf-8"))

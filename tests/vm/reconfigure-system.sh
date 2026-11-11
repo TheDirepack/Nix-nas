@@ -12,6 +12,7 @@ rebuild() {
   local status
   if timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
     "$TIMEOUT" nixos-rebuild "$@" --option warn-dirty false; then
+    nas-vm-guest-test --oci-probe verify --stage "rebuild $1" || return $?
     return 0
   else
     status=$?
@@ -45,6 +46,9 @@ check_doctor() {
 # unrelated failed unit. Establish a real snapshot baseline rather than
 # disabling monitoring or treating Sanoid's exit 2 as success.
 log "Initialize and verify Sanoid snapshots before NixOS generation drills"
+if ! timeout --kill-after=5s 180s nas-vm-initialize-oci-snapshots; then
+  fail "could not initialize the OCI dataset's Sanoid policy snapshots"
+fi
 if ! timeout --kill-after=5s 180s systemctl start nas-zfs-manual-snapshot.service; then
   journalctl -u nas-zfs-manual-snapshot.service --no-pager -n 50 >&2 || true
   fail "could not initialize the first Sanoid snapshots"
@@ -113,6 +117,7 @@ fi
 [[ "$(cat "$SENTINEL")" == preserve-me ]] || fail "failed candidate damaged persistent state"
 grep -q 'intentional QEMU rejected-candidate test' /tmp/nas-invalid-generation.log || \
   fail "invalid candidate failed for an unexpected reason"
+nas-vm-guest-test --oci-probe verify --stage rejected-candidate
 
 log "Candidate switch and system generation rollback"
 cp -a "$SOURCE/." "$work/candidate/"

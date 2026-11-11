@@ -417,9 +417,11 @@ class CockpitApiDriftTests(unittest.TestCase):
         with (
             mock.patch.object(api, "acquire_operation", return_value=contextlib.nullcontext(active)),
             mock.patch.object(api, "run", return_value=CommandResult(0, '{"ok":true}', "")) as run,
+            mock.patch.object(api, "managed_apply_timeout", return_value=1234),
         ):
             self.assertTrue(api.set_managed_service("demo", "always")["ok"])
         self.assertEqual(run.call_args.kwargs["env"]["NAS_OPERATION_COORDINATION_TOKEN"], "coord-token")
+        self.assertEqual(run.call_args.kwargs["timeout_seconds"], 1264)
         with (
             mock.patch.object(api, "acquire_operation", return_value=contextlib.nullcontext(active)),
             mock.patch.object(api, "run", return_value=CommandResult(0, "[]", "")),

@@ -25,6 +25,7 @@ from nas_v2_activation import (
     socket_path,
     socket_unit,
 )
+from nas_v2_apply_budget import document_budget
 from nas_v2_compose_import import ComposeImportError, import_compose
 from nas_v2_libvirt import LibvirtProjectionError, render_domain_xml, validate_domain_xml
 from nas_v2_quadlet import QuadletProjectionError, render_quadlet, validate_quadlets
@@ -37,6 +38,8 @@ class SystemdProjectionError(RuntimeError):
 
 _SAFE_IDENTITY = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_.-]{0,63}|[0-9]{1,10})$")
 APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
+# Individual probes stay bounded; activation budgets also cover dependencies.
+PERSISTENT_READINESS_TIMEOUT_MAX = 150
 _CTRL = ("\x00", "\r", "\n")
 
 
@@ -340,6 +343,8 @@ def _existing_dropin(effective: dict[str, Any], service: dict[str, Any]) -> byte
 def _quadlet_source(effective: dict[str, Any], service_id: str, service: dict[str, Any]) -> bytes:
     unit_lines = [
         "Description=" + _single_line(service["name"], field="service name"),
+        "PartOf=nas-protected-services.target",
+        "ConditionPathExists=/run/nas-secrets/ready",
         *(["StopWhenUnneeded=yes"] if _is_on_demand(service) else []),
         *_dependency_lines(effective, service),
     ]
@@ -404,6 +409,7 @@ def _readiness_unit(
     source_dir: pathlib.Path,
     descriptor_path: pathlib.Path,
     systemctl_bin: str,
+    timeout_seconds: int,
 ) -> bytes:
     return (
         "\n".join(
@@ -416,6 +422,7 @@ def _readiness_unit(
                 "",
                 "[Service]",
                 "Type=oneshot",
+                f"TimeoutStartSec={timeout_seconds + 10}",
                 f"ExecStart={_exec_quote(python_bin)} {_exec_quote(str(source_dir / 'nas_v2_readiness.py'))} --config {_exec_quote(str(descriptor_path))} --systemctl {_exec_quote(systemctl_bin)}",
                 "NoNewPrivileges=yes",
                 "PrivateTmp=yes",
@@ -708,6 +715,8 @@ def generate_projection(
     links: dict[str, str] = {}
     quadlet_links: dict[str, str] = {}
     start_units: set[str] = set()
+    readiness_owners: dict[str, str] = {}
+    protected_start: set[str] = set()
     owned_units: set[str] = set()
     stop_units: set[str] = set()
     fingerprints: dict[str, str] = {}
@@ -772,6 +781,15 @@ def generate_projection(
 
         if "readiness" in service:
             readiness = json.loads(json.dumps(service["readiness"]))
+            timeout_seconds = readiness.get("timeoutSeconds", 60)
+            if (
+                service["workload"]["kind"] == "daemon"
+                and service["workload"]["activation"] == "persistent"
+                and timeout_seconds > PERSISTENT_READINESS_TIMEOUT_MAX
+            ):
+                raise SystemdProjectionError(
+                    f"{service_id}: persistent readiness timeoutSeconds must be at most {PERSISTENT_READINESS_TIMEOUT_MAX} within the apply budget"
+                )
             for probe in readiness["probes"]:
                 if probe["type"] == "systemd" and not probe.get("unit"):
                     probe["unit"] = owner
@@ -786,6 +804,7 @@ def generate_projection(
                 source_dir=source_dir,
                 descriptor_path=dpath,
                 systemctl_bin=systemctl_bin,
+                timeout_seconds=timeout_seconds,
             )
             links[ready] = str(rpath)
             fingerprints[ready] = _fingerprint(readiness)
@@ -825,6 +844,14 @@ def generate_projection(
                     stop_units.add(f"nas-v2-ready-{service_id}.service")
             elif service["workload"]["kind"] == "daemon" and service["workload"]["activation"] == "persistent":
                 start_units.add(owner)
+                if "readiness" in service:
+                    ready = f"nas-v2-ready-{service_id}.service"
+                    start_units.add(ready)
+                    readiness_owners[ready] = owner
+                if runtime["type"] in {"oci", "quadlet"}:
+                    protected_start.add(owner)
+                    if "readiness" in service:
+                        protected_start.add(f"nas-v2-ready-{service_id}.service")
 
         fp: dict[str, Any] = {
             "runtime": runtime,
@@ -843,12 +870,21 @@ def generate_projection(
             fp["runtimeSourceSha256"] = source_hash
         fingerprints[owner] = _fingerprint(fp)
 
+    if protected_start:
+        target = "nas-protected-services.target.d/50-nas-v2.conf"
+        path = unit_dir / target
+        files[path] = ("[Unit]\nWants=" + " ".join(sorted(protected_start)) + "\n").encode()
+        links[target] = str(path)
+
     manifest = {
         "schemaVersion": 1,
+        "activationTimeoutSeconds": document_budget(effective)["commandSeconds"],
         "links": [{"target": target, "source": source} for target, source in sorted(links.items())],
         "quadletLinks": [{"target": target, "source": source} for target, source in sorted(quadlet_links.items())],
         "ownedUnits": sorted(owned_units),
         "startUnits": sorted(start_units),
+        "readinessUnits": sorted(readiness_owners),
+        "readinessOwners": readiness_owners,
         "stopUnits": sorted(stop_units),
         "fingerprints": fingerprints,
     }
@@ -876,27 +912,32 @@ def validate_projection(
     virt_xml_validate_bin: str | None = None,
 ) -> None:
     unit_files = {p: d for p, d in files.items() if p.suffix in {".service", ".timer", ".target", ".socket", ".path"}}
-    if unit_files:
+    has_quadlets = any(p.suffix == ".container" for p in files)
+    if has_quadlets and quadlet_generator_bin is None:
+        raise SystemdProjectionError("Quadlet projection requires a Podman system generator binary")
+    if unit_files or has_quadlets:
         with tempfile.TemporaryDirectory(prefix="nas-v2-systemd-verify-") as raw_tmp:
             tmp = pathlib.Path(raw_tmp)
-            verify_paths: list[str] = []
+            if quadlet_generator_bin is not None and has_quadlets:
+                try:
+                    # Readiness/activation units require the actual generator-owned container units.
+                    validate_quadlets(files, generator_bin=quadlet_generator_bin, output_dir=tmp)
+                except QuadletProjectionError as exc:
+                    raise SystemdProjectionError(str(exc)) from exc
             for src, data in unit_files.items():
                 dst = tmp / src.name
+                if dst.exists() or dst.is_symlink():
+                    raise SystemdProjectionError(f"generated unit conflicts with Quadlet output: {src.name}")
                 dst.write_bytes(data)
-                verify_paths.append(str(dst))
+            verify_paths = sorted(
+                str(p) for p in tmp.iterdir() if p.suffix in {".service", ".timer", ".target", ".socket", ".path"}
+            )
             result = subprocess.run(
                 [systemd_analyze_bin, "verify", *verify_paths], capture_output=True, text=True, timeout=30, check=False
             )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()[:4000]
             raise SystemdProjectionError(f"systemd-analyze rejected generated units: {detail}")
-    if any(p.suffix == ".container" for p in files):
-        if quadlet_generator_bin is None:
-            raise SystemdProjectionError("Quadlet projection requires a Podman system generator binary")
-        try:
-            validate_quadlets(files, generator_bin=quadlet_generator_bin)
-        except QuadletProjectionError as exc:
-            raise SystemdProjectionError(str(exc)) from exc
     vm_xml = [d for p, d in files.items() if p.parent.name == "vm" and p.suffix == ".xml"]
     if vm_xml:
         if virt_xml_validate_bin is None:

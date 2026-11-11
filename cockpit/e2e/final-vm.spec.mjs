@@ -556,3 +556,139 @@ test("final VM CSP blocks inline script execution in the NAS component frame", a
   });
   expect(result).toBe(0);
 });
+
+test("installed Services editor reconciles form changes and preserves rejected edits", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "chromium-final-vm",
+    "One mutation flow owns the shared appliance document; other projects qualify rendering and authentication.",
+  );
+  const reconcileTimeout = 300_000;
+  test.setTimeout(3 * reconcileTimeout + 180_000);
+  const openEditor = async (target) => {
+    await target.goto("/console/nas");
+    if (/\/identity\//.test(target.url())) await login(target);
+    const frame = await getNasComponentFrame(target);
+    await frame.locator(".pf-v6-c-nav").getByText("Managed services", {exact: true}).click();
+    await frame.getByRole("button", {name: "Edit services", exact: true}).click();
+    const app = frame.locator(".nas-schema-map-entry").filter({
+      has: frame.getByRole("textbox", {name: "Key for vm-oci-persist", exact: true}),
+    });
+    const name = app.getByRole("textbox", {name: "name", exact: true});
+    await expect(name).toBeVisible();
+    return {
+      frame,
+      name,
+      save: frame.getByRole("button", {name: "Validate, save, and reconcile", exact: true}),
+    };
+  };
+  // A committed reconcile reloads the Caddy configuration and terminates the
+  // Cockpit transport, which detaches every open editor and makes the in-page
+  // "saving" state unobservable. Read desired and applied authority through a
+  // separate page before allowing the next mutation.
+  const openEditorEventually = async (target, timeout = 60_000) => {
+    const deadline = Date.now() + timeout;
+    for (;;) {
+      try {
+        return await openEditor(target);
+      } catch (error) {
+        if (Date.now() >= deadline) throw error;
+        await target.waitForTimeout(5_000);
+      }
+    }
+  };
+  // The save spawn carries the mutation to the authority. Navigating the page
+  // that owns it detaches the Cockpit channel and abandons the write before it
+  // lands, so that page is never reused; the authority is read from a second
+  // page that shares the authenticated browser context.
+  const submitEdit = async (editor) => {
+    await editor.save.click();
+    await expect(editor.save)
+      .toBeDisabled({timeout: 10_000})
+      .catch(() => undefined);
+  };
+  const expectPersistedName = async (target, expected) => {
+    const deadline = Date.now() + reconcileTimeout;
+    let detail = "the editor was never opened";
+    for (;;) {
+      try {
+        const opened = await openEditorEventually(target);
+        const value = await opened.name.inputValue();
+        const alerts = await opened.frame.locator(".nas-editor-card .pf-v6-c-alert").count();
+        detail = `editor shows ${JSON.stringify(value)} with ${alerts} alert(s)`;
+        if (value === expected && alerts === 0) {
+          await opened.frame.locator("body").evaluate(async () => {
+            await globalThis.cockpit.spawn(
+              [
+                "bash",
+                "-ceu",
+                "! systemctl is-active --quiet nas-managed-services-reconcile.service; " +
+                  'test "$(systemctl show -p Result --value nas-managed-services-reconcile.service)" = success; ' +
+                  "test ! -e /run/nas-control/reconcile.pending; " +
+                  "cmp /var/lib/nas-control/services.yaml " +
+                  "<(git --git-dir=/tank/nas-control/config-history.git show refs/nas/applied:services.yaml)",
+              ],
+              {superuser: "require"},
+            );
+          });
+          return opened;
+        }
+      } catch (error) {
+        detail = String(error);
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `installed reconcile did not persist ${JSON.stringify(expected)}: ${detail}`,
+        );
+      }
+      await target.waitForTimeout(5_000);
+    }
+  };
+  await login(page);
+  // A second page reads the authority, because the page that submits the edit
+  // must not navigate while its save spawn is in flight.
+  const probe = await page.context().newPage();
+  const first = await openEditor(page);
+  const original = await first.name.inputValue();
+  let primaryError;
+  try {
+    await first.name.fill("VM OCI edited through installed Cockpit");
+    await submitEdit(first);
+    const reconciled = await expectPersistedName(probe, "VM OCI edited through installed Cockpit");
+
+    await reconciled.frame.getByRole("button", {name: "Advanced YAML", exact: true}).click();
+    const yaml = reconciled.frame.locator(".nas-editor-card textarea");
+    const invalid = "schemaVersion: 3\nservices: []\n";
+    await yaml.fill(invalid);
+    await reconciled.save.click();
+    await expect(reconciled.frame.locator(".nas-editor-card .pf-v6-c-alert")).toContainText(
+      /services.*not of type.*object/i,
+      {
+        timeout: 60_000,
+      },
+    );
+    await expect(yaml).toHaveValue(invalid);
+  } catch (error) {
+    primaryError = error;
+    throw error;
+  } finally {
+    try {
+      // Restore the authoritative document even when the mutation above failed.
+      const cleanup = await openEditorEventually(probe);
+      if ((await cleanup.name.inputValue()) !== original) {
+        await cleanup.name.fill(original);
+        await submitEdit(cleanup);
+        await expectPersistedName(page, original);
+      }
+    } catch (error) {
+      await testInfo.attach("editor-cleanup-error", {
+        body: String(error),
+        contentType: "text/plain",
+      });
+      throw primaryError
+        ? new AggregateError([primaryError, error], "Services editor flow and cleanup both failed")
+        : error;
+    }
+  }
+});

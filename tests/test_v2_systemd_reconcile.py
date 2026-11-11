@@ -233,7 +233,7 @@ class V2SystemdReconcileTests(unittest.TestCase):
                 'printf "%s\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\n'
                 'case "$1" in\n'
                 "  is-active)\n"
-                '    if [ -e "$NAS_V2_ACTIVE_MARKER" ]; then printf "active\\n"; else printf "inactive\\n"; fi ;;\n'
+                '    if [ -e "$NAS_V2_ACTIVE_MARKER" ]; then printf "active\\n"; else printf "inactive\\n"; exit 3; fi ;;\n'
                 '  stop) rm -f -- "$NAS_V2_ACTIVE_MARKER" ;;\n'
                 '  start) : > "$NAS_V2_ACTIVE_MARKER" ;;\n'
                 "esac\n"
@@ -381,6 +381,7 @@ class V2SystemdReconcileTests(unittest.TestCase):
         body = '#!/bin/sh\nprintf "%s\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\n'
         for frag in fail_on:
             body += f'if echo "$*" | grep -q "{frag}"; then exit 1; fi\n'
+        body += 'if [ "$1" = is-active ]; then printf "inactive\\n"; exit 3; fi\n'
         body += "exit 0\n"
         script.write_text(body, encoding="utf-8")
         script.chmod(script.stat().st_mode | stat.S_IXUSR)
@@ -468,6 +469,122 @@ class V2SystemdReconcileTests(unittest.TestCase):
             self.assertEqual(result["started"], ["nas-v2-demo.service"])
             self.assertFalse(result["noop"])
             self.assertTrue(state.is_file())
+
+    def test_readiness_runs_after_runtime_and_failure_preserves_state_for_retry(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            projection = root / "projection"
+            projection.mkdir()
+            owner = "nas-v2-vm-demo.service"
+            ready = "nas-v2-ready-vm-demo.service"
+            source = projection / owner
+            source.write_text("[Service]\nExecStart=/bin/true\n")
+            gate = projection / ready
+            gate.write_text(f"[Unit]\nRequires={owner}\nAfter={owner}\n[Service]\nType=oneshot\nExecStart=/bin/true\n")
+            manifest = projection / "manifest.json"
+            self.write_manifest(manifest, source)
+            value = json.loads(manifest.read_text().replace("nas-v2-demo", "nas-v2-vm-demo"))
+            value["links"].append({"target": ready, "source": str(gate)})
+            value["ownedUnits"].append(ready)
+            value["startUnits"].append(ready)
+            value["readinessUnits"] = [ready]
+            value["readinessOwners"] = {ready: owner}
+            value["fingerprints"][ready] = "unchanged-probe"
+            manifest.write_text(json.dumps(value))
+            runtime = root / "systemd"
+            runtime.mkdir()
+            systemctl, log = self.make_systemctl(root)
+            state = root / "state.json"
+            kwargs = dict(
+                manifest=manifest, projection=projection, runtime=runtime, state=state, systemctl=systemctl, log=log
+            )
+            self.run_reconcile(**kwargs)
+            commands = log.read_text()
+            self.assertLess(commands.index("restart " + owner), commands.index("restart " + ready))
+            previous = state.read_bytes()
+            log.write_text("")
+            self.assertTrue(self.run_reconcile(**kwargs)["noop"])
+            self.assertEqual(log.read_text(), "")
+            state.write_text(json.dumps({**json.loads(previous), "readinessOwners": {ready: None}}))
+            with self.assertRaisesRegex(reconcile.SystemdReconcileError, "previous.*readinessOwners"):
+                self.run_reconcile(**kwargs)
+            self.assertEqual(log.read_text(), "")
+            state.write_bytes(previous)
+            manifest.write_text(json.dumps({**value, "readinessUnits": ["not-started.service"]}))
+            with self.assertRaisesRegex(reconcile.SystemdReconcileError, "readinessUnits"):
+                self.run_reconcile(**kwargs)
+            self.assertEqual(log.read_text(), "")
+            for invalid in (None, {}, {ready: "not-started.service"}, {ready: ready}):
+                manifest.write_text(json.dumps({**value, "readinessOwners": invalid}))
+                with self.assertRaisesRegex(reconcile.SystemdReconcileError, "readinessOwners"):
+                    self.run_reconcile(**kwargs)
+                self.assertEqual(log.read_text(), "")
+            other = "nas-v2-other.service"
+            other_source = projection / other
+            other_source.write_text("[Service]\nExecStart=/bin/true\n")
+            value["links"].append({"target": other, "source": str(other_source)})
+            value["ownedUnits"].append(other)
+            value["startUnits"].append(other)
+            value["fingerprints"][other] = "unrelated-runtime"
+            manifest.write_text(json.dumps(value))
+            log.write_text("")
+            manifest.write_text(json.dumps({**value, "readinessOwners": {ready: other}}))
+            with self.assertRaisesRegex(reconcile.SystemdReconcileError, "readinessOwners.*declared"):
+                self.run_reconcile(**kwargs)
+            self.assertEqual(log.read_text(), "")
+            manifest.write_text(json.dumps(value))
+            ctl, _ = self.make_systemctl(root, fail_on={"restart " + ready})
+            ctl.write_text(
+                ctl.read_text()
+                .replace(
+                    "exit 0\n",
+                    f'if [ "$1" = is-active ] && [ "$2" = {owner} ]; then printf "activating\\n"; exit 3; fi\nexit 0\n',
+                )
+                .replace('if [ "$1" = is-active ];', f'if [ "$1" = is-active ] && [ "$2" != {owner} ];')
+            )
+            self.run_reconcile(**kwargs)
+            self.assertNotIn("stop " + owner, log.read_text())
+            self.assertNotIn("restart " + ready, log.read_text())
+            self.assertIn("restart " + other, log.read_text())
+            previous = state.read_bytes()
+            log.write_text("")
+            value["fingerprints"][owner] = "unhealthy-runtime"
+            manifest.write_text(json.dumps(value))
+            self.make_systemctl(root, fail_on={"restart " + ready})
+            with self.assertRaisesRegex(reconcile.SystemdReconcileError, ready):
+                self.run_reconcile(**kwargs)
+            self.assertEqual(state.read_bytes(), previous)
+            commands = log.read_text()
+            self.assertLess(commands.index("restart " + owner), commands.index("restart " + ready))
+            self.make_systemctl(root)
+            log.write_text("")
+            self.run_reconcile(**kwargs)
+            self.assertEqual(json.loads(state.read_text())["fingerprints"][owner], "unhealthy-runtime")
+            commands = log.read_text()
+            self.assertLess(commands.index("restart " + owner), commands.index("restart " + ready))
+            previous = state.read_bytes()
+            value["fingerprints"][ready] = "changed-probe"
+            manifest.write_text(json.dumps(value))
+            self.make_systemctl(root, fail_on={"restart " + ready})
+            log.write_text("")
+            with self.assertRaisesRegex(reconcile.SystemdReconcileError, ready):
+                self.run_reconcile(**kwargs)
+            self.assertEqual(state.read_bytes(), previous)
+            self.assertNotIn("restart " + owner, log.read_text())
+            second = "nas-v2-ready-second.service"
+            second_source = projection / second
+            second_source.write_text(gate.read_text())
+            value["links"].append({"target": second, "source": str(second_source)})
+            value["ownedUnits"].append(second)
+            value["startUnits"].append(second)
+            value["readinessUnits"].append(second)
+            value["readinessOwners"][second] = owner
+            value["fingerprints"][second] = "second-probe"
+            manifest.write_text(json.dumps(value))
+            self.make_systemctl(root)
+            log.write_text("")
+            self.run_reconcile(**kwargs)
+            self.assertIn("restart " + " ".join(sorted([ready, second])), log.read_text().splitlines())
 
     def test_identical_second_reconcile_is_a_true_noop(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -906,6 +1023,7 @@ class V2SystemdReconcileTests(unittest.TestCase):
                 stop_status = root / "systemctl-unresolved"
                 stop_status.write_text(
                     "#!/bin/sh\n"
+                    'if [ "$1" = is-active ]; then printf "unknown\\n"; exit 4; fi\n'
                     'if [ "$1" = "stop" ]; then\n'
                     f"  printf '%s\\n' '{detail}' >&2\n"
                     "  exit 5\n"

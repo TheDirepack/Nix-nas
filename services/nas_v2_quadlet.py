@@ -385,7 +385,10 @@ def render_quadlet(
     return text.encode("utf-8")
 
 
-def validate_quadlets(files: dict[pathlib.Path, bytes], *, generator_bin: str) -> None:
+def validate_quadlets(
+    files: dict[pathlib.Path, bytes], *, generator_bin: str, output_dir: pathlib.Path | None = None
+) -> None:
+    """Validate sources and optionally stage native units for dependency verification."""
     quadlets = {
         p: d
         for p, d in files.items()
@@ -401,7 +404,7 @@ def validate_quadlets(files: dict[pathlib.Path, bytes], *, generator_bin: str) -
         env["QUADLET_UNIT_DIRS"] = str(root)
         try:
             result = subprocess.run(
-                [generator_bin, "--dryrun"],
+                [generator_bin, "--dryrun"] if output_dir is None else [generator_bin, *([str(output_dir)] * 3)],
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,

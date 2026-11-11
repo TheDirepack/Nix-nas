@@ -319,6 +319,15 @@ def _login_once(driver: webdriver.Chrome, origin: str, username: str, password: 
 
 
 def transient_authentik_login_error(diagnostics: dict[str, Any]) -> bool:
+    location = urllib.parse.urlsplit(str(diagnostics.get("url", "")))
+    if location.path == "/identity/if/user/" and not str(diagnostics.get("body", "")).strip():
+        asset_prefix = urllib.parse.urlunsplit((location.scheme, location.netloc, "/identity/static/", "", ""))
+        for entry in diagnostics.get("console", []):
+            message = str(entry.get("message", ""))
+            # Chromium invalidates in-flight asset requests when its certificate
+            # verifier changes; a fresh navigation must still pass every gate.
+            if message.startswith(asset_prefix) and message.endswith("net::ERR_CERT_VERIFIER_CHANGED"):
+                return True
     if urllib.parse.urlsplit(str(diagnostics.get("url", ""))).path != "/identity/if/flow/default-authentication-flow/":
         return False
     if "Response returned an error code" not in str(diagnostics.get("body", "")):
@@ -366,13 +375,15 @@ def assign_application_capabilities(
     password: str,
     username: str,
     groups: list[str],
+    *,
+    scope: list[str] | None = None,
 ) -> None:
     driver = browser()
     try:
         login(driver, origin, administrator, password, "/identity/if/user/")
         result = driver.execute_async_script(
             """
-            const [username, groupNames, done] = arguments;
+            const [username, groupNames, scopedNames, done] = arguments;
             const csrf = document.cookie
               .split('; ')
               .find(cookie => cookie.startsWith('authentik_csrf='))
@@ -392,8 +403,20 @@ def assign_application_capabilities(
               const users = await request(`core/users/?username=${encodeURIComponent(username)}`);
               const user = users.results.find(candidate => candidate.username === username);
               if (!user) throw new Error(`Authentik user ${username} was not found`);
-              const groups = await request('core/groups/?ordering=name&page_size=100');
-              const capabilityGroups = groups.results.filter(group => group.attributes?.nasManagedCapability === true);
+              const groups = [];
+              let page = 1;
+              while (page !== 0) {
+                const result = await request(`core/groups/?ordering=name&page_size=100&page=${page}`);
+                groups.push(...result.results);
+                const next = result.pagination?.next ?? 0;
+                if (!Number.isInteger(next) || next < 0 || (next !== 0 && next <= page)) {
+                  throw new Error('Invalid Authentik group pagination');
+                }
+                page = next;
+              }
+              const scope = scopedNames === null ? null : new Set(scopedNames);
+              const capabilityGroups = groups.filter(group =>
+                group.attributes?.nasManagedCapability === true && (scope === null || scope.has(group.name)));
               const requested = new Set(groupNames);
               for (const groupName of requested) {
                 if (!capabilityGroups.some(group => group.name === groupName)) {
@@ -416,6 +439,7 @@ def assign_application_capabilities(
             """,
             username,
             groups,
+            scope,
         )
         if not isinstance(result, dict) or result.get("ok") is not True:
             raise RuntimeError(f"Authentik capability assignment failed: {result}")
@@ -1016,7 +1040,10 @@ def authenticated_https_request(
     if parsed.scheme != "https" or not parsed.hostname or not path.startswith("/"):
         raise ValueError("authenticated browser probe requires an HTTPS origin and root-relative path")
     address = os.environ.get("NAS_BROWSER_HOST_ADDRESS", "").strip() or parsed.hostname
-    cookies = "; ".join(f"{cookie['name']}={cookie['value']}" for cookie in driver.get_cookies())
+    # A denied navigation may leave Chromium on an error document whose cookie
+    # scope differs from the protected route we are testing.
+    route_cookies = driver.execute_cdp_cmd("Network.getCookies", {"urls": [origin.rstrip("/") + path]})["cookies"]
+    cookies = "; ".join(f"{cookie['name']}={cookie['value']}" for cookie in route_cookies)
     headers = {"Host": parsed.netloc, "Cookie": cookies}
     payload = body.encode() if body is not None else None
     if payload is not None:
@@ -1180,6 +1207,45 @@ def read_secret(path: str) -> str:
     return value
 
 
+def verify_oci_route_account(origin: str, username: str, password: str, allowed: bool) -> None:
+    driver = browser()
+    try:
+        login(driver, origin, username, password, "/vm-oci-probe/")
+        result = authenticated_https_request(driver, origin, "/vm-oci-probe/", "GET")
+        if allowed:
+            if result["status"] != 200 or result["body"].strip() != "nas-v2-oci-v2":
+                raise RuntimeError(
+                    f"OCI route did not return the live application for {username}: HTTP {result['status']}"
+                )
+        elif result["status"] != 403 or "nas-v2-oci-v2" in result["body"]:
+            raise RuntimeError(f"OCI capability denial failed for {username}: HTTP {result['status']}")
+    finally:
+        close_browser(driver)
+
+
+def verify_oci_authorization(
+    origin: str, administrator_password: str, baseline_password: str, alice_password: str
+) -> None:
+    verify_oci_route_account(origin, "nasadmin", administrator_password, True)
+    verify_oci_route_account(origin, "alice", alice_password, False)
+    verify_oci_route_account(origin, "baseline", baseline_password, False)
+    try:
+        assign_application_capabilities(
+            origin,
+            "nasadmin",
+            administrator_password,
+            "baseline",
+            ["application.vm-oci-probe.access"],
+            scope=["application.vm-oci-probe.access"],
+        )
+        verify_oci_route_account(origin, "baseline", baseline_password, True)
+    finally:
+        assign_application_capabilities(
+            origin, "nasadmin", administrator_password, "baseline", [], scope=["application.vm-oci-probe.access"]
+        )
+    verify_oci_route_account(origin, "baseline", baseline_password, False)
+
+
 def capability_routes() -> dict[str, str]:
     return {
         "files": "/shares/",
@@ -1202,12 +1268,24 @@ def main() -> int:
     parser.add_argument("--bootstrap-only", action="store_true")
     parser.add_argument("--identity-xss-only", action="store_true")
     parser.add_argument("--syncthing-admin-only", action="store_true")
+    parser.add_argument("--oci-only", action="store_true")
     parser.add_argument(
         "--cockpit-protected-restart-only",
         action="store_true",
         help="Click Restart protected services in Cockpit; this restarts the appliance's protected stack.",
     )
     args = parser.parse_args()
+    if args.oci_only:
+        if not all((args.administrator_password_file, args.baseline_password_file, args.alice_password_file)):
+            parser.error("--oci-only requires administrator, baseline and alice password files")
+        verify_oci_authorization(
+            args.origin,
+            read_secret(args.administrator_password_file),
+            read_secret(args.baseline_password_file),
+            read_secret(args.alice_password_file),
+        )
+        print("dynamic OCI capability grant, denial and revocation checks ok")
+        return 0
     if args.cockpit_protected_restart_only:
         if args.administrator_password_file is None:
             parser.error("--cockpit-protected-restart-only requires --administrator-password-file")

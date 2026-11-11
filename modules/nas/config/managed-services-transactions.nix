@@ -12,7 +12,7 @@ let
   systemdProjectionPath = "/run/nas-control/systemd";
   systemdManifestPath = "${systemdProjectionPath}/manifest.json";
   systemdStatePath = "/run/nas-control/systemd-reconciled.json";
-  guardTimeoutSeconds = 300;
+  budgetFile = "/run/nas-control/apply-budget.json";
   guardStateDir = "/run/nas-control/rollback-guard";
   guardCurrentFile = "${guardStateDir}/current-guard-unit";
   firewalldProjectionPath = "/run/nas-control/firewalld";
@@ -105,24 +105,40 @@ let
     # for a valid first transaction; leave all state untouched and fail closed.
     exit 1
   '';
+  clearGuardCurrent = pkgs.writeShellScript "nas-v2-clear-current-guard" ''
+    set -euo pipefail
+    guard_file=${lib.escapeShellArg guardCurrentFile}
+    exec 9>"$guard_file.lock"
+    ${pkgs.util-linux}/bin/flock -x 9
+    if [ -r "$guard_file" ] && [ "$(${pkgs.coreutils}/bin/cat "$guard_file")" = "$1" ]; then
+      ${pkgs.coreutils}/bin/rm -f "$guard_file"
+    fi
+  '';
   rollbackWithGuard = pkgs.writeShellScript "nas-v2-rollback-with-guard" ''
     set -euo pipefail
     guard_file=${lib.escapeShellArg guardCurrentFile}
     guard_unit=""
     if [ -r "$guard_file" ]; then
-      guard_unit="$(${pkgs.coreutils}/bin/cat "$guard_file" 2>/dev/null | ${pkgs.coreutils}/bin/tr -d '\n' || true)"
+      guard_unit="$(${pkgs.util-linux}/bin/flock -s "$guard_file.lock" ${pkgs.coreutils}/bin/cat "$guard_file" 2>/dev/null || true)"
     fi
     if [ -n "$guard_unit" ]; then
+      recovery_timeout=600
+      if [ -r ${lib.escapeShellArg budgetFile} ]; then
+        if observed_timeout="$(${pkgs.jq}/bin/jq -er '.transactionSeconds | select(type == "number" and . >= 0 and floor == .) | . + 30 | if . < 600 then 600 else . end' ${lib.escapeShellArg budgetFile} 2>/dev/null)" \
+          && [[ "$observed_timeout" =~ ^[0-9]+$ ]]; then
+          recovery_timeout="$observed_timeout"
+        fi
+      fi
       if ${v2Python}/bin/python ${v2Source}/nas_guarded_apply.py \
         --state-dir ${lib.escapeShellArg guardStateDir} \
         --systemctl ${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"} \
         --unit "$guard_unit" \
-        fired -- ${rollbackToApplied}; then
-        ${pkgs.coreutils}/bin/rm -f "$guard_file"
+        fired --rollback-timeout "$recovery_timeout" -- ${rollbackToApplied}; then
+        ${clearGuardCurrent} "$guard_unit"
         exit 0
       else
         status=$?
-        ${pkgs.coreutils}/bin/rm -f "$guard_file"
+        ${clearGuardCurrent} "$guard_unit"
         exit $status
       fi
     fi
@@ -144,6 +160,7 @@ in
     # opt the production entry point into that history transaction.
     systemd.services.nas-managed-services-reconcile.environment.NAS_V2_HISTORY_REPOSITORY = historyRepoPath;
     systemd.services.nas-managed-services-reconcile.environment.NAS_V2_GIT_BIN = "${pkgs.git}/bin/git";
+    systemd.services.nas-managed-services-reconcile.environment.NAS_V2_APPLY_BUDGET = budgetFile;
 
     # Convert edge-triggered services.yaml notifications into a level-triggered
     # pending marker. systemd.path rechecks PathExists when the oneshot exits,
@@ -189,13 +206,21 @@ in
       ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} bootstrap
       ${guardUnitShell}
       ${pkgs.coreutils}/bin/mkdir -p ${lib.escapeShellArg guardStateDir}
-      ${pkgs.coreutils}/bin/printf '%s' "$guard_unit" > ${lib.escapeShellArg guardCurrentFile}
+      ${v2Python}/bin/python ${v2Source}/nas_v2_apply_budget.py \
+        --desired ${lib.escapeShellArg desiredPath} \
+        --state ${lib.escapeShellArg systemdStatePath} \
+        --output ${lib.escapeShellArg budgetFile}
+      guard_timeout="$(${pkgs.jq}/bin/jq -er '.transactionSeconds' ${lib.escapeShellArg budgetFile})"
+      (
+        ${pkgs.util-linux}/bin/flock -x 9
+        ${pkgs.coreutils}/bin/printf '%s' "$guard_unit" > ${lib.escapeShellArg guardCurrentFile}
+      ) 9>${lib.escapeShellArg "${guardCurrentFile}.lock"}
       ${v2Python}/bin/python ${v2Source}/nas_guarded_apply.py \
         --unit "$guard_unit" \
         --systemctl ${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"} \
         --state-dir ${lib.escapeShellArg guardStateDir} \
         arm \
-        --timeout ${toString guardTimeoutSeconds} \
+        --timeout "$guard_timeout" \
         --systemd-run ${lib.escapeShellArg "${pkgs.systemd}/bin/systemd-run"} \
         -- ${rollbackToApplied}
     '';
@@ -262,7 +287,7 @@ in
         --systemctl ${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"} \
         --state-dir ${lib.escapeShellArg guardStateDir} \
         cancel
-      ${pkgs.coreutils}/bin/rm -f ${lib.escapeShellArg guardCurrentFile}
+      ${clearGuardCurrent} "$guard_unit"
       ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} clear-previous-applied
     '';
   };

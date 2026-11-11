@@ -16,7 +16,7 @@ class RebuildFailureDiagnosticsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
             calls = root / "calls"
-            for name in ("nixos-rebuild", "systemctl", "journalctl", "zfs", "stat", "cat"):
+            for name in ("nixos-rebuild", "systemctl", "journalctl", "zfs", "stat", "cat", "nas-vm-guest-test"):
                 executable = root / name
                 executable.write_text(
                     "#!/usr/bin/env python3\n"
@@ -83,6 +83,10 @@ class RebuildFailureDiagnosticsTests(unittest.TestCase):
         self.assertIn("systemctl reset-failed nas-zfs-snapshot-health.service", prerequisite)
         self.assertIn("systemctl start nas-zfs-snapshot-health.service", prerequisite)
         self.assertLess(
+            prerequisite.index("nas-vm-initialize-oci-snapshots"),
+            prerequisite.index("systemctl start nas-zfs-snapshot-health.service"),
+        )
+        self.assertLess(
             prerequisite.index("systemctl start nas-zfs-manual-snapshot.service"),
             prerequisite.index("systemctl start nas-zfs-snapshot-health.service"),
         )
@@ -98,8 +102,19 @@ class RebuildFailureDiagnosticsTests(unittest.TestCase):
     def test_success_does_not_collect_failure_diagnostics(self):
         result, calls = self.rebuild(0)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(calls, ["nixos-rebuild switch --flake path:/reviewed#nas-qemu --option warn-dirty false"])
+        self.assertEqual(
+            calls,
+            [
+                "nixos-rebuild switch --flake path:/reviewed#nas-qemu --option warn-dirty false",
+                "nas-vm-guest-test --oci-probe verify --stage rebuild switch",
+            ],
+        )
         self.assertEqual(result.stderr, "")
+
+    def test_successful_rebuild_cannot_hide_failed_app_verification(self):
+        result, calls = self.rebuild(0, diagnostic_status=23)
+        self.assertEqual(result.returncode, 23)
+        self.assertEqual(calls[-1], "nas-vm-guest-test --oci-probe verify --stage rebuild switch")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, nasInternal, ... }:
 
 let
   sourceTree = lib.cleanSourceWith {
@@ -26,6 +26,29 @@ let
   testOciImageV2 = testOciImage "v2" "nas-v2-oci-v2";
 
   guestTestSource = builtins.readFile ../vm/guest-test.sh;
+  ociSnapshotConfig = pkgs.writeTextDir "sanoid.conf" ''
+    [tank/nas/vm-oci-persist]
+    use_template = production
+    recursive = no
+
+    [template_production]
+    ${lib.generators.toKeyValue {
+      mkKeyValue = key: value:
+        "${key} = ${if lib.isBool value then (if value then "yes" else "no") else toString value}";
+    } config.services.sanoid.templates.production}
+  '';
+  initializeOciSnapshots = pkgs.writeShellApplication {
+    name = "nas-vm-initialize-oci-snapshots";
+    runtimeInputs = [ pkgs.sanoid ];
+    text = ''
+      # Parent-recursive snapshots predate this late-created test dataset.
+      # Bootstrap its real policy snapshots without changing the parent policy.
+      sanoid --take-snapshots --force-update --configdir ${ociSnapshotConfig} \
+        --cache-dir /var/cache/nas-vm-oci-sanoid --run-dir /run/nas-vm-oci-sanoid
+      sanoid --monitor-snapshots --force-update --configdir ${ociSnapshotConfig} \
+        --cache-dir /var/cache/nas-vm-oci-sanoid --run-dir /run/nas-vm-oci-sanoid
+    '';
+  };
 
   guestTest = pkgs.writeShellApplication {
     name = "nas-vm-guest-test";
@@ -45,7 +68,12 @@ let
       keepassxc
       nodejs
       openssh
-      (python3.withPackages (pythonPackages: [ pythonPackages.hypothesis pythonPackages.selenium ]))
+      (python3.withPackages (pythonPackages: [
+        pythonPackages.hypothesis
+        pythonPackages.jsonschema
+        pythonPackages.ruamel-yaml
+        pythonPackages.selenium
+      ]))
       procps
       systemd
       util-linux
@@ -66,6 +94,11 @@ let
       export NAS_PREFLIGHT_SKIP_TOOLING=1
       export NAS_PREFLIGHT_SKIP_NIX=1
       export NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1
+
+      if [[ "''${1:-}" == "--oci-probe" ]]; then
+        shift
+        exec python3 /var/lib/nas-test/repo/tests/vm/oci-probe.py "$@"
+      fi
 
       if [[ "''${1:-}" == "--setup-reboot-e2e" ]]; then
         shift
@@ -94,12 +127,12 @@ let
   };
   reconfigureTest = pkgs.writeShellApplication {
     name = "nas-vm-reconfigure-test";
-    runtimeInputs = with pkgs; [
+    runtimeInputs = [ initializeOciSnapshots ] ++ (with pkgs; [
       coreutils
       gnugrep
       python3
       systemd
-    ];
+    ]);
     text = ''
       ${builtins.readFile ../vm/timeout-budget.sh}
       ${builtins.readFile ../vm/reconfigure-system.sh}
@@ -139,10 +172,45 @@ in
   networking.extraHosts = "127.0.0.1 nas-test.local";
   boot.supportedFilesystems = [ "zfs" ];
 
+  # Pool import uses -N after reboot; V2 storage declarations do not own mounts.
+  systemd.mounts = [
+    {
+      what = "tank/nas/vm-oci-persist";
+      where = "/tank/vm-oci-persist";
+      type = "zfs";
+      options = "zfsutil";
+      requiredBy = [ "nas-protected-services.target" ];
+      partOf = [ "nas-protected-services.target" ];
+      requires = [ "nas-zfs-mount-guard.service" ];
+      after = [ "nas-zfs-mount-guard.service" ];
+      before = [
+        "nas-managed-services-reconcile.service"
+        "nas-v2-vm-oci-persist.service"
+        "umount.target"
+      ];
+      conflicts = [ "umount.target" ];
+      unitConfig = {
+        # This mount starts after unlock, outside the boot local-fs transaction.
+        DefaultDependencies = false;
+        ConditionPathExists = "/var/lib/nas-test/oci-probe-baseline.json";
+      };
+    }
+  ];
+
   # The NixOS test kernel does not expose the per-service cgroup pressure file
   # that systemd 260 otherwise tries to bind into copyparty's private mount
   # namespace. The production service keeps its normal host accounting policy.
   systemd.services.copyparty.serviceConfig.MemoryPressureWatch = lib.mkForce "off";
+  # Health must not inspect the disposable dataset between creation and its
+  # initial policy snapshots. The timer still runs the full appliance policy.
+  # The wrapper keeps the production policy: the appliance has no /etc/sanoid,
+  # because the Sanoid module and the production unit both use generated
+  # configuration directories.
+  systemd.services.nas-zfs-snapshot-health.serviceConfig.StateDirectory = "nas-test";
+  systemd.services.nas-zfs-snapshot-health.serviceConfig.ExecStart = lib.mkForce (
+    "${pkgs.util-linux}/bin/flock /var/lib/nas-test/.snapshot-health.lock "
+    + "${pkgs.sanoid}/bin/sanoid --monitor-snapshots --force-update --configdir ${nasInternal.sanoidMonitorConfig}"
+  );
 
   users.users.admin = {
     isNormalUser = true;
@@ -186,6 +254,7 @@ in
   };
 
   environment.systemPackages = [
+    initializeOciSnapshots
     guestTest
     secretAdversarialTest
     encryptedGuestTest

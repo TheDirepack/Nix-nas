@@ -108,8 +108,10 @@
       "id": "oci-lifecycle",
       "label": "Unknown OCI service lifecycle",
       "ordinaryWaits": 10,
-      "fixedSeconds": 180,
-      "timeoutKeys": []
+      "fixedSeconds": 240,
+      "timeoutKeys": [
+        "browserAuthorization"
+      ]
     },
     {
       "id": "observability",
@@ -137,8 +139,8 @@
     {
       "id": "secrets",
       "label": "Secret stop/reactivation transaction",
-      "ordinaryWaits": 8,
-      "fixedSeconds": 0,
+      "ordinaryWaits": 9,
+      "fixedSeconds": 240,
       "timeoutKeys": [
         "secretActivation"
       ]

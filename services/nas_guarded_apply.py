@@ -161,7 +161,7 @@ def _describe_service(service: str, systemctl: str) -> dict[str, Any]:
     }
 
 
-def _fired_wrapper(*, unit: str, state_dir: str, systemctl: str, rollback: list[str]) -> list[str]:
+def _fired_wrapper(*, unit: str, state_dir: str, systemctl: str, rollback: list[str], timeout: int) -> list[str]:
     return [
         sys.executable,
         os.path.abspath(__file__),
@@ -172,6 +172,8 @@ def _fired_wrapper(*, unit: str, state_dir: str, systemctl: str, rollback: list[
         "--unit",
         unit,
         "fired",
+        "--rollback-timeout",
+        str(max(600, timeout + 30)),
         "--",
         *rollback,
     ]
@@ -247,7 +249,9 @@ def arm(
         }
         _write_state(path, payload)
 
-    trigger = _fired_wrapper(unit=unit, state_dir=str(state_root), systemctl=systemctl, rollback=command)
+    trigger = _fired_wrapper(
+        unit=unit, state_dir=str(state_root), systemctl=systemctl, rollback=command, timeout=timeout_seconds
+    )
     result = _run(
         [
             systemd_run,
@@ -362,6 +366,7 @@ def cancel(
 def fired(
     rollback_command: Sequence[str],
     *,
+    rollback_timeout_seconds: int = 600,
     unit: str = DEFAULT_UNIT,
     systemctl: str = "systemctl",
     state_dir: str | os.PathLike[str] = DEFAULT_STATE_DIR,
@@ -373,6 +378,13 @@ def fired(
         raise GuardedApplyError("rollback command must not be empty")
     state_root = _validate_state_dir(state_dir)
     service = f"{unit}.service"
+    if (
+        not isinstance(rollback_timeout_seconds, int)
+        or isinstance(rollback_timeout_seconds, bool)
+        or rollback_timeout_seconds < 600
+    ):
+        raise GuardedApplyError("rollback timeout must be at least 600 seconds")
+    rollback_timeout = rollback_timeout_seconds
     with _locked(unit, state_root):
         path = _state_path(unit, state_root)
         current = _read_state(path)
@@ -386,6 +398,7 @@ def fired(
                 "rollbackCommand": command,
                 "armedAt": _now(),
                 "updatedAt": _now(),
+                "rollbackTimeoutSeconds": rollback_timeout,
                 "detail": "timer fired without prior armed record",
                 "pid": os.getpid(),
             }
@@ -398,7 +411,13 @@ def fired(
                 return {"ok": True, "unit": unit, "state": state, "ranRollback": False}
             if state != ARMED:
                 raise _terminal_error(state, unit)
-            current.update({"state": CLAIMED, "updatedAt": _now(), "pid": os.getpid()})
+            armed_timeout = current.get("timeoutSeconds", 0)
+            if not isinstance(armed_timeout, int) or isinstance(armed_timeout, bool) or armed_timeout < 0:
+                raise GuardedApplyError("invalid armed transaction timeout")
+            rollback_timeout = max(rollback_timeout, armed_timeout + 30)
+            current.update(
+                {"state": CLAIMED, "updatedAt": _now(), "pid": os.getpid(), "rollbackTimeoutSeconds": rollback_timeout}
+            )
             _write_state(path, current)
     try:
         completed = subprocess.run(
@@ -406,12 +425,15 @@ def fired(
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=rollback_timeout,
             check=False,
         )
         exit_code = completed.returncode
         tail = ((completed.stderr or "") + ("\n" if completed.stderr else "") + (completed.stdout or "")).strip()[:4000]
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except subprocess.TimeoutExpired as exc:
+        exit_code = 124
+        tail = f"rollback timed out after {rollback_timeout}s: {exc}"[:4000]
+    except OSError as exc:
         exit_code = 127
         tail = str(exc)[:4000]
     with _locked(unit, state_root):
@@ -499,6 +521,7 @@ def main(argv: list[str] | None = None) -> int:
     arm_parser.add_argument("rollback_command", nargs=argparse.REMAINDER)
     subparsers.add_parser("cancel")
     fired_parser = subparsers.add_parser("fired")
+    fired_parser.add_argument("--rollback-timeout", type=int, default=600)
     fired_parser.add_argument("rollback_command", nargs=argparse.REMAINDER)
     subparsers.add_parser("collect")
     subparsers.add_parser("status")
@@ -523,7 +546,13 @@ def main(argv: list[str] | None = None) -> int:
             rollback = list(args.rollback_command)
             if rollback and rollback[0] == "--":
                 rollback = rollback[1:]
-            result = fired(rollback, unit=args.unit, systemctl=args.systemctl, state_dir=args.state_dir)
+            result = fired(
+                rollback,
+                unit=args.unit,
+                systemctl=args.systemctl,
+                state_dir=args.state_dir,
+                rollback_timeout_seconds=args.rollback_timeout,
+            )
             if result.get("state") in (FAILED, CLAIMED):
                 print(json.dumps(result, indent=2, sort_keys=True))
                 return 1

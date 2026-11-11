@@ -36,6 +36,12 @@ exit "${FIXTURE_BOOT_EXIT:-0}"
             "ssh": """
 case "$*" in
   *'-O exit'*) printf 'close-master\n' >> "$FIXTURE_EVENTS" ;;
+  *'verify-applied-authority'*)
+    printf 'verify-applied\n' >> "$FIXTURE_EVENTS"
+    exit "${FIXTURE_APPLIED_EXIT:-0}" ;;
+  *'--oci-probe remove'*)
+    printf 'remove-fixture\n' >> "$FIXTURE_EVENTS"
+    exit 0 ;;
   *'sudo -n bash -s'*)
     printf 'guest-diagnostics\n' >> "$FIXTURE_EVENTS"
     bash ;;
@@ -49,6 +55,7 @@ printf 'systemctl %s\n' "$*"
 case "$*" in
   *--failed*) printf 'nas-health-alert@authentik-migrate.service.service failed\n' ;;
   *show*) printf 'Result=exit-code\nExecMainStatus=23\nInvocationID=fixture-invocation\n' ;;
+  'list-jobs --no-pager') printf '42 nas-managed-services-reconcile.service start running\n' ;;
   *) exit 99 ;;
 esac
 exit "${FIXTURE_DIAGNOSTICS_EXIT:-0}"
@@ -58,6 +65,7 @@ printf 'journalctl %s\n' "$*"
 printf 'original migration/notifier journal\n'
 exit "${FIXTURE_DIAGNOSTICS_EXIT:-0}"
 """,
+            "ps": "printf 'root 42 1 S do_wait systemctl\\n'",
             "timeout": """
 printf 'timeout %s\n' "$*" >> "$FIXTURE_EVENTS"
 [[ "${FIXTURE_DIAGNOSTICS_EXIT:-0}" != 124 ]] || exit 124
@@ -193,6 +201,10 @@ exit "${FIXTURE_WORKLOAD_EXIT:-0}"
                 log = (path / "guest-diagnostics.log").read_text()
                 if diagnostics != 124:
                     self.assertIn("nas-health-alert@authentik-migrate.service.service failed", log)
+                    self.assertIn("managed-apply-state", log)
+                    self.assertIn("managed-apply-journal", log)
+                    self.assertIn("root 42 1 S do_wait systemctl", log)
+                    self.assertIn("42 nas-managed-services-reconcile.service start running", log)
                     self.assertIn("original migration/notifier journal", log)
                     self.assertIn("InvocationID=fixture-invocation", log)
                     self.assertIn("-b", log)
@@ -226,6 +238,21 @@ exit "${FIXTURE_WORKLOAD_EXIT:-0}"
         self.assertEqual(len(paths), 1)
         self.assertEqual(paths[0].stat().st_mode & 0o777, 0o700)
         self.assertTrue((paths[0] / "result.tsv").is_file())
+
+    def test_edited_authority_is_verified_as_applied_before_fixture_removal(self) -> None:
+        result = self.run_workload()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        events = (self.root / "events").read_text().splitlines()
+        self.assertLess(events.index("browser"), events.index("verify-applied"))
+        self.assertLess(events.index("verify-applied"), events.index("remove-fixture"))
+
+    def test_unapplied_edited_authority_fails_the_installed_browser_lane(self) -> None:
+        result = self.run_workload(FIXTURE_APPLIED_EXIT="1")
+        self.assertNotEqual(result.returncode, 0)
+        events = (self.root / "events").read_text().splitlines()
+        self.assertIn("verify-applied", events)
+        self.assertNotIn("remove-fixture", events)
+        self.assertEqual(events[-1], "close-master")
 
     def test_termination_is_recorded_as_failure_even_when_the_child_exits_zero(self) -> None:
         result = self.run_workload(FIXTURE_SIGNAL="TERM")

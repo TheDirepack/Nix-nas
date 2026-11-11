@@ -60,7 +60,7 @@ class V2SystemdProjectionTests(unittest.TestCase):
             proxy = files[output / "units" / activation.proxy_unit(service, route)].decode()
             self.assertIn(f'"127.0.0.1:{port}"', proxy)
             self.assertIn(str(activation.socket_path(service, route)), caddyfile)
-            escaped_service = service.replace("-", "\\\\-")
+            escaped_service = service.replace("-", "[-]")
             self.assertIn(f"application[.]{escaped_service}[.]access", caddyfile)
 
     @classmethod
@@ -257,6 +257,93 @@ class V2SystemdProjectionTests(unittest.TestCase):
         self.assertIn("nas-v2-activate-demo-web.socket", manifest["startUnits"])
         self.assertNotIn("nas-v2-demo.service", manifest["startUnits"])
         self.assertFalse(any("nas-v2-lease-" in unit or "nas-v2-idle-" in unit for unit in manifest["ownedUnits"]))
+
+    def test_persistent_readiness_respects_controller_budget(self):
+        for lifecycle_mode, timeout in (
+            ("persistent", 150),
+            ("persistent", 151),
+            ("persistent", 3600),
+            ("on-demand", 3600),
+        ):
+            with self.subTest(activation=lifecycle_mode, timeout=timeout):
+                service = {
+                    "name": "Demo",
+                    "workload": {"kind": "daemon", "activation": lifecycle_mode},
+                    "runtime": {"type": "oci", "image": "example.invalid/demo:1"},
+                    "routes": self.route(),
+                    "readiness": {"timeoutSeconds": timeout, "probes": [{"type": "tcp", "port": 8080}]},
+                }
+                if lifecycle_mode == "on-demand":
+                    service["workload"]["idleSeconds"] = 90
+                effective = self.compile({"demo": service})
+                output = pathlib.Path("/projection")
+                if lifecycle_mode == "persistent" and timeout > 150:
+                    with self.assertRaisesRegex(systemd.SystemdProjectionError, "persistent readiness.*150"):
+                        self.generate(effective, output)
+                else:
+                    files, _ = self.generate(effective, output)
+                    unit = files[output / "units" / "nas-v2-ready-demo.service"].decode()
+                    self.assertIn(f"TimeoutStartSec={timeout + 10}", unit)
+
+    def test_persistent_daemon_apply_includes_declared_readiness_gate(self):
+        for runtime in (
+            {"type": "oci", "image": "example.invalid/demo:1"},
+            {"type": "systemd", "unit": "demo.service"},
+        ):
+            for enabled, lifecycle_mode in ((True, "persistent"), (False, "persistent"), (True, "on-demand")):
+                with self.subTest(runtime=runtime, enabled=enabled, lifecycle_mode=lifecycle_mode):
+                    service = {
+                        "name": "Demo",
+                        "enabled": enabled,
+                        "workload": {"kind": "daemon", "activation": lifecycle_mode},
+                        "runtime": runtime,
+                        "readiness": {"probes": [{"type": "tcp", "port": 8080}]},
+                        "routes": self.route(),
+                    }
+                    if lifecycle_mode == "on-demand":
+                        service["workload"]["idleSeconds"] = 90
+                    _, manifest = self.generate(self.compile({"demo": service}), pathlib.Path("/projection"))
+                    self.assertEqual(
+                        "nas-v2-ready-demo.service" in manifest["startUnits"],
+                        enabled and lifecycle_mode == "persistent",
+                    )
+                    self.assertEqual(
+                        manifest["readinessUnits"],
+                        ["nas-v2-ready-demo.service"] if enabled and lifecycle_mode == "persistent" else [],
+                    )
+                    self.assertEqual(
+                        manifest["readinessOwners"],
+                        {
+                            "nas-v2-ready-demo.service": "nas-v2-demo.service"
+                            if runtime["type"] == "oci"
+                            else "demo.service"
+                        }
+                        if enabled and lifecycle_mode == "persistent"
+                        else {},
+                    )
+
+    def test_oci_persistent_lifecycle_follows_protected_target(self):
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled):
+                service = {
+                    "name": "Demo",
+                    "enabled": enabled,
+                    "workload": {"kind": "daemon", "activation": "persistent"},
+                    "runtime": {"type": "oci", "image": "example.invalid/demo:1"},
+                    "readiness": {"probes": [{"type": "tcp", "port": 8080}]},
+                    "routes": self.route(),
+                }
+                output = pathlib.Path("/projection")
+                files, manifest = self.generate(self.compile({"demo": service}), output)
+                source = files[output / "quadlet/nas-v2-demo.container"].decode()
+                self.assertIn("PartOf=nas-protected-services.target", source)
+                self.assertIn("ConditionPathExists=/run/nas-secrets/ready", source)
+                target = output / "units/nas-protected-services.target.d/50-nas-v2.conf"
+                if enabled:
+                    self.assertIn("Wants=nas-v2-demo.service nas-v2-ready-demo.service", files[target].decode())
+                    self.assertIn(str(target), [entry["source"] for entry in manifest["links"]])
+                else:
+                    self.assertNotIn(target, files)
 
     def test_ready_dependency_uses_transient_gate(self):
         effective = self.compile(
