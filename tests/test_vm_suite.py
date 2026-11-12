@@ -724,6 +724,19 @@ fail() { echo "$*" >&2; exit 1; }
             adversarial,
         )
 
+    def test_guest_secret_transactions_wait_for_operation_lock_idle(self) -> None:
+        # Recovered sync timers fire at once and hold the operation lock, which
+        # refuses a concurrent nas-secrets launch with exit 75.
+        guest = GUEST_TEST.read_text(encoding="utf-8")
+        start = guest.index('log "Secret stop/reactivation transaction"')
+        lines = guest[start : guest.index('log "Final state"', start)].splitlines()
+        launch = re.compile(r"^(?:! printf .*\| )?(?:run_as_admin nas-secrets (?:stop|activate)|activate_secrets\b)")
+        launches = [index for index, line in enumerate(lines) if launch.match(line)]
+        self.assertEqual(len(launches), 6)
+        for index in launches:
+            previous = next(line.strip() for line in reversed(lines[:index]) if not line.lstrip().startswith("#"))
+            self.assertEqual(previous, "wait_operation_lock_idle", lines[index])
+
     def test_secret_adversarial_uses_the_promoted_local_administrator(self) -> None:
         adversarial = SECRET_ADVERSARIAL.read_text(encoding="utf-8")
         self.assertIn("/var/lib/nas-setup/local-administrator.json", adversarial)

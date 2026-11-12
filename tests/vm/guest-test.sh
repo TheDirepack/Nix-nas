@@ -1776,6 +1776,9 @@ log "Secret stop/reactivation transaction"
 # Declared before the OCI baseline so that baseline's revision stays exact.
 python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" create
 python3 "$CONFIG_DIR/tests/vm/oci-probe.py" create
+# Recovered sync timers can fire immediately and hold the operation lock, which
+# correctly refuses nas-secrets with exit 75; wait before each launch.
+wait_operation_lock_idle
 run_as_admin nas-secrets stop
 wait_inactive nas-v2-vm-oci-persist.service
 python3 "$CONFIG_DIR/tests/vm/oci-probe.py" locked
@@ -1790,25 +1793,32 @@ wait_active nas-cockpit-sso.service
 ! ss -ltnp | grep -F 'cockpit-ws' || fail "Unauthenticated Cockpit root bridge opened a TCP listener"
 [[ ! -e /run/nas-secrets ]] || fail "runtime secret tree survived nas-secrets stop"
 
+wait_operation_lock_idle
 activate_secrets
 wait_active caddy.service
 wait_active copyparty.service
 wait_active authentik.service
 python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" recovered
 
+wait_operation_lock_idle
 ! printf '%s\n' wrong-password | run_as_admin nas-secrets activate-stdin \
   >/tmp/nas-secrets-wrong-active.log 2>&1 || fail "wrong password was accepted while active"
+! grep -F 'Another privileged operation conflicts' /tmp/nas-secrets-wrong-active.log >/dev/null ||
+  fail "wrong-password activation was refused by operation coordination instead of being checked"
 systemctl is-active --quiet nas-protected-services.target
 [[ -f /run/nas-secrets/ready ]]
 pass "secret stop, reactivation, and wrong-password rollback behavior passed"
 
 log "Managed Services recovery across secret activation and rollback"
 python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" break
+wait_operation_lock_idle
 run_as_admin nas-secrets stop
+wait_operation_lock_idle
 activate_secrets || fail "an unhealthy V2 application made secret activation fail"
 python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" recovered-failed
 python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" fail-outpost
 post_swap_status=0
+wait_operation_lock_idle
 # set +e does not suppress the ERR trap; an || list does.
 activate_secrets >/tmp/nas-secrets-post-swap-failure.log 2>&1 || post_swap_status=$?
 [[ "$post_swap_status" -eq 71 ]] || { cat /tmp/nas-secrets-post-swap-failure.log >&2; fail "post-swap activation failure returned $post_swap_status"; }
