@@ -1818,12 +1818,16 @@ activate_secrets || fail "an unhealthy V2 application made secret activation fai
 python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" recovered-failed
 python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" fail-outpost
 post_swap_status=0
+# Swap and rollback rename whole trees, so a restored tree keeps its identity.
+previous_secret_tree="$(stat -c '%d:%i' /run/nas-secrets)"
 wait_operation_lock_idle
 # set +e does not suppress the ERR trap; an || list does.
 activate_secrets >/tmp/nas-secrets-post-swap-failure.log 2>&1 || post_swap_status=$?
 [[ "$post_swap_status" -eq 71 ]] || { cat /tmp/nas-secrets-post-swap-failure.log >&2; fail "post-swap activation failure returned $post_swap_status"; }
 grep -q 'outpost failed to restart' /tmp/nas-secrets-post-swap-failure.log || fail "post-swap failure was not the injected outpost failure"
 [[ -f /run/nas-secrets/ready ]] || fail "rollback did not restore the previous secret tree"
+[[ "$(stat -c '%d:%i' /run/nas-secrets)" == "$previous_secret_tree" ]] ||
+  fail "rollback left a different secret tree in place of the previous one"
 systemctl is-active --quiet nas-protected-services.target || fail "rollback left the protected target stopped"
 python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" recovered-failed
 python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" repair

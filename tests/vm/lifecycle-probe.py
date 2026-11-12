@@ -175,6 +175,8 @@ def recovered(*, flaky_failed: bool) -> None:
     )
     wait_for("job timer recovery", lambda: show(TIMER, "ActiveState") == "active")
     require(completed_starts(UNITS[JOB]) == 1, "completed job was replayed")
+    # A replayed start that failed would not count as completed.
+    require(not start_jobs(UNITS[JOB], since_us=since), "recovery queued a start job for the completed job")
     require(show(UNITS[OFF], "ActiveState") == "inactive", "off daemon was started")
     require(not start_jobs(UNITS[OFF]), "off daemon received a start job")
     if flaky_failed:
