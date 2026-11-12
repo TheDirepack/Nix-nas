@@ -81,8 +81,12 @@ class SecretTransactionShellTests(unittest.TestCase):
                           [[ "${NAS_TX_STOP_LEFT_INACTIVE:-0}" != 1 ]] || touch "$NAS_TX_INACTIVE_MARKER"
                           exit 1
                         fi
+                        touch "$NAS_TX_INACTIVE_MARKER"
                         ;;
-                      start) [[ "${NAS_TX_START_FAIL:-0}" != 1 ]] ;;
+                      start)
+                        [[ "${NAS_TX_START_FAIL:-0}" != 1 ]] || exit 1
+                        rm -f "$NAS_TX_INACTIVE_MARKER"
+                        ;;
                       *) exit 0 ;;
                     esac
                     """
@@ -105,6 +109,11 @@ class SecretTransactionShellTests(unittest.TestCase):
                     printf '%s' "$count" > "$NAS_TX_MV_COUNT"
                     if [[ -n "${{NAS_TX_MEMBERS:-}}" && ! -e "$NAS_TX_MEMBERS_STOPPED" ]]; then
                       touch "$NAS_TX_MOVED_EARLY"
+                    fi
+                    if [[ "${{NAS_TX_START_BEFORE_MOVE:-0}}" == 1 && "$count" == 1 ]]; then
+                      # A start queued after the stop jobs completed runs under
+                      # the still-live ready marker until the old tree moves.
+                      touch "$NAS_TX_RESTARTED"
                     fi
                     if [[ "${{NAS_TX_MV_FAIL_AT:-0}}" == "$count" ]]; then
                       exit 74
@@ -441,6 +450,22 @@ nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.
             nas_secret_tx_swap
             [[ -f root/new && -f previous/old && -e members-stopped && ! -e members-restarted ]]
             grep -qx 'stop --job-mode=replace-irreversibly nas-protected-services.target' systemctl.log
+            """
+        )
+        self.assert_ok(result)
+
+    def test_start_after_member_stops_aborts_before_new_secrets_install(self) -> None:
+        result = self.run_scenario(
+            """
+            export NAS_TX_MEMBERS="authentik.service postgresql.service" NAS_TX_START_BEFORE_MOVE=1
+            nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+            set +e
+            nas_secret_tx_swap 2>swap.err; swap_rc=$?
+            set -e
+            [[ $swap_rc -ne 0 && -f previous/old && -f stage/new && ! -e root ]]
+            [[ "$NAS_SECRET_TX_PHASE" == old-moved && "$NAS_SECRET_TX_NEW_INSTALLED" == false ]]
+            grep -q 'protected unit is active, not stopped: authentik.service' swap.err
+            grep -q 'started before the previous secrets were moved aside' swap.err
             """
         )
         self.assert_ok(result)

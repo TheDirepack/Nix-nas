@@ -9,6 +9,7 @@ setup() {
 printf '%s\n' "$*" >> "$NAS_TX_LOG"
 case "$1" in
   is-active) [[ "${NAS_TX_ACTIVE:-1}" == 1 ]] ;;
+  show) [[ "$2" != --property=ActiveState ]] || echo inactive ;;
   stop) [[ "${NAS_TX_STOP_FAIL:-0}" != 1 ]] ;;
   start) [[ "${NAS_TX_START_FAIL:-0}" != 1 ]] ;;
   *) exit 0 ;;

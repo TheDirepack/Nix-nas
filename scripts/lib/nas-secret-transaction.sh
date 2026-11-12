@@ -74,6 +74,7 @@ nas_secret_tx_stop_members() {
     }
     members+=("$unit")
   done
+  NAS_SECRET_TX_MEMBERS=("${members[@]}")
   ((${#members[@]})) || return 0
   # A target's stop job completes before PartOf members finish stopping.
   # Joining their stop jobs keeps secrets in place until every member is down.
@@ -88,10 +89,23 @@ nas_secret_tx_stop_members() {
 }
 
 nas_secret_tx_stop_target() {
+  NAS_SECRET_TX_MEMBERS=()
   if ! nas_secret_tx_systemctl stop "$NAS_SECRET_TX_STOP_MODE" "$NAS_SECRET_TX_TARGET"; then
     nas_secret_tx_unit_stopped "$NAS_SECRET_TX_TARGET" || return 1
   fi
   nas_secret_tx_stop_members
+}
+
+# Irreversible stop jobs cannot refuse a start queued after they completed, and
+# the live ready marker still admits gated consumers until the old tree moves.
+# Re-checking once it has moved catches any consumer started in between.
+nas_secret_tx_still_stopped() {
+  local unit stopped=true
+  for unit in "$NAS_SECRET_TX_TARGET" "${NAS_SECRET_TX_MEMBERS[@]}"; do
+    nas_secret_tx_unit_stopped "$unit" || stopped=false
+  done
+  "$stopped" || nas_secret_tx_report "a protected unit started before the previous secrets were moved aside"
+  "$stopped"
 }
 
 nas_secret_tx_realpath_lexical() {
@@ -277,6 +291,7 @@ nas_secret_tx_swap() {
     NAS_SECRET_TX_OLD_MOVED=true
   fi
   NAS_SECRET_TX_PHASE=old-moved
+  nas_secret_tx_still_stopped || return 1
   nas_secret_tx_privileged mv -T -- "$NAS_SECRET_TX_STAGE" "$NAS_SECRET_TX_ROOT" || return $?
   NAS_SECRET_TX_NEW_INSTALLED=true
   NAS_SECRET_TX_PHASE=new-installed
