@@ -40,11 +40,12 @@ _SAFE_IDENTITY = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_.-]{0,63}|[0-9]{1,10})$")
 APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
 # Individual probes stay bounded; activation budgets also cover dependencies.
 PERSISTENT_READINESS_TIMEOUT_MAX = 150
-# Generated workloads and their timers are protected services: they stop with
-# the protected target when secrets are removed or swapped and are skipped while
-# locked. A timer outside the target could otherwise start its job, and the job's
-# dependencies, after the transaction's member stops completed. The target-wanted
-# V2 reconcile restores the expected ones after activation.
+# Generated workloads, their timers and activation sockets are protected
+# services: they stop with the protected target when secrets are removed or
+# swapped and are skipped while locked. A trigger outside the target could
+# otherwise start its workload, and the workload's dependencies, after the
+# transaction's member stops completed. The target-wanted V2 reconcile restores
+# the expected ones after activation.
 PROTECTED_STACK_LINES = (
     "PartOf=nas-protected-services.target",
     "ConditionPathExists=/run/nas-secrets/ready",
@@ -493,6 +494,7 @@ def _activation_units(
                 [
                     "[Unit]",
                     f"Description=Managed Services V2 activation socket for {service_id}.{route_id}",
+                    *PROTECTED_STACK_LINES,
                     "",
                     "[Socket]",
                     f"ListenStream={spath}",
@@ -675,6 +677,7 @@ def _augment_compose_imports(
                 podlet_bin=podlet_bin,
                 podman_bin=podman_bin,
                 compose_provider_bin=compose_provider_bin,
+                unit_lines=PROTECTED_STACK_LINES,
             )
         except ComposeImportError as exc:
             raise SystemdProjectionError(str(exc)) from exc

@@ -260,6 +260,10 @@ class V2SystemdProjectionTests(unittest.TestCase):
         self.assertIn("StopWhenUnneeded=yes", owner)
         self.assertIn("ListenStream=/run/nas-control/activate/demo-web.sock", socket)
         self.assertIn("SocketUser=caddy", socket)
+        # A listening socket would otherwise accept requests and start the
+        # owner's dependencies while locked; it stops and gates like its owner.
+        for line in systemd.PROTECTED_STACK_LINES:
+            self.assertIn(line, socket.split("[Socket]", 1)[0].splitlines())
         self.assertIn("Requires=nas-v2-demo.service nas-v2-activate-demo-web.socket nas-v2-ready-demo.service", proxy)
         self.assertIn("--exit-idle-time=90s", proxy)
         self.assertIn("nas-v2-activate-demo-web.socket", manifest["startUnits"])
