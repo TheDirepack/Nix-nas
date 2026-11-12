@@ -143,8 +143,11 @@ def _bootstrap_baseline_locked(
     ).stdout.strip()
     if not commit:
         raise DesiredStateHistoryError("Git did not return a bootstrap baseline revision")
-    _git(repository, authority, git_bin, "update-ref", DESIRED_REF, commit)
-    _git(repository, authority, git_bin, "update-ref", APPLIED_REF, commit)
+    # Require both refs to remain absent and prepare both locks before publication.
+    _run(
+        [git_bin, f"--git-dir={repository}", "update-ref", "--stdin"],
+        input_text=(f"start\ncreate {DESIRED_REF} {commit}\ncreate {APPLIED_REF} {commit}\nprepare\ncommit\n"),
+    )
     return {"ok": True, "created": True, "applied": commit}
 
 

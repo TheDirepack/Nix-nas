@@ -24,6 +24,11 @@ operational boundaries remain here.
 
 ## First-start recovery
 
+Preexisting Managed Services history with desired revisions but no applied ref
+remains a manual-recovery boundary, including partial baselines left by older
+bootstrap code. Commit contents alone cannot establish prior successful apply.
+See [Missing applied configuration history](../src/admin/maintenance.md#missing-applied-configuration-history).
+
 Failed first-start identity regeneration intentionally leaves its discovered
 identity/Syncthing timers stopped. Their prior active state is not persisted
 across a failed worker; manual recovery must restore the previously active
