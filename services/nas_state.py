@@ -26,6 +26,7 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Any, Iterable, Mapping
 
+from nas_common import fsync_directory
 from nas_operation_journal import JournalError, atomic_write_json, load_json
 from nas_operation_lock import (
     COORDINATION_TOKEN_ENV,
@@ -1622,8 +1623,9 @@ def acknowledge_restore_recovery(restore_id: str, *, confirm_host: str) -> dict[
     if len(restore_id) != 24 or any(char not in "0123456789abcdef" for char in restore_id):
         raise StateError("Invalid restore ID; preserve and inspect the journal manually")
     evidence = RESTORE_JOURNAL.parent / "restore-recovery" / f"{restore_id}.json"
-    # Archive durably before releasing retention pins or admitting another restore.
+    # Persist the archive and its new directory entry before releasing recovery protection.
     atomic_write_json(evidence, previous, mode=0o600)
+    fsync_directory(evidence.parent.parent)
     restore_journal_update("recovery-acknowledged", recoveryAcknowledgedAt=int(time.time()), evidence=str(evidence))
     return {"ok": True, "restoreId": restore_id, "evidence": str(evidence)}
 

@@ -61,6 +61,7 @@ class StateBundleTests(unittest.TestCase):
                 "quiesced",
                 "state-applied",
                 "rolling-back",
+                "unknown-future-phase",
             ):
                 for candidate, host in (
                     (bundle, socket.gethostname()),
@@ -86,6 +87,7 @@ class StateBundleTests(unittest.TestCase):
             "quiesced",
             "state-applied",
             "rolling-back",
+            "unknown-future-phase",
         ):
             with self.subTest(phase=phase):
                 rollback, evidence = self.seed_recovery(phase)
@@ -97,7 +99,7 @@ class StateBundleTests(unittest.TestCase):
                 self.assertFalse(expendable.exists())
                 self.assertEqual(state.RESTORE_JOURNAL.read_bytes(), evidence)
 
-    def test_corrupt_or_unknown_journal_blocks_restore_and_pruning(self):
+    def test_corrupt_or_unrecognized_schema_blocks_restore_and_pruning(self):
         for value in (b"{broken", b"[]", b'{"schemaVersion":2}', b'{"status":"unknown"}'):
             rollback, _ = self.seed_recovery()
             state.RESTORE_JOURNAL.write_bytes(value)
@@ -170,6 +172,48 @@ class StateBundleTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 state.acknowledge_restore_recovery("a" * 24, confirm_host=socket.gethostname())
         self.assertEqual(state.RESTORE_JOURNAL.read_bytes(), evidence)
+
+    def test_archive_directory_is_durable_before_acknowledgement(self):
+        _, evidence = self.seed_recovery()
+        archive = state.RESTORE_JOURNAL.parent / "restore-recovery" / f"{'a' * 24}.json"
+        events = []
+        update = state.restore_journal_update
+
+        def sync_parent(path):
+            self.assertEqual(path, state.RESTORE_JOURNAL.parent)
+            self.assertEqual(json.loads(archive.read_text()), json.loads(evidence))
+            self.assertEqual(state.RESTORE_JOURNAL.read_bytes(), evidence)
+            events.append("archive-parent-synced")
+
+        def acknowledge(status, **fields):
+            self.assertEqual(events, ["archive-parent-synced"])
+            events.append(status)
+            update(status, **fields)
+
+        with (
+            mock.patch.object(state, "require_root"),
+            mock.patch.object(state, "fsync_directory", side_effect=sync_parent, create=True),
+            mock.patch.object(state, "restore_journal_update", side_effect=acknowledge),
+        ):
+            state.acknowledge_restore_recovery("a" * 24, confirm_host=socket.gethostname())
+        self.assertEqual(events, ["archive-parent-synced", "recovery-acknowledged"])
+
+    def test_failed_or_interrupted_archive_directory_sync_keeps_recovery_block_and_pin(self):
+        for error in (OSError("directory sync failed"), KeyboardInterrupt()):
+            with self.subTest(error=type(error).__name__):
+                rollback, evidence = self.seed_recovery()
+                with (
+                    mock.patch.object(state, "require_root"),
+                    mock.patch.object(state, "fsync_directory", side_effect=error, create=True),
+                ):
+                    with self.assertRaises(type(error)):
+                        state.acknowledge_restore_recovery("a" * 24, confirm_host=socket.gethostname())
+                self.assertEqual(state.RESTORE_JOURNAL.read_bytes(), evidence)
+                with self.assertRaises(state.StateError):
+                    state.require_resolved_restore()
+                with mock.patch.object(state, "ROLLBACK_RETAIN_COUNT", 0):
+                    state.prune_rollbacks()
+                self.assertTrue(rollback.exists())
 
     def test_nested_update_restore_keeps_existing_coordination_contract(self):
         args = state.parser().parse_args(
