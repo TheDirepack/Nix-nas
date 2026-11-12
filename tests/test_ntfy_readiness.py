@@ -88,7 +88,10 @@ class NtfyReadinessTests(unittest.TestCase):
             .split("\n    };", 1)[0]
         )
         self.assertIn('after = [ "ntfy-sh.service" ];', notifier)
-        self.assertIn('wants = [ "ntfy-sh.service" ];', notifier)
+        # Alerts for members killed by a protected stop must not restart ntfy
+        # while secrets swap; V2 startUnits alone starts it.
+        self.assertNotIn("wants", notifier)
+        self.assertNotIn("requires", notifier)
         for block in (service, notifier):
             self.assertNotIn("reset-failed", block)
             self.assertNotIn("SuccessExitStatus", block)

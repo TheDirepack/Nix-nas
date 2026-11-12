@@ -9,6 +9,7 @@ setup() {
 printf '%s\n' "$*" >> "$NAS_TX_LOG"
 case "$1" in
   is-active) [[ "${NAS_TX_ACTIVE:-1}" == 1 ]] ;;
+  show) [[ "$2" != --property=ActiveState ]] || echo inactive ;;
   stop) [[ "${NAS_TX_STOP_FAIL:-0}" != 1 ]] ;;
   start) [[ "${NAS_TX_START_FAIL:-0}" != 1 ]] ;;
   *) exit 0 ;;
@@ -16,6 +17,7 @@ esac
 SH
   chmod +x "$work/bin/systemctl"
   export NAS_SECRET_TX_PRIVILEGE=""
+  export NAS_SECRET_TX_LOGGER=""
   export NAS_SECRET_TX_SYSTEMCTL="$work/bin/systemctl"
   export NAS_TX_LOG="$work/systemctl.log"
   source "$BATS_TEST_DIRNAME/../../scripts/lib/nas-secret-transaction.sh"
@@ -84,6 +86,7 @@ SH
 #!/usr/bin/env bash
 set -Eeuo pipefail
 export NAS_SECRET_TX_PRIVILEGE=""
+export NAS_SECRET_TX_LOGGER=""
 export NAS_SECRET_TX_SYSTEMCTL="$work/bin/systemctl"
 export NAS_TX_LOG="$NAS_TX_LOG"
 source "$BATS_TEST_DIRNAME/../../scripts/lib/nas-secret-transaction.sh"

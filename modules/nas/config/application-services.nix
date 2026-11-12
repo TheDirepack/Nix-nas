@@ -269,7 +269,9 @@ in
 
     systemd.services.nas-authentik-proxy-outpost = {
       description = "Dedicated Authentik proxy outpost";
-      wantedBy = [ "multi-user.target" ];
+      # Stopping Authentik with the protected target stops this outpost; the
+      # target must pull it back, including after a secret-activation rollback.
+      wantedBy = [ "multi-user.target" "nas-protected-services.target" ];
       requires = [ "authentik.service" "nas-identity-bootstrap.service" ];
       after = [ "authentik.service" "nas-identity-bootstrap.service" ];
       unitConfig.ConditionPathExists = [ authentikRuntimeApiTokenFile ];

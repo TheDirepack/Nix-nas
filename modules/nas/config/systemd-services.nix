@@ -617,8 +617,9 @@ in
 
     "nas-health-alert@" = lib.mkIf cfg.alerting.enable {
       description = "Send a NAS health failure notification for %i";
+      # Order after ntfy but never start it: V2 owns its lifecycle, and units
+      # failing during a protected stop must not restart it over swapping secrets.
       after = [ "ntfy-sh.service" ];
-      wants = [ "ntfy-sh.service" ];
       serviceConfig = {
         Type = "oneshot";
         ExecStart = "${nasAlert}/bin/nas-alert 'NAS health check failed: %i' 'The systemd unit %i failed on ${config.networking.hostName}. Review it in Cockpit or with journalctl -u %i.'";

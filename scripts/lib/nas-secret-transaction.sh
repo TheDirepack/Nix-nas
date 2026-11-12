@@ -13,11 +13,99 @@ nas_secret_tx_systemctl() {
   nas_secret_tx_privileged "${NAS_SECRET_TX_SYSTEMCTL:-systemctl}" "$@"
 }
 
-nas_secret_tx_stop_target() {
-  if nas_secret_tx_systemctl stop "$NAS_SECRET_TX_TARGET"; then
-    return 0
+# Callers that hide stderr (setup's protected-stdin runner) still need stop
+# diagnostics; they name units and states only, never secret material.
+nas_secret_tx_report() {
+  local logger="${NAS_SECRET_TX_LOGGER-logger}"
+  printf 'nas-secret-transaction: %s\n' "$1" >&2
+  if [[ -n "$logger" ]] && command -v "$logger" >/dev/null 2>&1; then
+    "$logger" --tag nas-secret-transaction --priority user.err -- "$1" 2>/dev/null || true
   fi
-  ! nas_secret_tx_systemctl is-active --quiet "$NAS_SECRET_TX_TARGET"
+}
+
+nas_secret_tx_unit_stopped() {
+  local state status=0
+  # Only an exact stopped state proves a unit released its secrets; a failed
+  # query or a non-zero is-active exit (e.g. deactivating) does not.
+  state="$(nas_secret_tx_systemctl show --property=ActiveState --value -- "$1")" || status=$?
+  if ((status)); then
+    nas_secret_tx_report "unable to read the state of $1 (exit $status)"
+    return 1
+  fi
+  case "$state" in
+    inactive | failed) return 0 ;;
+  esac
+  nas_secret_tx_report "protected unit is ${state:-unknown}, not stopped: $1"
+  return 1
+}
+
+# A start job queued by a timer, OnFailure= handler or any other caller while
+# these stops are pending would otherwise replace them and restart members over
+# the secrets being swapped; irreversible stop jobs make systemd refuse it.
+NAS_SECRET_TX_STOP_MODE=--job-mode=replace-irreversibly
+
+nas_secret_tx_stop_members() {
+  local output unit stop_status=0 stopped=true status=0
+  # Passed verbatim to the regex engine: inline backslashes in [[ =~ ]] are
+  # requoted differently across bash builds.
+  local name_pattern='^[A-Za-z0-9_.@:\-]+$'
+  local -a members=()
+  output="$(nas_secret_tx_systemctl show --property=ConsistsOf --value -- "$NAS_SECRET_TX_TARGET")" || status=$?
+  if ((status)); then
+    nas_secret_tx_report "unable to list members of $NAS_SECRET_TX_TARGET (exit $status)"
+    return 1
+  fi
+  local -a listed=()
+  local quote='"' backslash=$'\\'
+  # read -a splits on whitespace without pathname expansion.
+  read -r -a listed <<<"$output" || true
+  for unit in "${listed[@]}"; do
+    # systemctl show shell-quotes list entries that contain a backslash, e.g.
+    # "tank-vm\\x2dapp.mount" for the escaped unit tank-vm\x2dapp.mount.
+    # Unit names cannot contain whitespace or quotes, so only that form occurs.
+    if [[ ${#unit} -ge 2 && "${unit:0:1}" == "$quote" && "${unit: -1}" == "$quote" ]]; then
+      unit="${unit:1:${#unit}-2}"
+      unit="${unit//"$backslash$backslash"/"$backslash"}"
+    fi
+    # systemd escapes unit names to this alphabet, e.g. \x2d for '-' in paths.
+    [[ "$unit" =~ $name_pattern && "$unit" != -* ]] || {
+      nas_secret_tx_report "invalid protected member unit: $(printf '%q' "$unit")"
+      return 1
+    }
+    members+=("$unit")
+  done
+  NAS_SECRET_TX_MEMBERS=("${members[@]}")
+  ((${#members[@]})) || return 0
+  # A target's stop job completes before PartOf members finish stopping.
+  # Joining their stop jobs keeps secrets in place until every member is down.
+  nas_secret_tx_systemctl stop "$NAS_SECRET_TX_STOP_MODE" -- "${members[@]}" || stop_status=$?
+  for unit in "${members[@]}"; do
+    nas_secret_tx_unit_stopped "$unit" || stopped=false
+  done
+  if ! "$stopped"; then
+    ((stop_status == 0)) || nas_secret_tx_report "stopping protected members exited $stop_status"
+    return 1
+  fi
+}
+
+nas_secret_tx_stop_target() {
+  NAS_SECRET_TX_MEMBERS=()
+  if ! nas_secret_tx_systemctl stop "$NAS_SECRET_TX_STOP_MODE" "$NAS_SECRET_TX_TARGET"; then
+    nas_secret_tx_unit_stopped "$NAS_SECRET_TX_TARGET" || return 1
+  fi
+  nas_secret_tx_stop_members
+}
+
+# Irreversible stop jobs cannot refuse a start queued after they completed, and
+# the live ready marker still admits gated consumers until the old tree moves.
+# Re-checking once it has moved catches any consumer started in between.
+nas_secret_tx_still_stopped() {
+  local unit stopped=true
+  for unit in "$NAS_SECRET_TX_TARGET" "${NAS_SECRET_TX_MEMBERS[@]}"; do
+    nas_secret_tx_unit_stopped "$unit" || stopped=false
+  done
+  "$stopped" || nas_secret_tx_report "a protected unit started before the previous secrets were moved aside"
+  "$stopped"
 }
 
 nas_secret_tx_realpath_lexical() {
@@ -203,6 +291,7 @@ nas_secret_tx_swap() {
     NAS_SECRET_TX_OLD_MOVED=true
   fi
   NAS_SECRET_TX_PHASE=old-moved
+  nas_secret_tx_still_stopped || return 1
   nas_secret_tx_privileged mv -T -- "$NAS_SECRET_TX_STAGE" "$NAS_SECRET_TX_ROOT" || return $?
   NAS_SECRET_TX_NEW_INSTALLED=true
   NAS_SECRET_TX_PHASE=new-installed

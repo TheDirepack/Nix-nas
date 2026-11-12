@@ -40,6 +40,18 @@ _SAFE_IDENTITY = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_.-]{0,63}|[0-9]{1,10})$")
 APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
 # Individual probes stay bounded; activation budgets also cover dependencies.
 PERSISTENT_READINESS_TIMEOUT_MAX = 150
+# Generated workloads, their timers and activation sockets are protected
+# services: they stop with the protected target when secrets are removed or
+# swapped and are skipped while locked. A trigger outside the target could
+# otherwise start its workload, and the workload's dependencies, after the
+# transaction's member stops completed. The target-wanted V2 reconcile restores
+# the expected ones after activation.
+PROTECTED_STACK_LINES = (
+    "PartOf=nas-protected-services.target",
+    "ConditionPathExists=/run/nas-secrets/ready",
+)
+# "@" is outside the attachment credential-id alphabet, so it cannot collide.
+EXEC_DESCRIPTOR_CREDENTIAL = "nas-v2@exec-descriptor"
 _CTRL = ("\x00", "\r", "\n")
 
 
@@ -212,6 +224,7 @@ def _restart_lines(service: dict[str, Any], runtime: dict[str, Any]) -> list[str
 def _unit_header(effective: dict[str, Any], service: dict[str, Any]) -> list[str]:
     return [
         "Description=" + _single_line(service["name"], field="service name"),
+        *PROTECTED_STACK_LINES,
         *(["StopWhenUnneeded=yes"] if _is_on_demand(service) else []),
         *_dependency_lines(effective, service),
     ]
@@ -233,7 +246,11 @@ def _exec_unit(
         "",
         "[Service]",
         "Type=oneshot" if kind == "job" else "Type=simple",
-        f"ExecStart={_exec_quote(python_bin)} {_exec_quote(str(source_dir / 'nas_v2_exec_runner.py'))} --config {_exec_quote(str(descriptor_path))}",
+        # Sealed generations are unreadable to the workload identity; systemd
+        # loads the descriptor as root into the unit's private credentials.
+        # LoadCredential= takes its path verbatim and does not unquote it.
+        f"LoadCredential={EXEC_DESCRIPTOR_CREDENTIAL}:{_single_line(str(descriptor_path), field='exec descriptor path')}",
+        f"ExecStart={_exec_quote(python_bin)} {_exec_quote(str(source_dir / 'nas_v2_exec_runner.py'))} --config %d/{EXEC_DESCRIPTOR_CREDENTIAL}",
         *_identity_lines(runtime),
         *_environment_lines(runtime),
         *_resource_lines(service),
@@ -343,8 +360,7 @@ def _existing_dropin(effective: dict[str, Any], service: dict[str, Any]) -> byte
 def _quadlet_source(effective: dict[str, Any], service_id: str, service: dict[str, Any]) -> bytes:
     unit_lines = [
         "Description=" + _single_line(service["name"], field="service name"),
-        "PartOf=nas-protected-services.target",
-        "ConditionPathExists=/run/nas-secrets/ready",
+        *PROTECTED_STACK_LINES,
         *(["StopWhenUnneeded=yes"] if _is_on_demand(service) else []),
         *_dependency_lines(effective, service),
     ]
@@ -379,6 +395,7 @@ def _vm_unit(
             [
                 "[Unit]",
                 "Description=" + _single_line(service["name"], field="service name"),
+                *PROTECTED_STACK_LINES,
                 f"Requires={libvirt_unit}",
                 f"After={libvirt_unit}",
                 *(["StopWhenUnneeded=yes"] if _is_on_demand(service) else []),
@@ -477,6 +494,7 @@ def _activation_units(
                 [
                     "[Unit]",
                     f"Description=Managed Services V2 activation socket for {service_id}.{route_id}",
+                    *PROTECTED_STACK_LINES,
                     "",
                     "[Socket]",
                     f"ListenStream={spath}",
@@ -526,11 +544,14 @@ def _activation_units(
     return result
 
 
-def _timer_unit(service_id: str, owner: str, index: int, schedule: dict[str, Any]) -> tuple[str, bytes]:
+def _timer_unit(
+    service_id: str, owner: str, index: int, schedule: dict[str, Any], *, protected: bool
+) -> tuple[str, bytes]:
     unit = f"nas-v2-timer-{service_id}-{index}.timer"
     lines = [
         "[Unit]",
         f"Description=Managed Services V2 schedule {index} for {service_id}",
+        *(PROTECTED_STACK_LINES if protected else ()),
         "",
         "[Timer]",
         f"Unit={owner}",
@@ -604,6 +625,7 @@ def _aggregate_unit(
     lines = [
         "[Unit]",
         "Description=" + _unit_value(service["name"], label="Compose service name"),
+        *PROTECTED_STACK_LINES,
     ]
     workload = service["workload"]
     if service["managed"] and workload["kind"] == "daemon" and workload.get("activation") == "on-demand":
@@ -655,6 +677,7 @@ def _augment_compose_imports(
                 podlet_bin=podlet_bin,
                 podman_bin=podman_bin,
                 compose_provider_bin=compose_provider_bin,
+                unit_lines=PROTECTED_STACK_LINES,
             )
         except ComposeImportError as exc:
             raise SystemdProjectionError(str(exc)) from exc
@@ -828,7 +851,7 @@ def generate_projection(
 
         if service["workload"]["kind"] == "job":
             for index, schedule in enumerate(service["workload"]["schedules"]):
-                timer, content = _timer_unit(service_id, owner, index, schedule)
+                timer, content = _timer_unit(service_id, owner, index, schedule, protected=managed)
                 tpath = unit_dir / timer
                 files[tpath] = content
                 links[timer] = str(tpath)

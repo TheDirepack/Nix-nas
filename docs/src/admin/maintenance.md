@@ -43,10 +43,18 @@ uncertain recovery explicitly; a rejected update must not be treated as healthy
 merely because the previous definition is visible again. Transient sessions
 that were terminated may need operator recovery.
 
-Generated OCI applications stop with the protected-service target when secrets
-are locked. Enabled persistent OCI applications and their readiness gates join
-that target again on secret activation. A generated OCI owner cannot start
-without the runtime secret-ready marker.
+Generated applications stop with the protected-service target when secrets are
+locked. This covers OCI, executable, Python, VM and Compose applications.
+`nas-secrets stop` removes runtime secrets only after every protected unit has
+finished stopping. A generated application owner cannot start without the
+runtime secret-ready marker. When the target starts again after secret
+activation, a failed activation's rollback, or a protected restart, Managed
+Services queues every enabled application that is stopped. Applications set to
+`off`, completed jobs and idle on-demand applications stay stopped. An
+application that was already failed keeps its failed state for diagnosis.
+
+Queued is not the same as healthy: check the application's status and journal.
+An application that fails to start does not make secret activation fail.
 
 Use the Services error and read-only status and journal information to identify
 the failed gate. Replace `APP` with the service identifier:

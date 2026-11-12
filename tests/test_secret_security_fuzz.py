@@ -93,6 +93,7 @@ if HAS_HYPOTHESIS:
                 lines = [
                     "set -Eeuo pipefail",
                     'export NAS_SECRET_TX_PRIVILEGE=""',
+                    'export NAS_SECRET_TX_LOGGER=""',
                     f"source {shlex.quote(str(LIBRARY))}",
                     "failures=0",
                 ]
@@ -133,6 +134,7 @@ if HAS_HYPOTHESIS:
                 script = [
                     "set -Eeuo pipefail",
                     'export NAS_SECRET_TX_PRIVILEGE=""',
+                    'export NAS_SECRET_TX_LOGGER=""',
                     f"source {shlex.quote(str(LIBRARY))}",
                     f"root={shlex.quote(str(root))}",
                     f"stage={shlex.quote(str(stage))}",
