@@ -26,7 +26,7 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Any, Iterable, Mapping
 
-from nas_operation_journal import atomic_write_json
+from nas_operation_journal import JournalError, atomic_write_json, load_json
 from nas_operation_lock import (
     COORDINATION_TOKEN_ENV,
     OperationBusyError,
@@ -1501,11 +1501,15 @@ def secure_rollback_root() -> None:
 
 
 def prune_rollbacks() -> None:
+    journal = load_restore_journal()
+    pinned = journal.get("rollbackBundle") if unresolved_restore(journal) else None
     now = time.time()
     candidates = sorted(
         DEFAULT_ROLLBACK_ROOT.glob("rollback-*.tar.gz"), key=lambda item: item.stat().st_mtime, reverse=True
     )
     for index, item in enumerate(candidates):
+        if pinned and item.resolve() == pathlib.Path(pinned).resolve():
+            continue
         too_old = ROLLBACK_RETAIN_SECONDS and now - item.stat().st_mtime > ROLLBACK_RETAIN_SECONDS
         if index >= ROLLBACK_RETAIN_COUNT or too_old:
             item.unlink(missing_ok=True)
@@ -1568,20 +1572,75 @@ def expanded_bundle_size(bundle: pathlib.Path) -> int:
     return total
 
 
+RESTORE_TERMINAL_STATUSES = frozenset(
+    {
+        "failed",
+        "failed-before-apply",
+        "failed-rolled-back",
+        "skipped-unchanged",
+        "committed",
+        "recovery-acknowledged",
+    }
+)
+
+
+def load_restore_journal() -> dict[str, Any]:
+    try:
+        value = load_json(RESTORE_JOURNAL)
+    except JournalError as exc:
+        raise StateError(str(exc)) from exc
+    if value is None:
+        return {}
+    if (
+        value.get("schemaVersion") != 1
+        or value.get("workflow") != "state-restore"
+        or not isinstance(value.get("status"), str)
+    ):
+        raise StateError(f"Unrecognized restore journal; preserve and inspect {RESTORE_JOURNAL}")
+    return value
+
+
+def unresolved_restore(value: dict[str, Any]) -> bool:
+    # Unknown and interrupted phases cannot prove compensation completed.
+    return bool(value) and value.get("status") not in RESTORE_TERMINAL_STATUSES
+
+
+def require_resolved_restore() -> None:
+    if unresolved_restore(load_restore_journal()):
+        raise StateError(f"Unresolved state restore; inspect {RESTORE_JOURNAL}, recover and use acknowledge-recovery")
+
+
+def acknowledge_restore_recovery(restore_id: str, *, confirm_host: str) -> dict[str, Any]:
+    require_root()
+    previous = load_restore_journal()
+    if (
+        not unresolved_restore(previous)
+        or previous.get("restoreId") != restore_id
+        or confirm_host != socket.gethostname()
+    ):
+        raise StateError("Recovery acknowledgement requires the unresolved restore ID and current hostname")
+    if len(restore_id) != 24 or any(char not in "0123456789abcdef" for char in restore_id):
+        raise StateError("Invalid restore ID; preserve and inspect the journal manually")
+    evidence = RESTORE_JOURNAL.parent / "restore-recovery" / f"{restore_id}.json"
+    # Archive durably before releasing retention pins or admitting another restore.
+    atomic_write_json(evidence, previous, mode=0o600)
+    restore_journal_update("recovery-acknowledged", recoveryAcknowledgedAt=int(time.time()), evidence=str(evidence))
+    return {"ok": True, "restoreId": restore_id, "evidence": str(evidence)}
+
+
 def restore_journal_update(status: str, **fields: Any) -> None:
-    value: dict[str, Any] = {
+    previous = load_restore_journal()
+    if status == "preparing":
+        require_resolved_restore()
+        previous = {}
+    value = {
+        **previous,
         "schemaVersion": 1,
         "workflow": "state-restore",
         "status": status,
         "updatedAt": int(time.time()),
+        **fields,
     }
-    try:
-        previous = json.loads(RESTORE_JOURNAL.read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
-        previous = {}
-    if isinstance(previous, dict):
-        value = {**previous, **value}
-    value.update(fields)
     atomic_write_json(RESTORE_JOURNAL, value, mode=0o600)
 
 
@@ -1659,6 +1718,7 @@ def restore_bundle(
     allow_network_disconnect: bool = False,
 ) -> dict[str, Any]:
     require_root()
+    require_resolved_restore()
     secure_rollback_root()
     expanded = expanded_bundle_size(bundle)
     temp_root = runtime_root()
@@ -1745,11 +1805,13 @@ def restore_bundle(
 
         state_mutated = False
         try:
+            restore_journal_update("capturing-rollback", rollbackBundle=str(rollback), unitSnapshot=unit_snapshot)
             export_bundle(rollback, include_sensitive=True, quiesce=False)
             restore_journal_update("rollback-captured", rollbackBundle=str(rollback))
             # Reject absence conflicts while the runtime is untouched: stopping
             # a unit with CleanupOnExit=yes already changes the live system.
             preflight_restore_absence(apply_manifest, restore_absence=restore_absence)
+            restore_journal_update("quiescing")
             stop_active_units(unit_snapshot)
             restore_journal_update("quiesced", unitSnapshot=unit_snapshot)
             state_mutated = True
@@ -1858,6 +1920,9 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Acknowledge network restore disconnection risk; requires working out-of-band recovery",
     )
+    acknowledge = subparsers.add_parser("acknowledge-recovery", help="Acknowledge completed manual restore recovery")
+    acknowledge.add_argument("--restore-id", required=True)
+    acknowledge.add_argument("--confirm-host", required=True)
     subparsers.add_parser("authorities", help="List registered state authorities")
     subparsers.add_parser("rollbacks", help="List retained automatic rollback bundles")
     subparsers.add_parser("prune-rollbacks", help="Prune expired rollback bundles")
@@ -1903,13 +1968,17 @@ def main() -> None:
             else:
                 with acquire_operation("state-restore", ("appliance",)):
                     value = restore_bundle(args.bundle, **restore_arguments)
+        elif args.command == "acknowledge-recovery":
+            with acquire_operation("state-recovery-acknowledge", ("appliance",)):
+                value = acknowledge_restore_recovery(args.restore_id, confirm_host=args.confirm_host)
         elif args.command == "rollbacks":
             value = rollback_inventory()
         elif args.command == "prune-rollbacks":
-            secure_rollback_root()
-            before = rollback_inventory()
-            prune_rollbacks()
-            value = {"before": before, "after": rollback_inventory()}
+            with acquire_operation("state-prune-rollbacks", ("appliance",)):
+                secure_rollback_root()
+                before = rollback_inventory()
+                prune_rollbacks()
+                value = {"before": before, "after": rollback_inventory()}
         else:
             registry = authorities()
             value = {

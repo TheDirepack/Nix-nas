@@ -27,6 +27,205 @@ SPEC.loader.exec_module(state)
 
 
 class StateBundleTests(unittest.TestCase):
+    def seed_recovery(self, status="manual-recovery-required"):
+        state.secure_rollback_root()
+        rollback = state.DEFAULT_ROLLBACK_ROOT / "rollback-needed.tar.gz"
+        rollback.write_bytes(b"recovery evidence")
+        os.utime(rollback, (1, 1))
+        record = {
+            "schemaVersion": 1,
+            "workflow": "state-restore",
+            "status": status,
+            "restoreId": "a" * 24,
+            "rollbackBundle": str(rollback),
+            "unitSnapshot": {"app.service": True},
+            "primaryError": "original failure",
+        }
+        state.atomic_write_json(state.RESTORE_JOURNAL, record)
+        return rollback, state.RESTORE_JOURNAL.read_bytes()
+
+    def test_rejected_restore_preserves_unresolved_evidence(self):
+        root = pathlib.Path(self.temporary.name)
+        public = root / "public"
+        public.write_text("saved")
+        registry = self.registry(public, root / "secret", root / "missing")
+        bundle = root / "bundle.tar.gz"
+        with mock.patch.dict(os.environ, self.environment(registry)):
+            state.export_bundle(bundle, include_sensitive=False)
+            for phase in (
+                "manual-recovery-required",
+                "preparing",
+                "capturing-rollback",
+                "rollback-captured",
+                "quiescing",
+                "quiesced",
+                "state-applied",
+                "rolling-back",
+            ):
+                for candidate, host in (
+                    (bundle, socket.gethostname()),
+                    (bundle, "wrong-host"),
+                    (root / "missing.tar.gz", socket.gethostname()),
+                ):
+                    with self.subTest(phase=phase, candidate=candidate, host=host):
+                        rollback, evidence = self.seed_recovery(phase)
+                        with self.assertRaises(state.StateError):
+                            state.restore_bundle(
+                                candidate, confirm_host=host, allow_partial=False, include_sensitive=False
+                            )
+                        self.assertEqual(state.RESTORE_JOURNAL.read_bytes(), evidence)
+                        self.assertTrue(rollback.exists())
+
+    def test_pruning_pins_unresolved_recovery_even_beyond_age_and_count(self):
+        for phase in (
+            "manual-recovery-required",
+            "preparing",
+            "capturing-rollback",
+            "rollback-captured",
+            "quiescing",
+            "quiesced",
+            "state-applied",
+            "rolling-back",
+        ):
+            with self.subTest(phase=phase):
+                rollback, evidence = self.seed_recovery(phase)
+                expendable = state.DEFAULT_ROLLBACK_ROOT / "rollback-expendable.tar.gz"
+                expendable.write_bytes(b"old")
+                with mock.patch.object(state, "ROLLBACK_RETAIN_COUNT", 0):
+                    state.prune_rollbacks()
+                self.assertTrue(rollback.exists())
+                self.assertFalse(expendable.exists())
+                self.assertEqual(state.RESTORE_JOURNAL.read_bytes(), evidence)
+
+    def test_corrupt_or_unknown_journal_blocks_restore_and_pruning(self):
+        for value in (b"{broken", b"[]", b'{"schemaVersion":2}', b'{"status":"unknown"}'):
+            rollback, _ = self.seed_recovery()
+            state.RESTORE_JOURNAL.write_bytes(value)
+            with mock.patch.object(state, "ROLLBACK_RETAIN_COUNT", 0):
+                with self.assertRaises(state.StateError):
+                    state.prune_rollbacks()
+            with mock.patch.object(state, "require_root"):
+                with self.assertRaises(state.StateError):
+                    state.restore_bundle(
+                        pathlib.Path("missing"),
+                        confirm_host=socket.gethostname(),
+                        allow_partial=False,
+                        include_sensitive=False,
+                    )
+            self.assertTrue(rollback.exists())
+            self.assertEqual(state.RESTORE_JOURNAL.read_bytes(), value)
+
+    def test_acknowledgement_archives_evidence_and_allows_new_restore(self):
+        rollback, evidence = self.seed_recovery()
+        with mock.patch.object(state, "require_root"):
+            for restore_id, host in (("wrong", socket.gethostname()), ("a" * 24, "wrong")):
+                with self.assertRaises(state.StateError):
+                    state.acknowledge_restore_recovery(restore_id, confirm_host=host)
+                self.assertEqual(state.RESTORE_JOURNAL.read_bytes(), evidence)
+            result = state.acknowledge_restore_recovery("a" * 24, confirm_host=socket.gethostname())
+        self.assertEqual(json.loads(pathlib.Path(result["evidence"]).read_text()), json.loads(evidence))
+        state.restore_journal_update("preparing", restoreId="b" * 24, rollbackBundle=None)
+        record = json.loads(state.RESTORE_JOURNAL.read_text())
+        self.assertNotIn("primaryError", record)
+        self.assertNotIn("unitSnapshot", record)
+        with mock.patch.object(state, "ROLLBACK_RETAIN_COUNT", 0):
+            state.prune_rollbacks()
+        self.assertFalse(rollback.exists())
+
+    def test_interruption_persists_rollback_and_unit_snapshot_before_actions(self):
+        root = pathlib.Path(self.temporary.name)
+        public = root / "public"
+        public.write_text("saved")
+        bundle = root / "bundle.tar.gz"
+        with mock.patch.dict(os.environ, self.environment(self.registry(public, root / "secret", root / "missing"))):
+            state.export_bundle(bundle, include_sensitive=False)
+            public.write_text("current")
+            for action, phase in (("export_bundle", "capturing-rollback"), ("stop_active_units", "quiescing")):
+                with self.subTest(action=action):
+                    state.RESTORE_JOURNAL.unlink(missing_ok=True)
+                    with (
+                        mock.patch.object(state, "capture_unit_state", return_value={"app.service": True}),
+                        mock.patch.object(state, action, side_effect=KeyboardInterrupt),
+                    ):
+                        with self.assertRaises(KeyboardInterrupt):
+                            state.restore_bundle(
+                                bundle, confirm_host=socket.gethostname(), allow_partial=True, include_sensitive=False
+                            )
+                    journal = json.loads(state.RESTORE_JOURNAL.read_text())
+                    self.assertEqual(journal["status"], phase)
+                    self.assertEqual(journal["unitSnapshot"], {"app.service": True})
+                    self.assertIsNotNone(journal["rollbackBundle"])
+                    if action == "stop_active_units":
+                        rollback = pathlib.Path(journal["rollbackBundle"])
+                        with mock.patch.object(state, "ROLLBACK_RETAIN_COUNT", 0):
+                            state.prune_rollbacks()
+                        self.assertTrue(rollback.exists())
+
+    def test_failed_acknowledgement_archive_does_not_release_recovery(self):
+        _, evidence = self.seed_recovery()
+        with (
+            mock.patch.object(state, "require_root"),
+            mock.patch.object(state, "atomic_write_json", side_effect=OSError("disk full")),
+        ):
+            with self.assertRaises(OSError):
+                state.acknowledge_restore_recovery("a" * 24, confirm_host=socket.gethostname())
+        self.assertEqual(state.RESTORE_JOURNAL.read_bytes(), evidence)
+
+    def test_nested_update_restore_keeps_existing_coordination_contract(self):
+        args = state.parser().parse_args(
+            [
+                "restore",
+                "/tmp/update.tar.gz",
+                "--apply",
+                "--confirm-host",
+                "host",
+                "--allow-partial",
+                "--include-sensitive",
+                "--restore-absence",
+            ]
+        )
+        with (
+            mock.patch.object(state, "parser") as parser,
+            mock.patch.object(state, "validate_coordination_token", return_value=None) as validate,
+            mock.patch.object(state, "acquire_operation") as acquire,
+            mock.patch.object(state, "restore_bundle", return_value={"ok": True}) as restore,
+            mock.patch.dict(os.environ, {state.COORDINATION_TOKEN_ENV: "a" * 32}),
+            mock.patch("builtins.print"),
+        ):
+            parser.return_value.parse_args.return_value = args
+            state.main()
+        validate.assert_called_once_with("a" * 32, ("appliance",))
+        acquire.assert_not_called()
+        restore.assert_called_once_with(
+            pathlib.Path("/tmp/update.tar.gz"),
+            confirm_host="host",
+            allow_partial=True,
+            include_sensitive=True,
+            restore_absence=True,
+            allow_network_disconnect=False,
+        )
+
+    def test_recovery_and_pruning_cli_hold_appliance_lock(self):
+        for argv in (
+            ["acknowledge-recovery", "--restore-id", "a" * 24, "--confirm-host", socket.gethostname()],
+            ["prune-rollbacks"],
+        ):
+            with self.subTest(argv=argv):
+                self.seed_recovery()
+                args = state.parser().parse_args(argv)
+                with (
+                    mock.patch.object(state, "parser") as parser,
+                    mock.patch.object(state, "require_root"),
+                    mock.patch.object(state, "acquire_operation", return_value=contextlib.nullcontext()) as acquire,
+                    mock.patch("builtins.print"),
+                ):
+                    parser.return_value.parse_args.return_value = args
+                    state.main()
+                acquire.assert_called_once_with(
+                    "state-recovery-acknowledge" if argv[0] == "acknowledge-recovery" else "state-prune-rollbacks",
+                    ("appliance",),
+                )
+
     def test_external_network_edit_after_policy_check_does_not_affect_application_restore(self):
         root = pathlib.Path(self.temporary.name)
         profile, app = root / "profile", root / "app"

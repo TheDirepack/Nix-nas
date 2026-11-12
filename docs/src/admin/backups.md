@@ -189,3 +189,38 @@ sudo systemctl start restic-backups-nas-boot-system.service
 Also verify the scheduled restore-check service. A backup is not considered proven merely because the backup command exited successfully; the restore verifier must be able to reconstruct the protected state in isolated scratch storage. `sudo nas-backup-status status` prints the same observations as the Cockpit card.
 
 For disaster-recovery order and independent-storage requirements, use the [Recovery runbook](../reference/project-RECOVERY.md).
+
+## Interrupted control-configuration restore
+
+A failed automatic rollback or an interrupted `nas-state restore` blocks further
+restores. Inspect `/var/lib/nas-state/restore-operation.json` from a local
+administrator console or recovery SSH session (use `NAS_STATE_RESTORE_JOURNAL` if overridden). Preserve the journal, its `rollbackBundle`, the signing
+key and any relevant update recovery marker. `nas-state prune-rollbacks` pins the
+rollback named by an unresolved journal regardless of retention count or age.
+An unreadable or unrecognized journal stops restore and pruning for inspection.
+
+Review `status`, `unitSnapshot`, `primaryError` and `rollbackError`. An interrupted
+`preparing` phase may have changed nothing; `capturing-rollback` may name an
+incomplete bundle. Validate the rollback with `nas-state validate` before using
+it. Later phases may have stopped services or partially applied state. Repair
+configuration and restore the recorded service state using the recovery plane,
+then verify application health. Acknowledgement itself performs no repair.
+
+After completing manual recovery, archive the evidence and release the restore
+block with the exact `restoreId` from the journal and the current hostname:
+
+```bash
+sudo nas-state acknowledge-recovery --restore-id <restoreId> --confirm-host <hostname>
+```
+
+This saves the original journal under `restore-recovery/<restoreId>.json` beside
+the active journal before marking recovery acknowledged. Subsequent restores
+start a fresh record. Acknowledgement releases the retention pin, so copy any
+rollback you still need to a private directory outside the automatic rollback
+root **before** acknowledging. To recover by replaying that copy, validate it,
+review its diff, ensure out-of-band access and safe service state, acknowledge
+the reviewed interruption, then use the ordinary guarded `nas-state restore`
+command against the copy with the required hostname, sensitive, absence and
+network acknowledgements. Verify application health afterward. Do not delete
+the journal to bypass recovery, or acknowledge a failed update without also
+following its update recovery procedure.
