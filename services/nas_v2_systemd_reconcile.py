@@ -21,6 +21,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Mapping
 
 from nas_common import fsync_directory as _fsync_directory
@@ -37,6 +38,10 @@ _QUADLET_DIRECT_NETWORK = re.compile(r"^nas-v2-net-([a-z][a-z0-9-]{0,63})\.netwo
 _QUADLET_SESSION_NETWORK = re.compile(r"^nas-v2-snet-([a-z][a-z0-9-]{0,63})\.network$")
 _QUADLET = re.compile(r"^nas-v2-[A-Za-z0-9_.@:-]+\.(?:container|pod|network|volume|kube|image|build)$")
 _SYSTEMCTL_TIMEOUT_SECONDS = 180
+# Recovery only observes and enqueues; it must not consume the guarded apply's
+# rollback budget waiting on a slow manager. Units left unprobed are reported.
+_RECOVERY_CALL_TIMEOUT_SECONDS = 15
+_RECOVERY_DEADLINE_SECONDS = 90
 _TRANSITIONAL_UNIT_STATES = frozenset({"activating", "deactivating", "reloading", "refreshing"})
 _UNIT_QUERY_STATES = {
     0: frozenset({"active", "reloading", "refreshing"}),
@@ -295,9 +300,9 @@ def _run_systemctl(
     return result
 
 
-def _query_unit_state(systemctl: str, unit: str) -> str | None:
+def _query_unit_state(systemctl: str, unit: str, *, timeout_seconds: int = _SYSTEMCTL_TIMEOUT_SECONDS) -> str | None:
     try:
-        result = _run_systemctl(systemctl, "is-active", unit, check=False)
+        result = _run_systemctl(systemctl, "is-active", unit, check=False, timeout_seconds=timeout_seconds)
     except SystemdReconcileError:
         return None
     state = result.stdout.strip()
@@ -314,17 +319,24 @@ def _queue_expected_units(
     """Queue starts for expected units that are stopped; never wait, reset, or roll back.
 
     Only cleanly ``inactive`` units are queued. Failed, transitional, and
-    unqueryable units keep their state for diagnosis. Readiness gates are never
-    rerun for an owner that is already running; a queued owner's gate is queued
-    with it so the probe outcome becomes observable, not assumed.
+    unqueryable units keep their state for diagnosis. A gate is queued only
+    with an owner observed stopped, even if the gate failed for the owner's
+    previous instance, so the new instance's probe outcome becomes observable,
+    not assumed. An owner observed running never has its gate rerun here; if
+    another caller starts the owner before the queued batch runs, the gate
+    probes that live owner, which is still a genuine observation.
     """
+    deadline = time.monotonic() + _RECOVERY_DEADLINE_SECONDS
     gates: dict[str, list[str]] = {}
     for gate, owner in readiness_owners.items():
         gates.setdefault(owner, []).append(gate)
     queued: list[str] = []
     diagnostics: list[str] = []
     for unit in sorted(start - set(readiness_owners) - exclude):
-        state = _query_unit_state(systemctl, unit)
+        if time.monotonic() >= deadline:
+            diagnostics.append(f"{unit}: recovery time budget exhausted; not queued")
+            continue
+        state = _query_unit_state(systemctl, unit, timeout_seconds=_RECOVERY_CALL_TIMEOUT_SECONDS)
         if state is None:
             diagnostics.append(f"{unit}: state unavailable; not queued")
             continue
@@ -334,7 +346,9 @@ def _queue_expected_units(
             continue
         batch = [unit, *sorted(gates.get(unit, []))]
         try:
-            result = _run_systemctl(systemctl, "--no-block", "start", *batch, check=False)
+            result = _run_systemctl(
+                systemctl, "--no-block", "start", *batch, check=False, timeout_seconds=_RECOVERY_CALL_TIMEOUT_SECONDS
+            )
         except SystemdReconcileError as exc:
             diagnostics.append(f"{unit}: {exc}")
             continue

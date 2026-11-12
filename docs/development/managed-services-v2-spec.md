@@ -393,7 +393,8 @@ V2 must not run a permanent central reaper.
 
 The systemd projection's `startUnits` is the only start authority for enabled
 V2 workloads: persistent owners, on-demand activation sockets, and job timers.
-It never contains a job owner, an on-demand owner, or a disabled (`off`)
+It also lists the generated source-watch `.path` units that report desired-state
+source changes; they are not workloads. It never contains a job owner, an on-demand owner, or a disabled (`off`)
 service. Readiness gates are listed in `startUnits` but are not separately
 recovered.
 
@@ -404,7 +405,10 @@ when it is a no-op. Queueing is recovery only, not a readiness result. It never
 waits, resets, rolls back, or rejects the apply. Failed, transitional, or
 unqueryable units keep their state and are reported as diagnostics. V2 status
 and the systemd journal report what each queued unit actually did. A running
-owner's unchanged gate is never rerun.
+owner's gate is not rerun. A stopped owner's gate is queued with it even if
+the gate failed: that failure described the stopped instance, and dependents
+`Require=` the gate anyway. Recovery bounds each probe and its whole pass;
+units it could not probe in time are reported, not queued.
 
 `nas-protected-services.target` wants the reconcile, so whenever the target
 starts, every expected V2 unit is restored. That includes secret activation,
@@ -413,18 +417,28 @@ Setup and secret activation therefore keep no unit lists of their own. A
 workload that fails to start is a V2 status failure, not a secret-activation
 failure.
 
-Generated workload owners (exec, Python, OCI/Quadlet, VM, and Compose
-aggregates) and managed job timers are protected services. Each has
+Generated workload owners (exec, Python, OCI/Quadlet, VM, Compose aggregates
+and each imported Compose container, pod, or kube unit), on-demand activation
+sockets, and managed job timers are protected services. Each has
 `PartOf=nas-protected-services.target` and
 `ConditionPathExists=/run/nas-secrets/ready`. They stop with the target and
-never start while locked. A timer left running could otherwise start its job,
-and with it the job's dependencies, after the member stops completed. Recovery
-restores expected timers like any other start unit. Before secrets are moved
-or removed, secret stop and swap wait for every member of the target (systemd `ConsistsOf`), because the
-target's own stop job can complete before its members finish stopping. These
-stop jobs are irreversible (`--job-mode=replace-irreversibly`), so a start
-queued meanwhile by a timer, an `OnFailure=` handler or any other caller is
-refused rather than restarting members over the secrets being swapped. Units
+never start while locked. A trigger left running could otherwise start its
+workload, and with it the workload's dependencies, after the member stops
+completed. `PartOf=` is not transitive, and an aggregate's condition is checked
+only after its `Requires=` entries start, so Compose children carry the policy
+themselves. Recovery restores expected timers and sockets like any other start
+unit.
+
+Before secrets are moved or removed, secret stop and swap wait for every member
+of the target (systemd `ConsistsOf`), because the target's own stop job can
+complete before its members finish stopping. These stop jobs are irreversible
+(`--job-mode=replace-irreversibly`), so a start queued meanwhile by a timer, an
+`OnFailure=` handler or any other caller is refused rather than restarting
+members over the secrets being swapped. A start queued after the stops finished
+is not refused, and secret stop removes the ready marker first for that reason.
+A swap keeps the old tree for rollback, so it re-checks the target and every
+member once the old tree has moved aside and rolls back if any of them started.
+Units
 that NixOS owns keep their NixOS lifecycle declarations; V2 adds only explicit
 drop-in policy to them. Transient session targets are not part of the target,
 because restarting a target cannot recreate their instances.

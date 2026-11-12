@@ -34,6 +34,7 @@ class FakeSystemd:
     def __init__(self, states: dict[str, str]) -> None:
         self.states = dict(states)
         self.calls: list[tuple[str, ...]] = []
+        self.timeouts: dict[tuple[str, ...], int] = {}
         self.fail: set[tuple[str, ...]] = set()
         self.query_errors: set[str] = set()
 
@@ -41,6 +42,7 @@ class FakeSystemd:
         self, _binary: str, *args: str, check: bool = True, timeout_seconds: int = 180
     ) -> subprocess.CompletedProcess[str]:
         self.calls.append(args)
+        self.timeouts[args] = timeout_seconds
         if args[0] == "is-active":
             unit = args[1]
             if unit in self.query_errors:
@@ -169,6 +171,36 @@ class StartConvergenceTests(unittest.TestCase):
         self.assertEqual(result["recovery"], {"queued": [], "diagnostics": []})
         # An active owner's failed gate keeps its diagnostic state.
         self.assertEqual(systemd.mutations(), [])
+
+    def test_stopped_owner_reruns_the_gate_that_failed_for_its_previous_instance(self) -> None:
+        self.establish()
+        systemd = FakeSystemd({SOCKET: "active", TIMER: "active", OWNER: "inactive", GATE: "failed"})
+        result = self.apply(systemd)
+        # The gate's failure describes the stopped instance; the restarted owner
+        # needs its own observation, and dependents Require= the gate anyway.
+        self.assertEqual(result["recovery"], {"queued": [OWNER, GATE], "diagnostics": []})
+        self.assertEqual(systemd.mutations(), [("--no-block", "start", OWNER, GATE)])
+
+    def test_recovery_is_bounded_and_reports_units_left_unprobed(self) -> None:
+        self.establish()
+        systemd = FakeSystemd({})
+        clock = iter([0.0, 0.0, reconcile._RECOVERY_DEADLINE_SECONDS, reconcile._RECOVERY_DEADLINE_SECONDS])
+        with mock.patch.object(reconcile.time, "monotonic", side_effect=lambda: next(clock)):
+            result = self.apply(systemd)
+        self.assertEqual(result["recovery"]["queued"], [SOCKET])
+        self.assertEqual(
+            result["recovery"]["diagnostics"],
+            [
+                f"{OWNER}: recovery time budget exhausted; not queued",
+                f"{TIMER}: recovery time budget exhausted; not queued",
+            ],
+        )
+        recovery_calls = [
+            call for call in systemd.calls if call in {("is-active", SOCKET), ("--no-block", "start", SOCKET)}
+        ]
+        self.assertEqual(len(recovery_calls), 2)
+        for call in recovery_calls:
+            self.assertEqual(systemd.timeouts[call], reconcile._RECOVERY_CALL_TIMEOUT_SECONDS)
 
     def test_failed_transitional_and_unknown_units_are_reported_not_restarted(self) -> None:
         self.establish()
