@@ -724,18 +724,61 @@ fail() { echo "$*" >&2; exit 1; }
             adversarial,
         )
 
-    def test_guest_secret_transactions_wait_for_operation_lock_idle(self) -> None:
-        # Recovered sync timers fire at once and hold the operation lock, which
-        # refuses a concurrent nas-secrets launch with exit 75.
+    def test_guest_secret_transactions_relaunch_only_after_operation_lock_refusals(self) -> None:
+        # Recovered sync timers fire at once and can take the operation lock
+        # between an idle check and a nas-secrets launch, which exits 75.
         guest = GUEST_TEST.read_text(encoding="utf-8")
         start = guest.index('log "Secret stop/reactivation transaction"')
         lines = guest[start : guest.index('log "Final state"', start)].splitlines()
-        launch = re.compile(r"^(?:! printf .*\| )?(?:run_as_admin nas-secrets (?:stop|activate)|activate_secrets\b)")
-        launches = [index for index, line in enumerate(lines) if launch.match(line)]
+        launch = re.compile(r"run_as_admin nas-secrets (?:stop|activate)|\bactivate_(?:secrets|wrong_password)\b")
+        launches = [line for line in lines if launch.search(line) and not line.lstrip().startswith("#")]
         self.assertEqual(len(launches), 6)
-        for index in launches:
-            previous = next(line.strip() for line in reversed(lines[:index]) if not line.lstrip().startswith("#"))
-            self.assertEqual(previous, "wait_operation_lock_idle", lines[index])
+        for line in launches:
+            self.assertRegex(line, r"^(?:! )?retry_when_operation_busy /tmp/\S+\.log ", line)
+
+        helper = re.search(r"^retry_when_operation_busy\(\) \{\n.*?^\}\n", guest, re.MULTILINE | re.DOTALL)
+        assert helper is not None
+        cases = {
+            "conflict-then-ok": (0, 3),
+            "conflict-then-fail": (71, 2),
+            "other-75": (75, 1),
+            "fail": (71, 1),
+            "always-conflict": (75, 3),
+        }
+        script = (
+            "set -Eeuo pipefail\n"
+            "trap 'exit 99' ERR\n"
+            'TEST_TIMEOUT="$1"; mode="$2"; calls="$3"\n'
+            "wait_operation_lock_idle() { SECONDS=$((SECONDS + 1)); }\n" + helper.group(0) + "launch() {\n"
+            '  local n=$(( $(cat "$calls") + 1 )); echo "$n" >"$calls"\n'
+            '  case "$mode:$n" in\n'
+            "    conflict-then-ok:[12]|conflict-then-fail:1|always-conflict:*)\n"
+            "      echo 'Another privileged operation conflicts with nas-secrets:stop' >&2; return 75 ;;\n"
+            "    other-75:*) echo 'temporary failure' >&2; return 75 ;;\n"
+            "    conflict-then-ok:*) echo done ;;\n"
+            "    *) echo 'injected failure' >&2; return 71 ;;\n"
+            "  esac\n"
+            "}\n"
+            'status=0; retry_when_operation_busy "$4" launch || status=$?; exit "$status"\n'
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            for mode, (expected_status, expected_calls) in cases.items():
+                with self.subTest(mode=mode):
+                    calls = root / f"{mode}.calls"
+                    calls.write_text("0\n", encoding="utf-8")
+                    output = root / f"{mode}.log"
+                    timeout = "3" if mode == "always-conflict" else "600"
+                    result = subprocess.run(
+                        ["bash", "-c", script, "retry-test", timeout, mode, str(calls), str(output)],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=30,
+                    )
+                    self.assertEqual(result.returncode, expected_status, result.stderr)
+                    self.assertEqual(int(calls.read_text(encoding="utf-8")), expected_calls)
+                    self.assertEqual(result.stdout, output.read_text(encoding="utf-8"))
 
     def test_secret_adversarial_uses_the_promoted_local_administrator(self) -> None:
         adversarial = SECRET_ADVERSARIAL.read_text(encoding="utf-8")
