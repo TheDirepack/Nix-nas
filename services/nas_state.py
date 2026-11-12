@@ -732,6 +732,7 @@ def export_bundle(output: pathlib.Path, *, include_sensitive: bool, quiesce: boo
         quiesced_units = export_quiesce_units()
         unit_snapshot = capture_unit_state(quiesced_units)
         stop_active_units(unit_snapshot)
+    primary_error: Exception | None = None
     try:
         if quiesced_units:
             prepare_database_export(registry, unit_snapshot)
@@ -810,9 +811,19 @@ def export_bundle(output: pathlib.Path, *, include_sensitive: bool, quiesce: boo
             finally:
                 temporary_output.unlink(missing_ok=True)
         return manifest
+    except Exception as exc:
+        primary_error = exc
+        raise
     finally:
         if unit_snapshot:
-            restore_unit_state(unit_snapshot)
+            try:
+                restore_unit_state(unit_snapshot)
+            except Exception as recovery_error:
+                if primary_error is not None:
+                    raise StateError(
+                        f"State export failed: {primary_error}; service recovery also failed: {recovery_error}"
+                    ) from primary_error
+                raise
 
 
 def safe_member_name(name: str) -> pathlib.PurePosixPath:
@@ -1482,12 +1493,17 @@ def stop_active_units(snapshot: Mapping[str, bool]) -> None:
 
 
 def restore_unit_state(snapshot: Mapping[str, bool]) -> None:
+    recovery_errors: list[str] = []
     for unit, active in snapshot.items():
-        currently_active = run_systemctl("is-active", "--quiet", unit, check=False).returncode == 0
-        if active and not currently_active:
-            run_systemctl("start", unit)
-        elif not active and currently_active:
-            run_systemctl("stop", unit)
+        action = "start" if active else "stop"
+        try:
+            currently_active = run_systemctl("is-active", "--quiet", unit, check=False).returncode == 0
+            if active != currently_active:
+                run_systemctl(action, unit)
+        except Exception as exc:
+            recovery_errors.append(f"{action} {unit}: {exc}")
+    if recovery_errors:
+        raise StateError("Service state recovery failed: " + "; ".join(recovery_errors))
 
 
 def secure_rollback_root() -> None:
@@ -1776,7 +1792,7 @@ def restore_bundle(
                         completedAt=int(time.time()),
                     )
                     raise StateError(
-                        f"Restore preparation failed and service recovery also failed: {unit_error}"
+                        f"Restore preparation failed: {original}; service recovery also failed: {unit_error}"
                     ) from original
                 restore_journal_update("failed-before-apply", primaryError=str(original), completedAt=int(time.time()))
                 raise
@@ -1809,7 +1825,8 @@ def restore_bundle(
                     "manual-recovery-required", rollbackError=str(rollback_error), completedAt=int(time.time())
                 )
                 raise StateError(
-                    f"Restore failed and automatic rollback also failed; recover from {rollback}: {rollback_error}"
+                    f"Restore failed: {original}; automatic rollback also failed; "
+                    f"recover from {rollback}: {rollback_error}"
                 ) from original
             raise
         prune_rollbacks()
