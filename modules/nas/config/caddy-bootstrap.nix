@@ -93,12 +93,18 @@ ${caddySiteHeaders}
   handle /setup/api/* {
     route {
       ${caddyForwardAuth}
+      # Setup retires its Authentik application before the final V2 transition;
+      # a later bootstrap fallback must still enforce appliance administration.
+      @missingSetupApiAdmin not header_regexp Remote-Groups (^|[|,][[:space:]]*)nas_admin([[:space:]]*[|,]|$)
+      respond @missingSetupApiAdmin 403
       reverse_proxy unix//run/nas-setup-api/setup.sock
     }
   }
   handle /setup/* {
     route {
       ${caddyForwardAuth}
+      @missingSetupPageAdmin not header_regexp Remote-Groups (^|[|,][[:space:]]*)nas_admin([[:space:]]*[|,]|$)
+      respond @missingSetupPageAdmin 403
       @post method POST
       handle @post {
         redir * /setup/ 303
