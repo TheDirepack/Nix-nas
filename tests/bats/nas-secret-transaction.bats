@@ -9,7 +9,15 @@ setup() {
 printf '%s\n' "$*" >> "$NAS_TX_LOG"
 case "$1" in
   is-active) [[ "${NAS_TX_ACTIVE:-1}" == 1 ]] ;;
-  stop) [[ "${NAS_TX_STOP_FAIL:-0}" != 1 ]] ;;
+  show)
+    echo LoadState=loaded
+    if [[ "${NAS_TX_ACTIVE:-1}" == 1 && ! -e "$NAS_TX_INACTIVE_MARKER" ]]; then
+      echo ActiveState=active
+    else
+      echo ActiveState=inactive
+    fi
+    ;;
+  stop) [[ "${NAS_TX_STOP_FAIL:-0}" != 1 ]] && touch "$NAS_TX_INACTIVE_MARKER" ;;
   start) [[ "${NAS_TX_START_FAIL:-0}" != 1 ]] ;;
   *) exit 0 ;;
 esac
@@ -18,6 +26,7 @@ SH
   export NAS_SECRET_TX_PRIVILEGE=""
   export NAS_SECRET_TX_SYSTEMCTL="$work/bin/systemctl"
   export NAS_TX_LOG="$work/systemctl.log"
+  export NAS_TX_INACTIVE_MARKER="$work/inactive-after-stop"
   source "$BATS_TEST_DIRNAME/../../scripts/lib/nas-secret-transaction.sh"
 }
 

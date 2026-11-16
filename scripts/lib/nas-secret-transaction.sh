@@ -13,11 +13,38 @@ nas_secret_tx_systemctl() {
   nas_secret_tx_privileged "${NAS_SECRET_TX_SYSTEMCTL:-systemctl}" "$@"
 }
 
-nas_secret_tx_stop_target() {
-  if nas_secret_tx_systemctl stop "$NAS_SECRET_TX_TARGET"; then
-    return 0
+nas_secret_tx_observe_target() {
+  local properties property load_state='' active_state=''
+  properties="$(nas_secret_tx_systemctl show --property=LoadState --property=ActiveState "$NAS_SECRET_TX_TARGET")" || {
+    printf 'nas-secret-transaction: protected target status is unavailable\n' >&2
+    return 1
+  }
+  while IFS= read -r property; do
+    case "$property" in
+      LoadState=*) load_state=${property#LoadState=} ;;
+      ActiveState=*) active_state=${property#ActiveState=} ;;
+    esac
+  done <<< "$properties"
+  if [[ "$load_state" == loaded ]]; then
+    case "$active_state" in
+      active|inactive|failed) printf '%s\n' "$active_state"; return 0 ;;
+    esac
   fi
-  ! nas_secret_tx_systemctl is-active --quiet "$NAS_SECRET_TX_TARGET"
+  printf 'nas-secret-transaction: protected target has no stable loaded state (load=%s, active=%s)\n' \
+    "$load_state" "$active_state" >&2
+  return 1
+}
+
+nas_secret_tx_stop_target() {
+  local state stop_rc=0
+  nas_secret_tx_systemctl stop "$NAS_SECRET_TX_TARGET" || stop_rc=$?
+  # Neither stop success nor a failed status query proves consumers are stopped.
+  state="$(nas_secret_tx_observe_target)" || return 1
+  case "$state" in
+    inactive|failed) return 0 ;;
+  esac
+  printf 'nas-secret-transaction: protected target remains active after stop (status %s)\n' "$stop_rc" >&2
+  return 1
 }
 
 nas_secret_tx_realpath_lexical() {
@@ -146,10 +173,11 @@ nas_secret_tx_init() {
   NAS_SECRET_TX_OLD_MOVED=false
   NAS_SECRET_TX_NEW_INSTALLED=false
   NAS_SECRET_TX_COMMITTED=false
-  NAS_SECRET_TX_WAS_ACTIVE=false
+  NAS_SECRET_TX_WAS_ACTIVE=unknown
 }
 
 nas_secret_tx_swap() {
+  local state
   [[ "${NAS_SECRET_TX_PHASE:-}" == initialized ]] || {
     printf 'nas-secret-transaction: invalid swap phase: %s\n' "${NAS_SECRET_TX_PHASE:-unset}" >&2
     return 1
@@ -184,15 +212,18 @@ nas_secret_tx_swap() {
     printf 'nas-secret-transaction: previous tree already exists: %s\n' "$NAS_SECRET_TX_PREVIOUS" >&2
     return 1
   }
-  if nas_secret_tx_systemctl is-active --quiet "$NAS_SECRET_TX_TARGET"; then
-    NAS_SECRET_TX_WAS_ACTIVE=true
-  fi
+  NAS_SECRET_TX_SWAP_STARTED=true
+  NAS_SECRET_TX_PHASE=observing
+  state="$(nas_secret_tx_observe_target)" || return 1
+  case "$state" in
+    active) NAS_SECRET_TX_WAS_ACTIVE=true ;;
+    inactive|failed) NAS_SECRET_TX_WAS_ACTIVE=false ;;
+  esac
 
   # Every irreversible operation is checked explicitly. Callers frequently
   # disable errexit around this function so they can capture its status and run
   # rollback; relying on the caller's shell options here would let a failed stop
   # or move fall through and incorrectly advance the transaction phase flags.
-  NAS_SECRET_TX_SWAP_STARTED=true
   NAS_SECRET_TX_PHASE=stopping
   nas_secret_tx_stop_target || return $?
   NAS_SECRET_TX_PHASE=stopped
@@ -245,31 +276,35 @@ nas_secret_tx_rollback() {
     return 0
   fi
 
-  nas_secret_tx_stop_target >/dev/null 2>&1 || failed=true
-  if [[ "$NAS_SECRET_TX_NEW_INSTALLED" == true ]]; then
-    nas_secret_tx_privileged rm -rf -- "$NAS_SECRET_TX_ROOT" || failed=true
-  fi
-  if [[ "$NAS_SECRET_TX_OLD_MOVED" == true ]]; then
-    if nas_secret_tx_privileged test -d "$NAS_SECRET_TX_PREVIOUS" && nas_secret_tx_privileged test ! -L "$NAS_SECRET_TX_PREVIOUS"; then
-      nas_secret_tx_privileged mv -T -- "$NAS_SECRET_TX_PREVIOUS" "$NAS_SECRET_TX_ROOT" || failed=true
-    else
-      printf 'nas-secret-transaction: previous secret tree disappeared or became unsafe during rollback: %s\n' "$NAS_SECRET_TX_PREVIOUS" >&2
-      failed=true
+  # An unknown prior state or unconfirmed stop must preserve every secret tree.
+  if [[ "$NAS_SECRET_TX_WAS_ACTIVE" == unknown ]] || ! nas_secret_tx_stop_target; then
+    failed=true
+  else
+    if [[ "$NAS_SECRET_TX_NEW_INSTALLED" == true ]]; then
+      nas_secret_tx_privileged rm -rf -- "$NAS_SECRET_TX_ROOT" || failed=true
     fi
-  fi
-  # Starting the target before the restore is known good would run new
-  # consumers against a half-rolled-back tree.
-  if [[ "$NAS_SECRET_TX_WAS_ACTIVE" == true && "$failed" == false ]]; then
-    if nas_secret_tx_privileged test -f "$NAS_SECRET_TX_ROOT/ready" && nas_secret_tx_privileged test ! -L "$NAS_SECRET_TX_ROOT/ready"; then
-      nas_secret_tx_systemctl start "$NAS_SECRET_TX_TARGET" >/dev/null 2>&1 || failed=true
-    else
-      printf 'nas-secret-transaction: restored secret tree is not ready; protected target remains stopped\n' >&2
-      failed=true
+    if [[ "$NAS_SECRET_TX_OLD_MOVED" == true ]]; then
+      if nas_secret_tx_privileged test -d "$NAS_SECRET_TX_PREVIOUS" && nas_secret_tx_privileged test ! -L "$NAS_SECRET_TX_PREVIOUS"; then
+        nas_secret_tx_privileged mv -T -- "$NAS_SECRET_TX_PREVIOUS" "$NAS_SECRET_TX_ROOT" || failed=true
+      else
+        printf 'nas-secret-transaction: previous secret tree disappeared or became unsafe during rollback: %s\n' "$NAS_SECRET_TX_PREVIOUS" >&2
+        failed=true
+      fi
     fi
-  fi
-  nas_secret_tx_privileged rm -rf -- "$NAS_SECRET_TX_STAGE" || failed=true
-  if ! "$failed"; then
-    nas_secret_tx_remove_directory || failed=true
+    # Starting the target before the restore is known good would run new
+    # consumers against a half-rolled-back tree.
+    if [[ "$NAS_SECRET_TX_WAS_ACTIVE" == true && "$failed" == false ]]; then
+      if nas_secret_tx_privileged test -f "$NAS_SECRET_TX_ROOT/ready" && nas_secret_tx_privileged test ! -L "$NAS_SECRET_TX_ROOT/ready"; then
+        nas_secret_tx_systemctl start "$NAS_SECRET_TX_TARGET" >/dev/null 2>&1 || failed=true
+      else
+        printf 'nas-secret-transaction: restored secret tree is not ready; protected target remains stopped\n' >&2
+        failed=true
+      fi
+    fi
+    nas_secret_tx_privileged rm -rf -- "$NAS_SECRET_TX_STAGE" || failed=true
+    if ! "$failed"; then
+      nas_secret_tx_remove_directory || failed=true
+    fi
   fi
   if "$failed"; then
     NAS_SECRET_TX_PHASE=rollback-incomplete
@@ -323,7 +358,10 @@ nas_secret_tx_cleanup() {
     # An uncommitted transaction is never a success, even if a caller accidentally
     # reaches EXIT with status 0. Restore the prior state and make the programming
     # error visible instead of leaving a swapped-but-uncommitted tree live.
-    nas_secret_tx_rollback || return 125
+    if ! nas_secret_tx_rollback; then
+      printf 'nas-secret-transaction: manual recovery required; primary status %s\n' "$rc" >&2
+      return 125
+    fi
     if [[ $rc -eq 0 ]]; then
       printf 'nas-secret-transaction: transaction exited successfully without commit; rolled back\n' >&2
       return 125

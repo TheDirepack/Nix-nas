@@ -33,13 +33,26 @@ class SecretTransactionShellTests(unittest.TestCase):
                     """\
                     #!/usr/bin/env bash
                     printf '%s\\n' "$*" >> "$NAS_TX_LOG"
+                    [[ "${NAS_TX_UNAVAILABLE:-0}" != 1 ]] || { echo 'Failed to connect to bus' >&2; exit 1; }
                     case "$1" in
+                      show)
+                        [[ "${NAS_TX_SHOW_FAIL:-0}" != 1 ]] || { echo 'Failed to query status' >&2; exit 1; }
+                        printf 'LoadState=%s\\n' "${NAS_TX_LOAD_STATE:-loaded}"
+                        if [[ -n "${NAS_TX_STATE:-}" ]]; then
+                          printf 'ActiveState=%s\\n' "$NAS_TX_STATE"
+                        elif [[ "${NAS_TX_ACTIVE:-1}" == 1 && ! -e "$NAS_TX_INACTIVE_MARKER" ]]; then
+                          echo ActiveState=active
+                        else
+                          echo ActiveState=inactive
+                        fi
+                        ;;
                       is-active) [[ "${NAS_TX_ACTIVE:-1}" == 1 && ! -e "$NAS_TX_INACTIVE_MARKER" ]] ;;
                       stop)
                         if [[ "${NAS_TX_STOP_FAIL:-0}" == 1 ]]; then
                           [[ "${NAS_TX_STOP_LEFT_INACTIVE:-0}" != 1 ]] || touch "$NAS_TX_INACTIVE_MARKER"
                           exit 1
                         fi
+                        touch "$NAS_TX_INACTIVE_MARKER"
                         ;;
                       start) [[ "${NAS_TX_START_FAIL:-0}" != 1 ]] ;;
                       *) exit 0 ;;
@@ -116,6 +129,106 @@ class SecretTransactionShellTests(unittest.TestCase):
 
     def assert_ok(self, result: subprocess.CompletedProcess[str]) -> None:
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_unavailable_or_transitional_initial_observation_preserves_both_trees(self) -> None:
+        for settings in (
+            "NAS_TX_UNAVAILABLE=1",
+            "NAS_TX_SHOW_FAIL=1",
+            "NAS_TX_STATE=activating",
+            "NAS_TX_STATE=deactivating",
+            "NAS_TX_STATE=reloading",
+            "NAS_TX_STATE=unknown",
+            "NAS_TX_LOAD_STATE=not-found",
+        ):
+            with self.subTest(settings=settings):
+                self.assert_ok(
+                    self.run_scenario(
+                        """
+                    nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+                    set +e; nas_secret_tx_swap 2>primary.log; rc=$?; set -e
+                    [[ $rc -ne 0 && -f root/old && -f stage/new && ! -e previous ]]
+                    [[ "$NAS_SECRET_TX_WAS_ACTIVE" != false ]]
+                    set +e; nas_secret_tx_cleanup "$rc" 2>recovery.log; cleanup_rc=$?; set -e
+                    [[ $cleanup_rc -eq 125 && -f root/old && -f stage/new && ! -e previous ]]
+                    [[ ! -f mv.count && -s primary.log ]]
+                    grep -Fq "primary status $rc" recovery.log
+                    ! grep -q '^start ' systemctl.log
+                    """,
+                        shell_export=f"export {settings}",
+                    )
+                )
+
+    def test_stop_must_be_observed_stable_even_if_stop_command_succeeds(self) -> None:
+        for observation in (
+            "NAS_TX_SHOW_FAIL=1",
+            "NAS_TX_STATE=activating",
+            "NAS_TX_STATE=deactivating",
+            "NAS_TX_STATE=active",
+            "NAS_TX_STATE=unknown",
+        ):
+            for stop_rc in (0, 1):
+                with self.subTest(observation=observation, stop_rc=stop_rc):
+                    self.assert_ok(
+                        self.run_scenario(
+                            f"""
+                        nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+                        nas_secret_tx_systemctl() {{
+                          if [[ "$1" == stop ]]; then export {observation}; return {stop_rc}; fi
+                          command "$NAS_SECRET_TX_SYSTEMCTL" "$@"
+                        }}
+                        set +e; nas_secret_tx_swap; rc=$?; set -e
+                        [[ $rc -ne 0 && -f root/old && -f stage/new && ! -e previous && ! -f mv.count ]]
+                        set +e; nas_secret_tx_cleanup 83 2>recovery.log; rc=$?; set -e
+                        [[ $rc -eq 125 && -f root/old && -f stage/new && ! -e previous ]]
+                        grep -Fq 'primary status 83' recovery.log
+                        """
+                        )
+                    )
+
+    def test_observed_inactive_or_failed_target_allows_swap_without_restart_on_rollback(self) -> None:
+        for stable_state in ("inactive", "failed"):
+            self.assert_ok(
+                self.run_scenario(
+                    """
+                nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+                nas_secret_tx_swap
+                [[ "$NAS_SECRET_TX_WAS_ACTIVE" == false && -f root/new && -f previous/old ]]
+                set +e; nas_secret_tx_cleanup 79; rc=$?; set -e
+                [[ $rc -eq 79 && -f root/old && ! -e previous ]]
+                ! grep -q '^start ' systemctl.log
+                """,
+                    shell_export=f"export NAS_TX_STATE={stable_state} NAS_TX_ACTIVE=0 NAS_TX_STOP_FAIL=1",
+                )
+            )
+
+    def test_rollback_stop_failure_preserves_live_previous_and_staged_recovery_material(self) -> None:
+        for settings in (
+            "NAS_TX_UNAVAILABLE=1",
+            "NAS_TX_SHOW_FAIL=1",
+            "NAS_TX_STATE=activating",
+            "NAS_TX_STATE=deactivating",
+            "NAS_TX_STATE=active",
+        ):
+            with self.subTest(settings=settings):
+                self.assert_ok(
+                    self.run_scenario(
+                        f"""
+                    mkdir tx; cp -a stage tx/new
+                    nas_secret_tx_init "$PWD/root" "$PWD/tx/new" "$PWD/tx/previous" nas-protected-services.target "$PWD/tx"
+                    nas_secret_tx_swap
+                    mkdir tx/new; touch tx/new/partial
+                    export NAS_TX_STOP_FAIL=1 {settings}
+                    set +e; nas_secret_tx_cleanup 71 2>recovery.log; rc=$?; set -e
+                    [[ $rc -eq 125 && "$NAS_SECRET_TX_PHASE" == rollback-incomplete ]]
+                    [[ -f root/new && -f root/ready && -f tx/previous/old && -f tx/previous/ready && -f tx/new/partial ]]
+                    [[ "$(cat mv.count)" == 2 ]]
+                    grep -Fq "$PWD/tx/previous" recovery.log
+                    grep -Fq "$PWD/tx/new" recovery.log
+                    grep -Fq 'primary status 71' recovery.log
+                    ! grep -q '^start ' systemctl.log
+                    """
+                    )
+                )
 
     def test_rollback_restores_previous_tree_without_sudo(self) -> None:
         result = self.run_scenario(
@@ -377,7 +490,7 @@ nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.
             nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
             nas_secret_tx_swap
             [[ -f root/new && -f previous/old ]]
-            grep -q '^is-active --quiet nas-protected-services.target$' systemctl.log
+            grep -q '^show --property=LoadState --property=ActiveState nas-protected-services.target$' systemctl.log
             """
         )
         self.assert_ok(result)
