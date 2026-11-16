@@ -94,6 +94,11 @@ class AccountPlanResumeTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+    def journal(self):
+        value = load_json(self.path)
+        assert value is not None, "Account-plan journal was not persisted"
+        return value
+
     def plan(self, *, deactivate_missing=False, password=False):
         bob = {"username": "bob", "name": "Bob", "email": "bob@example.test", "groups": ["nas_admin"]}
         if password:
@@ -107,7 +112,7 @@ class AccountPlanResumeTests(unittest.TestCase):
     def interrupted(self, plan):
         with self.assertRaisesRegex(identity.SyncError, "Alice update rejected"):
             identity.apply_account_plan("token", plan)
-        journal = load_json(self.path)
+        journal = self.journal()
         self.assertEqual(journal["status"], "failed")
         self.assertEqual(journal["steps"]["account:bob"]["status"], "complete")
         self.assertEqual(self.api.administrators(), ["alice", "bob"])
@@ -132,7 +137,7 @@ class AccountPlanResumeTests(unittest.TestCase):
                         identity.apply_account_plan("token", plan)
                     self.assertIn("alice", self.api.administrators())
                     self.assertEqual(self.api.calls, [])
-                    self.assertEqual(load_json(self.path)["status"], "failed")
+                    self.assertEqual(self.journal()["status"], "failed")
                     self.assertIn("app", bob["groups"])
 
     def test_no_drift_resume_skips_structural_write_and_reports_live_admins(self):
@@ -151,7 +156,7 @@ class AccountPlanResumeTests(unittest.TestCase):
                 self.assertIn("app", self.api.users["alice"]["groups"])
                 self.assertIn("app", self.api.users["bob"]["groups"])
                 self.assertIn("operator-application-grant", self.api.users["bob"]["groups"])
-                self.assertEqual(load_json(self.path)["status"], "complete")
+                self.assertEqual(self.journal()["status"], "complete")
 
     def test_unapplied_promotion_cannot_authorize_demotion_or_deactivation(self):
         for deactivate in (False, True):
@@ -164,7 +169,7 @@ class AccountPlanResumeTests(unittest.TestCase):
                     identity.apply_account_plan("token", self.plan(deactivate_missing=deactivate))
                 self.assertEqual(self.api.administrators(), ["alice"])
                 self.assertFalse(any(path == "core/users/1/" for path, _, _ in self.api.calls))
-                self.assertNotEqual(load_json(self.path)["status"], "complete")
+                self.assertNotEqual(self.journal()["status"], "complete")
 
     def test_final_readback_cannot_report_an_administrator_who_lost_access(self):
         plan = self.plan()
@@ -173,7 +178,7 @@ class AccountPlanResumeTests(unittest.TestCase):
         with self.assertRaisesRegex(identity.SyncError, "administrator|nas_admin"):
             identity.apply_account_plan("token", plan)
         self.assertEqual(self.api.administrators(), [])
-        self.assertEqual(load_json(self.path)["status"], "failed")
+        self.assertEqual(self.journal()["status"], "failed")
 
     def test_password_resume_requires_confirmation_even_without_structural_drift(self):
         plan = self.plan(password=True)
