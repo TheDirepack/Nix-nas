@@ -17,6 +17,7 @@ import pathlib
 import re
 import sys
 import tempfile
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -271,6 +272,7 @@ def _write_private_json(path: pathlib.Path, value: dict[str, Any]) -> None:
 def write_attempt(policy: dict[str, Any], name: str, *, now: datetime | None = None) -> dict[str, Any]:
     """Record a starting run and the repository it is about to use (ExecStartPre)."""
     attempt = {
+        "runId": uuid.uuid4().hex,
         "startedAt": (now or datetime.now(timezone.utc)).isoformat(timespec="seconds"),
         "repository": repository_fingerprint(policy),
     }
@@ -295,7 +297,9 @@ def write_record(
         raise BackupStatusError("SERVICE_RESULT is missing; run this from ExecStopPost")
     attempt = read_attempt(policy, name)
     fingerprint = attempt.get("repository") if attempt is not None else repository_fingerprint(policy)
+    run_id = attempt.get("runId") if attempt is not None else None
     record = {
+        "runId": run_id if isinstance(run_id, str) and run_id else uuid.uuid4().hex,
         "result": result,
         "exitCode": environment.get("EXIT_CODE", "")[:64],
         "exitStatus": environment.get("EXIT_STATUS", "")[:64],
@@ -366,13 +370,23 @@ def _finished(record: dict[str, Any]) -> datetime | None:
 
 
 def _unrecorded_attempt(policy: dict[str, Any], name: str) -> dict[str, Any] | None:
-    """Return a started run that has no result newer than its start."""
+    """Return an attempt without a result for the same run and repository."""
     attempt = read_attempt(policy, name)
     if attempt is None:
         return None
     record = read_record(policy, name)
-    started, finished = _timestamp(attempt, "startedAt"), (None if record is None else _finished(record))
-    if record is not None and started is not None and finished is not None and finished >= started:
+    run_id, fingerprint = attempt.get("runId"), attempt.get("repository")
+    # A matching durable result also covers a crash before attempt removal.
+    # Clock order cannot correlate runs, and legacy attempts have no unique ID.
+    if (
+        record is not None
+        and isinstance(run_id, str)
+        and run_id
+        and record.get("runId") == run_id
+        and isinstance(fingerprint, str)
+        and fingerprint
+        and record.get("repository") == fingerprint
+    ):
         return None
     return attempt
 
