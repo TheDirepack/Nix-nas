@@ -63,6 +63,12 @@ That list is not the complete seed: each application the seed includes also decl
 
 Assign those groups in Authentik, not through `nas-setup account apply`. The retired `nas_allow_*` and `nas_deny_*` groups are not V2 authorization rules.
 
+Disabling a service retains its declared capability groups and memberships.
+Removing the service or a capability declaration deletes the corresponding
+group. A V2 rollback can recreate that group, but it cannot recover its former
+memberships; preserve the relevant Authentik backup and review assignments before
+removing declarations, then regrant access in Authentik if needed.
+
 ## Password handling
 
 Prefer Authentik's UI for normal password changes and MFA recovery. When using NAS CLI commands, use `--password-stdin` or the interactive `--set-password` path rather than putting a password in a command argument or persistent configuration file.
