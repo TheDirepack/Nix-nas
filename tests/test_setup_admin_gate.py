@@ -136,6 +136,20 @@ class SetupAdministratorGateTests(unittest.TestCase):
             self.request("/setup/api/first-start/resume", method="POST", **{"X-Test-Anonymous": "yes"}), 401
         )
 
+    def test_bootstrap_console_uses_exact_canonical_groups_like_v2(self) -> None:
+        for groups, expected in (
+            ("nas_admin", 200),
+            ("application.cockpit.admin", 200),
+            ("nas_users|application.cockpit.admin", 200),
+            ("NAS_ADMIN", 403),
+            ("Nas_Admin", 403),
+            ("APPLICATION.COCKPIT.ADMIN", 403),
+            ("application.Cockpit.admin", 403),
+            ("application.cockpit.admin-extra", 403),
+        ):
+            with self.subTest(groups=groups):
+                self.assertEqual(self.request("/console/", groups=groups), expected)
+
     def test_job_polling_and_reboot_still_reach_the_capability_verifier(self) -> None:
         for path, method in (("/setup/api/first-start/job", "GET"), ("/setup/api/reboot", "POST")):
             with self.subTest(path=path):

@@ -137,10 +137,9 @@ ${caddySiteHeaders}
   handle /console* {
     route {
       ${caddyForwardAuth}
-      # nas_admin stays accepted for existing installs; the seed's cockpit
-      # service declares the admin capability, which maps to the
-      # application.cockpit.admin group.
-      @missingCockpitAdmin not header_regexp Remote-Groups (?i)(^|[|,][[:space:]]*)(application[.]cockpit[.]admin|nas_admin)([[:space:]]*[|,]|$)
+      # Match V2's case-sensitive grants; similarly named Authentik groups
+      # must not gain console authority during bootstrap or fallback.
+      @missingCockpitAdmin not header_regexp Remote-Groups (^|[|,][[:space:]]*)(application[.]cockpit[.]admin|nas_admin)([[:space:]]*[|,]|$)
       respond @missingCockpitAdmin 403
       reverse_proxy unix//run/nas-cockpit-sso/ws.sock {
         header_up X-Forwarded-Proto https
