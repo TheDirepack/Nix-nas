@@ -98,6 +98,14 @@ password change, verify the account's actual credential in Authentik (Users >
 account > set or reset password) before assuming the old or new password is in
 effect, and record what you verified in the cancellation note.
 
+Resuming the same plan rechecks completed account steps against live Authentik
+state before continuing. If a completed account's profile, active state, base
+roles, or plan-owned attributes have drifted, the retry stops before further
+account changes. Reconcile that account with the intended plan, or review and
+cancel the failed plan before submitting a corrected one. Application capability
+memberships are preserved. Repeating password changes on an incomplete plan
+still requires `--confirm-password-reapply`.
+
 Only after reviewing the completed and failed steps, explicitly abandon the
 **failed** journal using the exact fingerprint and journal revision reported
 above, plus a note:
