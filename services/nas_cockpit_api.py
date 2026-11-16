@@ -1337,6 +1337,16 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
     def _api_error(self, exc: Exception) -> None:
         self._send_json(getattr(exc, "status", 400), {"error": str(exc)})
 
+    def _check_post_origin(self) -> None:
+        origins = self.headers.get_all("Origin", [])
+        if not origins:
+            return
+        hosts = self.headers.get_all("Host", [])
+        # Caddy preserves the public Host on the permissioned Unix hop. SameSite
+        # cookies alone cannot reject requests from an untrusted sibling host.
+        if len(origins) != 1 or len(hosts) != 1 or origins[0].casefold() != f"https://{hosts[0]}".casefold():
+            raise SetupApiError("Cross-origin setup requests are not permitted", status=403)
+
     def _read_bounded_json(self) -> dict[str, Any]:
         if self.command == "GET":
             if self.headers.get("Content-Length") is not None or self.headers.get("Transfer-Encoding") is not None:
@@ -1403,6 +1413,7 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - http.server naming
         try:
+            self._check_post_origin()
             request = self._read_bounded_json()
             self._finish_request_read()
             with _setup_submission_guard():
