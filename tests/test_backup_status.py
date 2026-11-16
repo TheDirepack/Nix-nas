@@ -303,7 +303,9 @@ class BackupStatusTests(unittest.TestCase):
 
                 self.assertTrue(attempt_path.exists())
                 self.assertIsNone(status._unrecorded_attempt(fixture.policy, name))
-                self.assertEqual(status.read_record(fixture.policy, name)["runId"], attempt["runId"])
+                record = status.read_record(fixture.policy, name)
+                assert record is not None, "Completed backup result was not persisted"
+                self.assertEqual(record["runId"], attempt["runId"])
                 value = json.loads(fixture.main("status")[1])
                 self.assertEqual(self.rows(value)[row_id]["summary"], "Succeeded")
                 if name == "backup":
