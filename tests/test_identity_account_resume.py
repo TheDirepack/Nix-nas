@@ -159,6 +159,18 @@ class AccountPlanResumeTests(unittest.TestCase):
                 self.assertIn("operator-application-grant", self.api.users["bob"]["groups"])
                 self.assertEqual(self.journal()["status"], "complete")
 
+    def test_resume_rejects_drift_inside_plan_owned_attribute_values(self):
+        plan = self.plan()
+        accounts = plan["accounts"]
+        assert isinstance(accounts, list)
+        accounts[1]["attributes"] = {"preferences": {"labels": []}}
+        self.interrupted(plan)
+        self.api.users["bob"]["attributes"]["preferences"]["labels"].append("changed")
+        with self.assertRaisesRegex(identity.SyncError, "structural drift for bob"):
+            identity.apply_account_plan("token", plan)
+        self.assertEqual(self.api.calls, [])
+        self.assertEqual(self.api.administrators(), ["alice", "bob"])
+
     def test_unapplied_promotion_cannot_authorize_demotion_or_deactivation(self):
         for deactivate in (False, True):
             with self.subTest(deactivate=deactivate):

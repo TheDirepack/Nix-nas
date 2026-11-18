@@ -1571,7 +1571,12 @@ def apply_account_plan(
         desired_names = set(usernames)
 
         def require_completed_account_state(
-            username: str, expected_groups: set[str], *, active: bool, expected: Mapping[str, Any]
+            username: str,
+            expected_groups: set[str],
+            *,
+            active: bool,
+            expected_profile: Mapping[str, str],
+            expected_attributes: Mapping[str, Any],
         ) -> None:
             current = existing_by_name.get(username)
             attributes = (current or {}).get("attributes")
@@ -1586,7 +1591,8 @@ def apply_account_plan(
                 or not isinstance(attributes, Mapping)
                 or attributes.get("nasManagedBySetup") is not True
                 or reserved_names != expected_groups
-                or not expected_subset(current, expected)
+                or any(current.get(key) != value for key, value in expected_profile.items())
+                or any(key not in attributes or attributes[key] != value for key, value in expected_attributes.items())
             ):
                 raise SyncError(
                     f"Completed account step has live structural drift for {username}; "
@@ -1601,11 +1607,8 @@ def apply_account_plan(
                     username,
                     set(account["groups"]),
                     active=account["active"],
-                    expected={
-                        "name": account["name"],
-                        "email": account["email"],
-                        "attributes": {**account["attributes"], "nasManagedBySetup": True},
-                    },
+                    expected_profile={"name": account["name"], "email": account["email"]},
+                    expected_attributes={**account["attributes"], "nasManagedBySetup": True},
                 )
         if deactivate_missing:
             for step in journal.value.get("steps", {}):
@@ -1615,7 +1618,8 @@ def apply_account_plan(
                         username,
                         {DISABLED_GROUP},
                         active=False,
-                        expected={},
+                        expected_profile={},
+                        expected_attributes={},
                     )
 
         def live_administrators() -> set[str]:
