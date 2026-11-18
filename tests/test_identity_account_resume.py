@@ -39,7 +39,8 @@ class AccountApi:
             },
         }
         self.calls = []
-        self.fail_alice = True
+        self.fail_update = True
+        self.fail_user = "alice"
         self.ignore_bob = False
         self.passwords = []
         self.lose_bob_on_alice = False
@@ -66,9 +67,9 @@ class AccountApi:
         if path.endswith("set_password/"):
             self.passwords.append(user["username"])
             return {}
-        if user["username"] == "alice" and self.fail_alice:
-            self.fail_alice = False
-            raise identity.SyncError("HTTP 400 Alice update rejected")
+        if user["username"] == self.fail_user and self.fail_update:
+            self.fail_update = False
+            raise identity.SyncError(f"HTTP 400 {user['name']} update rejected")
         if not (self.ignore_bob and user["username"] == "bob"):
             user.update(copy.deepcopy(body))
         if self.lose_bob_on_alice and user["username"] == "alice":
@@ -164,12 +165,58 @@ class AccountPlanResumeTests(unittest.TestCase):
                 self.path.unlink(missing_ok=True)
                 self.api.__init__()
                 self.api.ignore_bob = True
-                self.api.fail_alice = False
+                self.api.fail_update = False
                 with self.assertRaisesRegex(identity.SyncError, "administrator|nas_admin"):
                     identity.apply_account_plan("token", self.plan(deactivate_missing=deactivate))
                 self.assertEqual(self.api.administrators(), ["alice"])
                 self.assertFalse(any(path == "core/users/1/" for path, _, _ in self.api.calls))
                 self.assertNotEqual(self.journal()["status"], "complete")
+
+    def interrupted_deactivations(self):
+        self.api.users["carol"] = {
+            **self.api.users["alice"],
+            "pk": 3,
+            "username": "carol",
+            "name": "Carol",
+            "groups": ["users", "app"],
+        }
+        self.api.fail_user = "carol"
+        plan = self.plan(deactivate_missing=True)
+        with self.assertRaisesRegex(identity.SyncError, "Carol update rejected"):
+            identity.apply_account_plan("token", plan)
+        self.assertEqual(self.journal()["steps"]["deactivate:alice"]["status"], "complete")
+        self.assertFalse(self.api.users["alice"]["is_active"])
+        self.api.calls.clear()
+        return plan
+
+    def test_resume_stops_before_pending_writes_when_completed_deactivation_drifted(self):
+        for drift in ("reactivated", "admin grant", "unmanaged", "removed"):
+            with self.subTest(drift=drift):
+                self.path.unlink(missing_ok=True)
+                self.api.__init__()
+                plan = self.interrupted_deactivations()
+                alice = self.api.users["alice"]
+                if drift == "reactivated":
+                    alice["is_active"] = True
+                elif drift == "admin grant":
+                    alice["groups"].append("admin")
+                elif drift == "unmanaged":
+                    alice["attributes"] = {}
+                else:
+                    del self.api.users["alice"]
+                with self.assertRaisesRegex(identity.SyncError, "structural drift for alice"):
+                    identity.apply_account_plan("token", plan)
+                self.assertEqual(self.api.calls, [])
+                self.assertEqual(self.journal()["status"], "failed")
+
+    def test_resume_preserves_completed_deactivation_with_unrelated_changes(self):
+        plan = self.interrupted_deactivations()
+        self.api.users["alice"]["groups"].append("operator-application-grant")
+        self.api.users["alice"]["attributes"]["external"] = "preserved"
+        result = identity.apply_account_plan("token", plan)
+        self.assertEqual(result["deactivated"], ["alice", "carol"])
+        self.assertEqual(result["administrators"], ["bob"])
+        self.assertEqual([path for path, _, _ in self.api.calls], ["core/users/3/"])
 
     def test_final_readback_cannot_report_an_administrator_who_lost_access(self):
         plan = self.plan()

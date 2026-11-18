@@ -1570,28 +1570,53 @@ def apply_account_plan(
         password_changed: list[str] = []
         desired_names = set(usernames)
 
-        # A completed journal step records a past observation, not current authority.
-        for account in accounts:
-            username = account["username"]
-            if not journal.step_complete(f"account:{username}"):
-                continue
+        def require_completed_account_state(
+            username: str, expected_groups: set[str], *, active: bool, expected: Mapping[str, Any]
+        ) -> None:
             current = existing_by_name.get(username)
+            attributes = (current or {}).get("attributes")
             reserved_names = {
                 group_name_by_pk[key]
                 for key in raw_group_pks(current or {})
                 if group_name_by_pk.get(key) in RESERVED_GROUPS
             }
-            expected = {
-                "name": account["name"],
-                "email": account["email"],
-                "is_active": account["active"],
-                "attributes": {**account["attributes"], "nasManagedBySetup": True},
-            }
-            if current is None or reserved_names != set(account["groups"]) or not expected_subset(current, expected):
+            if (
+                current is None
+                or current.get("is_active") is not active
+                or not isinstance(attributes, Mapping)
+                or attributes.get("nasManagedBySetup") is not True
+                or reserved_names != expected_groups
+                or not expected_subset(current, expected)
+            ):
                 raise SyncError(
                     f"Completed account step has live structural drift for {username}; "
                     "reconcile Authentik state or explicitly cancel the failed plan before retrying"
                 )
+
+        # A completed journal step records a past observation, not current authority.
+        for account in accounts:
+            username = account["username"]
+            if journal.step_complete(f"account:{username}"):
+                require_completed_account_state(
+                    username,
+                    set(account["groups"]),
+                    active=account["active"],
+                    expected={
+                        "name": account["name"],
+                        "email": account["email"],
+                        "attributes": {**account["attributes"], "nasManagedBySetup": True},
+                    },
+                )
+        if deactivate_missing:
+            for step in journal.value.get("steps", {}):
+                kind, _, username = step.partition(":")
+                if kind == "deactivate" and journal.step_complete(step):
+                    require_completed_account_state(
+                        username,
+                        {DISABLED_GROUP},
+                        active=False,
+                        expected={},
+                    )
 
         def live_administrators() -> set[str]:
             live_users = authentik_list(token, "core/users/?include_groups=true")
