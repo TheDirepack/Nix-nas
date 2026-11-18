@@ -57,6 +57,15 @@ The **Backup** card on the Cockpit overview shows what `nas-backup-status status
 
 Start a backup or restore verification from **Operations**.
 
+Each new run has a unique identifier linking its start and result, so a rapid
+retry or a clock correction cannot make an earlier success stand in for it.
+A completed result remains usable if interruption leaves its matching start
+record behind. Older results remain visible for their repository when no start
+record is outstanding. An outstanding legacy start record without a run
+identifier cannot be matched safely and reports *Not recorded*, even if an older
+success exists. Inspect the unit status and journal, then run the backup or
+verification again through **Operations** to obtain a newly correlated result.
+
 ## Durable OCI application state
 
 Keep the V2 service ID stable when replacing an image. Store the application's
