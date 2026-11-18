@@ -14,8 +14,9 @@ nas_secret_tx_systemctl() {
 }
 
 nas_secret_tx_observe_target() {
-  local properties property load_state='' active_state=''
-  properties="$(nas_secret_tx_systemctl show --property=LoadState --property=ActiveState "$NAS_SECRET_TX_TARGET")" || {
+  local properties property load_state='' active_state='' job=unavailable
+  # --all makes systemctl print an explicit empty Job= when no job is queued.
+  properties="$(nas_secret_tx_systemctl show --all --property=LoadState --property=ActiveState --property=Job "$NAS_SECRET_TX_TARGET")" || {
     printf 'nas-secret-transaction: protected target status is unavailable\n' >&2
     return 1
   }
@@ -23,15 +24,16 @@ nas_secret_tx_observe_target() {
     case "$property" in
       LoadState=*) load_state=${property#LoadState=} ;;
       ActiveState=*) active_state=${property#ActiveState=} ;;
+      Job=*) job=${property#Job=} ;;
     esac
   done <<< "$properties"
-  if [[ "$load_state" == loaded ]]; then
+  if [[ "$load_state" == loaded && -z "$job" ]]; then
     case "$active_state" in
       active|inactive|failed) printf '%s\n' "$active_state"; return 0 ;;
     esac
   fi
-  printf 'nas-secret-transaction: protected target has no stable loaded state (load=%s, active=%s)\n' \
-    "$load_state" "$active_state" >&2
+  printf 'nas-secret-transaction: protected target has no stable loaded state (load=%s, active=%s, job=%s)\n' \
+    "$load_state" "$active_state" "$job" >&2
   return 1
 }
 

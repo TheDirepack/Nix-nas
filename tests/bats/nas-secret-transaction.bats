@@ -11,6 +11,7 @@ case "$1" in
   is-active) [[ "${NAS_TX_ACTIVE:-1}" == 1 ]] ;;
   show)
     echo LoadState=loaded
+    echo Job=
     if [[ "${NAS_TX_ACTIVE:-1}" == 1 && ! -e "$NAS_TX_INACTIVE_MARKER" ]]; then
       echo ActiveState=active
     else

@@ -38,6 +38,9 @@ class SecretTransactionShellTests(unittest.TestCase):
                       show)
                         [[ "${NAS_TX_SHOW_FAIL:-0}" != 1 ]] || { echo 'Failed to query status' >&2; exit 1; }
                         printf 'LoadState=%s\\n' "${NAS_TX_LOAD_STATE:-loaded}"
+                        if [[ "${NAS_TX_JOB_MISSING:-0}" != 1 ]]; then
+                          printf 'Job=%s\\n' "${NAS_TX_JOB:-}"
+                        fi
                         if [[ -n "${NAS_TX_STATE:-}" ]]; then
                           printf 'ActiveState=%s\\n' "$NAS_TX_STATE"
                         elif [[ "${NAS_TX_ACTIVE:-1}" == 1 && ! -e "$NAS_TX_INACTIVE_MARKER" ]]; then
@@ -139,6 +142,8 @@ class SecretTransactionShellTests(unittest.TestCase):
             "NAS_TX_STATE=reloading",
             "NAS_TX_STATE=unknown",
             "NAS_TX_LOAD_STATE=not-found",
+            "NAS_TX_STATE=inactive NAS_TX_JOB=42",
+            "NAS_TX_JOB_MISSING=1",
         ):
             with self.subTest(settings=settings):
                 self.assert_ok(
@@ -165,6 +170,8 @@ class SecretTransactionShellTests(unittest.TestCase):
             "NAS_TX_STATE=deactivating",
             "NAS_TX_STATE=active",
             "NAS_TX_STATE=unknown",
+            "NAS_TX_STATE=inactive NAS_TX_JOB=42",
+            "NAS_TX_JOB_MISSING=1",
         ):
             for stop_rc in (0, 1):
                 with self.subTest(observation=observation, stop_rc=stop_rc):
@@ -208,6 +215,8 @@ class SecretTransactionShellTests(unittest.TestCase):
             "NAS_TX_STATE=activating",
             "NAS_TX_STATE=deactivating",
             "NAS_TX_STATE=active",
+            "NAS_TX_STATE=inactive NAS_TX_JOB=42",
+            "NAS_TX_JOB_MISSING=1",
         ):
             with self.subTest(settings=settings):
                 self.assert_ok(
@@ -490,7 +499,7 @@ nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.
             nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
             nas_secret_tx_swap
             [[ -f root/new && -f previous/old ]]
-            grep -q '^show --property=LoadState --property=ActiveState nas-protected-services.target$' systemctl.log
+            grep -q '^show --all --property=LoadState --property=ActiveState --property=Job nas-protected-services.target$' systemctl.log
             """
         )
         self.assert_ok(result)

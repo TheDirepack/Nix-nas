@@ -36,10 +36,10 @@ Activation performs the following transaction:
 ## Secret activation recovery
 
 Activation requires a successful systemd observation of a loaded protected target
-in a stable state. If D-Bus is unavailable or the target is activating,
-deactivating, or otherwise transitional, activation refuses to replace the live
-secret tree. A failed stop is accepted only when a subsequent successful query
-observes the target as inactive or failed.
+in a stable state with no queued job. If D-Bus is unavailable or the target is
+activating, deactivating, or has a queued job, activation refuses to replace the
+live secret tree. A failed stop is accepted only when a subsequent successful
+query observes the target as inactive or failed with no queued job.
 
 If cleanup reports status 125, inspect the original error and the reported
 primary status, then use console or recovery SSH access to repair systemd and
