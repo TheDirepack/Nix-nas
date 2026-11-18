@@ -571,7 +571,8 @@ test("installed Services editor reconciles form changes and preserves rejected e
   const reconcileTimeout = 300_000;
   test.setTimeout(3 * reconcileTimeout + 240_000);
   const readback = process.env.NAS_VM_RECONCILE_READBACK;
-  if (!readback) throw new Error("Run this test through scripts/qemu-final-browser.sh for guest SSH readback");
+  if (!readback)
+    throw new Error("Run this test through scripts/qemu-final-browser.sh for guest SSH readback");
   const timeline = [];
   const record = (event, detail = {}) =>
     timeline.push(JSON.stringify({hostTime: new Date().toISOString(), event, ...detail}));
@@ -600,28 +601,36 @@ test("installed Services editor reconciles form changes and preserves rejected e
   };
   const expectAppliedName = async (expected, previous) => {
     let state;
-    await expect.poll(async () => {
-      state = await readGuest();
-      return {
-        ...state,
-        revisionsMatch: Boolean(state.applied) &&
-          state.desired === state.applied && state.plan === state.applied,
-        documentMatches: Boolean(state.documentHash) && state.documentHash === state.appliedHash,
-        revisionChanged: state.applied !== previous,
-      };
-    }, {
-      timeout: reconcileTimeout,
-      intervals: [2_000, 5_000],
-      message: `guest did not settle on ${JSON.stringify(expected)}`,
-    }).toMatchObject({
-      name: expected,
-      ActiveState: "inactive",
-      Result: "success",
-      pending: false,
-      revisionsMatch: true,
-      documentMatches: true,
-      revisionChanged: true,
-    });
+    await expect
+      .poll(
+        async () => {
+          state = await readGuest();
+          return {
+            ...state,
+            revisionsMatch:
+              Boolean(state.applied) &&
+              state.desired === state.applied &&
+              state.plan === state.applied,
+            documentMatches:
+              Boolean(state.documentHash) && state.documentHash === state.appliedHash,
+            revisionChanged: state.applied !== previous,
+          };
+        },
+        {
+          timeout: reconcileTimeout,
+          intervals: [2_000, 5_000],
+          message: `guest did not settle on ${JSON.stringify(expected)}`,
+        },
+      )
+      .toMatchObject({
+        name: expected,
+        ActiveState: "inactive",
+        Result: "success",
+        pending: false,
+        revisionsMatch: true,
+        documentMatches: true,
+        revisionChanged: true,
+      });
     return state;
   };
   const openEditor = async (target) => {
@@ -725,7 +734,10 @@ test("installed Services editor reconciles form changes and preserves rejected e
     });
   }
   if (primaryError && cleanupError) {
-    throw new AggregateError([primaryError, cleanupError], "Services editor flow and cleanup both failed");
+    throw new AggregateError(
+      [primaryError, cleanupError],
+      "Services editor flow and cleanup both failed",
+    );
   }
   if (primaryError || cleanupError) throw primaryError || cleanupError;
 });
