@@ -238,6 +238,11 @@ preserve the current Authentik password.
 
 ## Browser bootstrap and locked boot
 
+Open the wizard directly on the appliance's HTTPS origin. Browser submissions
+from another origin are rejected, including a sibling application hostname.
+Authorized nonbrowser recovery clients can continue sending requests without an
+`Origin` header; they still require the normal authenticated or capability path.
+
 Before setup completes, the Authentik gate protects every management route.
 The setup wizard is reachable only after signing in with the bootstrap
 Authentik identity. After setup, a locked boot serves only a static notice that

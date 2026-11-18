@@ -570,6 +570,67 @@ class SetupApiTransportTests(unittest.TestCase):
 
 
 class SetupApiCapabilityTests(unittest.TestCase):
+    def test_cross_origin_posts_cannot_reach_setup_mutations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, socket_path = self.live_server(directory)
+            for host, origin in (
+                ("setup", "https://untrusted.setup"),
+                ("setup", "null"),
+                ("setup", "http://setup"),
+                ("setup", "https://setup.evil"),
+                ("setup", "https://setup:8443"),
+                ("setup:443", "https://setup:8443"),
+                ("setup:8443", "https://setup"),
+                ("setup:8443", "https://setup:8443:443"),
+                ("setup", "https://setup/"),
+                ("setup", "https://setup\r\nOrigin: https://setup"),
+                ("setup\r\nHost: setup", "https://setup"),
+            ):
+                with (
+                    self.subTest(host=host, origin=origin),
+                    mock.patch.object(api, "_json_command", return_value={"ok": True}) as command,
+                    mock.patch.object(api, "_setup_submission_guard") as guard,
+                ):
+                    status, _ = self.exchange(
+                        socket_path,
+                        "POST",
+                        "/setup/api/first-start/plan",
+                        host=host,
+                        headers={"Origin": origin, "Content-Type": "text/plain"},
+                        body={},
+                    )
+                    self.assertIn(b"403", status)
+                    command.assert_not_called()
+                    guard.assert_not_called()
+
+    def test_same_origin_and_nonbrowser_setup_posts_remain_supported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, socket_path = self.live_server(directory)
+            for host, origin in (
+                ("setup", "https://setup"),
+                ("setup", "https://SETUP"),
+                ("setup:443", "https://setup"),
+                ("setup", "https://setup:443"),
+                ("[2001:db8::1]:443", "https://[2001:db8::1]"),
+                ("[2001:db8::443]", "https://[2001:db8::443]"),
+                ("setup:8443", "https://setup:8443"),
+                ("setup", None),
+            ):
+                with (
+                    self.subTest(host=host, origin=origin),
+                    mock.patch.object(api, "_json_command", return_value={"ok": True}) as command,
+                ):
+                    status, _ = self.exchange(
+                        socket_path,
+                        "POST",
+                        "/setup/api/first-start/plan",
+                        host=host,
+                        headers={} if origin is None else {"Origin": origin},
+                        body={},
+                    )
+                    self.assertIn(b"200", status)
+                    command.assert_called_once()
+
     def test_plan_creation_transport_uses_fixed_cli_path_and_stdin(self):
         with tempfile.TemporaryDirectory() as directory:
             _, socket_path = self.live_server(directory)
@@ -735,8 +796,8 @@ class SetupApiCapabilityTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         return server, socket_path
 
-    def exchange(self, socket_path, method, target, *, headers=None, body=None):
-        lines = [f"{method} {target} HTTP/1.0", "Host: setup"]
+    def exchange(self, socket_path, method, target, *, headers=None, body=None, host="setup"):
+        lines = [f"{method} {target} HTTP/1.0", f"Host: {host}"]
         payload = b"" if body is None else json.dumps(body).encode()
         if method == "POST":
             lines.append(f"Content-Length: {len(payload)}")
