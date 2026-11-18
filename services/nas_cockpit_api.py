@@ -1342,10 +1342,17 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
         if not origins:
             return
         hosts = self.headers.get_all("Host", [])
-        # Caddy preserves the public Host on the permissioned Unix hop. SameSite
-        # cookies alone cannot reject requests from an untrusted sibling host.
-        if len(origins) != 1 or len(hosts) != 1 or origins[0].casefold() != f"https://{hosts[0]}".casefold():
-            raise SetupApiError("Cross-origin setup requests are not permitted", status=403)
+        # Caddy preserves the public Host on the permissioned Unix hop. Browser
+        # origins omit the default HTTPS port even when Host includes it.
+        if len(origins) == 1 and len(hosts) == 1:
+            authority = re.fullmatch(r"([a-z0-9_.-]+|\[[0-9a-f:.]+\])(?::([0-9]+))?", hosts[0].lower())
+            if authority:
+                hostname, port = authority.groups()
+                expected = f"https://{hostname}"
+                allowed = {expected, f"{expected}:443"} if port in (None, "443") else {f"{expected}:{port}"}
+                if origins[0].lower() in allowed:
+                    return
+        raise SetupApiError("Cross-origin setup requests are not permitted", status=403)
 
     def _read_bounded_json(self) -> dict[str, Any]:
         if self.command == "GET":
