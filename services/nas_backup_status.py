@@ -349,14 +349,6 @@ _LOCATION_TEXT = {
 }
 
 
-def _current_record(policy: dict[str, Any], name: str, fingerprint: str | None) -> dict[str, Any] | None:
-    """Return the record only when it was written for the current repository."""
-    record = read_record(policy, name)
-    if record is None or fingerprint is None or record.get("repository") != fingerprint:
-        return None
-    return record
-
-
 def _timestamp(value: dict[str, Any], key: str) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(value[key])
@@ -369,12 +361,9 @@ def _finished(record: dict[str, Any]) -> datetime | None:
     return _timestamp(record, "finishedAt")
 
 
-def _unrecorded_attempt(policy: dict[str, Any], name: str) -> dict[str, Any] | None:
-    """Return an attempt without a result for the same run and repository."""
-    attempt = read_attempt(policy, name)
+def _unrecorded_attempt(attempt: dict[str, Any] | None, record: dict[str, Any] | None) -> dict[str, Any] | None:
     if attempt is None:
         return None
-    record = read_record(policy, name)
     run_id, fingerprint = attempt.get("runId"), attempt.get("repository")
     # A matching durable result also covers a crash before attempt removal.
     # Clock order cannot correlate runs, and legacy attempts have no unique ID.
@@ -389,6 +378,19 @@ def _unrecorded_attempt(policy: dict[str, Any], name: str) -> dict[str, Any] | N
     ):
         return None
     return attempt
+
+
+def _run_status(
+    policy: dict[str, Any], name: str, fingerprint: str | None
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    # The writer publishes the result before removing the attempt. Read in the
+    # opposite order and use the same result for correlation and reporting.
+    attempt = read_attempt(policy, name)
+    record = read_record(policy, name)
+    pending = _unrecorded_attempt(attempt, record)
+    if record is None or fingerprint is None or record.get("repository") != fingerprint:
+        return None, pending
+    return record, pending
 
 
 def _run_row(
@@ -468,15 +470,15 @@ def backup_status(policy: dict[str, Any], *, mountinfo: str | None) -> dict[str,
             )
         )
     fingerprint = repository_fingerprint(policy) if policy["enabled"] else None
-    last_backup = _current_record(policy, "backup", fingerprint) if policy["enabled"] else None
-    backup_pending = _unrecorded_attempt(policy, "backup") if policy["enabled"] else None
+    last_backup, backup_pending = None, None
     if policy["enabled"]:
+        last_backup, backup_pending = _run_status(policy, "backup", fingerprint)
         rows.append(
             _run_row("last-backup", "Last backup", last_backup, "The last backup completed at", pending=backup_pending)
         )
-    last_verify = _current_record(policy, "restore-verify", fingerprint) if policy["restoreVerification"] else None
+    last_verify = None
     if policy["restoreVerification"]:
-        verify_pending = _unrecorded_attempt(policy, "restore-verify")
+        last_verify, verify_pending = _run_status(policy, "restore-verify", fingerprint)
         caveat = ""
         if last_verify is not None and last_backup is not None and last_backup["result"] == "success":
             backup_time, verify_time = _finished(last_backup), _finished(last_verify)

@@ -268,7 +268,6 @@ class BackupStatusTests(unittest.TestCase):
                     status.write_record(fixture.policy, name, {"SERVICE_RESULT": "success"}, now=first_finish)
                     retry = status.write_attempt(fixture.policy, name, now=retry_start)
 
-                    self.assertIsNotNone(status._unrecorded_attempt(fixture.policy, name))
                     value = json.loads(fixture.main("status")[1])
                     self.assertEqual(self.rows(value)[row_id]["summary"], "Not recorded")
                     if name == "backup":
@@ -277,7 +276,6 @@ class BackupStatusTests(unittest.TestCase):
                     self.assertNotEqual(first["runId"], retry["runId"])
                     record = status.write_record(fixture.policy, name, {"SERVICE_RESULT": "exit-code"}, now=retry_start)
                     self.assertEqual(record["runId"], retry["runId"])
-                    self.assertIsNone(status._unrecorded_attempt(fixture.policy, name))
                     self.assertEqual(self.rows(json.loads(fixture.main("status")[1]))[row_id]["summary"], "Failed")
 
     def test_completed_attempt_survives_result_write_before_unlink_with_backward_clock(self) -> None:
@@ -302,7 +300,6 @@ class BackupStatusTests(unittest.TestCase):
                         )
 
                 self.assertTrue(attempt_path.exists())
-                self.assertIsNone(status._unrecorded_attempt(fixture.policy, name))
                 record = status.read_record(fixture.policy, name)
                 assert record is not None, "Completed backup result was not persisted"
                 self.assertEqual(record["runId"], attempt["runId"])
@@ -310,6 +307,35 @@ class BackupStatusTests(unittest.TestCase):
                 self.assertEqual(self.rows(value)[row_id]["summary"], "Succeeded")
                 if name == "backup":
                     self.assertTrue(value["ok"])
+
+    def test_status_reports_the_same_result_it_correlates_with_the_attempt(self) -> None:
+        for name, row_id, result_key in (
+            ("backup", "last-backup", "lastBackup"),
+            ("restore-verify", "restore-verification", "lastRestoreVerification"),
+        ):
+            with self.subTest(name=name):
+                fixture = PolicyFixture(self.root)
+                fixture.repository("b2:bucket:nas")
+                status.write_attempt(fixture.policy, name)
+                previous = status.write_record(fixture.policy, name, {"SERVICE_RESULT": "success"})
+                read_attempt = status.read_attempt
+
+                def read_after_completion(policy, record_name):
+                    if record_name == name:
+                        attempt = status.write_attempt(policy, record_name)
+                        # The new result is durable, but attempt cleanup has yet to run.
+                        status._write_private_json(
+                            self.root / "records" / f"{name}.json",
+                            {**previous, **attempt, "result": "exit-code"},
+                        )
+                    return read_attempt(policy, record_name)
+
+                with mock.patch.object(status, "read_attempt", side_effect=read_after_completion):
+                    value = json.loads(fixture.main("status")[1])
+                self.assertEqual(self.rows(value)[row_id]["summary"], "Failed")
+                self.assertEqual(value[result_key]["result"], "exit-code")
+                if name == "backup":
+                    self.assertFalse(value["ok"])
 
     def test_matching_run_id_also_requires_matching_repository_fingerprint(self) -> None:
         fixture = PolicyFixture(self.root)
@@ -323,8 +349,9 @@ class BackupStatusTests(unittest.TestCase):
         # A conflicting result with the same ID cannot acknowledge this attempt.
         attempt["repository"] = status.repository_fingerprint(fixture.policy)
         status._write_private_json(self.root / "records" / "backup.attempt.json", attempt)
-        self.assertIsNotNone(status._unrecorded_attempt(fixture.policy, "backup"))
-        self.assertFalse(json.loads(fixture.main("status")[1])["ok"])
+        value = json.loads(fixture.main("status")[1])
+        self.assertEqual(self.rows(value)["last-backup"]["summary"], "Not recorded")
+        self.assertFalse(value["ok"])
 
     def test_legacy_results_are_usable_but_cannot_acknowledge_outstanding_attempts(self) -> None:
         fixture = PolicyFixture(self.root)
