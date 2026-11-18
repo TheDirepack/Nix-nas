@@ -1570,6 +1570,69 @@ def apply_account_plan(
         password_changed: list[str] = []
         desired_names = set(usernames)
 
+        def require_completed_account_state(
+            username: str,
+            expected_groups: set[str],
+            *,
+            active: bool,
+            expected_profile: Mapping[str, str],
+            expected_attributes: Mapping[str, Any],
+        ) -> None:
+            current = existing_by_name.get(username)
+            attributes = (current or {}).get("attributes")
+            reserved_names = {
+                group_name_by_pk[key]
+                for key in raw_group_pks(current or {})
+                if group_name_by_pk.get(key) in RESERVED_GROUPS
+            }
+            if (
+                current is None
+                or current.get("is_active") is not active
+                or not isinstance(attributes, Mapping)
+                or attributes.get("nasManagedBySetup") is not True
+                or reserved_names != expected_groups
+                or any(current.get(key) != value for key, value in expected_profile.items())
+                or any(key not in attributes or attributes[key] != value for key, value in expected_attributes.items())
+            ):
+                raise SyncError(
+                    f"Completed account step has live structural drift for {username}; "
+                    "reconcile Authentik state or explicitly cancel the failed plan before retrying"
+                )
+
+        # A completed journal step records a past observation, not current authority.
+        for account in accounts:
+            username = account["username"]
+            if journal.step_complete(f"account:{username}"):
+                require_completed_account_state(
+                    username,
+                    set(account["groups"]),
+                    active=account["active"],
+                    expected_profile={"name": account["name"], "email": account["email"]},
+                    expected_attributes={**account["attributes"], "nasManagedBySetup": True},
+                )
+        if deactivate_missing:
+            for step in journal.value.get("steps", {}):
+                kind, _, username = step.partition(":")
+                if kind == "deactivate" and journal.step_complete(step):
+                    require_completed_account_state(
+                        username,
+                        {DISABLED_GROUP},
+                        active=False,
+                        expected_profile={},
+                        expected_attributes={},
+                    )
+
+        def live_administrators() -> set[str]:
+            live_users = authentik_list(token, "core/users/?include_groups=true")
+            live_groups = authentik_list(token, "core/groups/?include_users=true")
+            return enabled_administrator_names(live_users, live_groups)
+
+        def require_administrator_retention(username: str) -> None:
+            if not (live_administrators() - {username}):
+                raise SyncError(
+                    f"Refusing to demote or deactivate {username}: no other enabled explicit {ADMIN_GROUP} administrator"
+                )
+
         current_administrators = enabled_administrator_names(users, groups)
         resulting_administrators = set(current_administrators)
         for account in accounts:
@@ -1636,6 +1699,8 @@ def apply_account_plan(
                         created.append(username)
                         action = "created"
                     else:
+                        if not account["active"] or ADMIN_GROUP not in account["groups"]:
+                            require_administrator_retention(username)
                         pk = user_detail_pk(current)
                         authentik_request(token, f"core/users/{pk}/", method="PATCH", body=body)
                         updated.append(username)
@@ -1686,6 +1751,7 @@ def apply_account_plan(
                     kept.add(str(group_by_name[DISABLED_GROUP]["pk"]))
                     journal.start_step(step)
                     try:
+                        require_administrator_retention(username)
                         authentik_request(
                             token,
                             f"core/users/{user_detail_pk(current)}/",
@@ -1698,12 +1764,18 @@ def apply_account_plan(
                     journal.complete_step(step, {"username": username, "deactivated": True})
                 deactivated.append(username)
 
+        observed_administrators = live_administrators()
+        if not observed_administrators or observed_administrators != resulting_administrators:
+            raise SyncError(
+                "Account plan administrator read-back does not match the intended enabled nas_admin members"
+            )
+
         result = {
             "created": sorted(created),
             "updated": sorted(updated),
             "passwordsChanged": sorted(password_changed),
             "deactivated": sorted(deactivated),
-            "administrators": sorted(resulting_administrators),
+            "administrators": sorted(observed_administrators),
             "managed": sorted(desired_names),
             "journal": str(ACCOUNT_JOURNAL_PATH),
             "note": "Passwords were accepted only in the transient account plan and are not returned.",
