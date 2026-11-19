@@ -1131,7 +1131,11 @@ class StateBundleTests(unittest.TestCase):
             state.export_bundle(bundle, include_sensitive=False)
             public.write_text("current")
             for phase in ("preparation", "rollback"):
-                with self.subTest(phase=phase):
+                with (
+                    self.subTest(phase=phase),
+                    tempfile.TemporaryDirectory() as phase_temp,
+                    mock.patch.object(state, "RESTORE_JOURNAL", pathlib.Path(phase_temp) / "restore-operation.json"),
+                ):
                     primary = state.StateError(f"{phase} primary failure")
                     calls = []
 
@@ -1163,6 +1167,15 @@ class StateBundleTests(unittest.TestCase):
                     self.assertIs(raised.exception.__cause__, primary)
                     for unit in snapshot:
                         self.assertIn(("start", unit), calls)
+                    journal = json.loads(state.RESTORE_JOURNAL.read_text())
+                    self.assertEqual(journal["status"], "manual-recovery-required")
+                    self.assertEqual(journal["primaryError"], str(primary))
+                    self.assertLess(
+                        journal["rollbackError"].index("one.service"), journal["rollbackError"].index("two.service")
+                    )
+                    if phase == "rollback":
+                        self.assertEqual(journal["unitSnapshot"], snapshot)
+                        self.assertTrue(pathlib.Path(journal["rollbackBundle"]).is_file())
 
     def test_restore_units_honors_generated_profile_list(self) -> None:
         with mock.patch.dict(
