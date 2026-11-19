@@ -561,13 +561,9 @@ test("final VM CSP blocks inline script execution in the NAS component frame", a
   expect(result).toBe(0);
 });
 
-test("installed Services editor reconciles form changes and preserves rejected edits", async ({
+test("installed Services editor reconciles form changes and preserves rejected edits @installed-mutation", async ({
   page,
 }, testInfo) => {
-  test.skip(
-    testInfo.project.name !== "chromium-final-vm",
-    "One mutation flow owns the shared appliance document; other projects qualify rendering and authentication.",
-  );
   const reconcileTimeout = 300_000;
   test.setTimeout(3 * reconcileTimeout + 240_000);
   const readback = process.env.NAS_VM_RECONCILE_READBACK;
