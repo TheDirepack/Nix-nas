@@ -118,6 +118,40 @@ evaluate_configuration() {
   printf 'Nix configuration evaluation ok: %s (%s)\n' "$configuration" "$drv_path"
 }
 
+evaluate_upgrade_fixture() {
+  local projection older reviewed
+  # shellcheck source=tests/vm/package-upgrade-baseline.sh
+  source "$ROOT/tests/vm/package-upgrade-baseline.sh"
+  projection='configurations:
+    let vm = configurations.nas-qemu-package-upgrade; in {
+      system = vm.config.system.build.toplevel.drvPath;
+      kernel = vm.config.boot.kernelPackages.kernel.drvPath;
+      kernelVersion = vm.config.boot.kernelPackages.kernel.version;
+      zfsModule = vm.config.boot.zfs.modulePackage.drvPath;
+      zfsTools = vm.config.boot.zfs.package.drvPath;
+      syncthing = vm.pkgs.syncthing.outPath;
+      defaultSyncthing = configurations.nas-qemu.pkgs.syncthing.outPath;
+      version = vm.pkgs.syncthing.version;
+    }'
+  older="$(nix eval --json --no-write-lock-file \
+    --override-input nixpkgs "github:NixOS/nixpkgs/$OLDER_NIXPKGS_REV" \
+    "$FLAKE_REF#nixosConfigurations" --apply "$projection")"
+  reviewed="$(nix eval --json --no-write-lock-file \
+    "$FLAKE_REF#nixosConfigurations" --apply "$projection")"
+  printf '%s\n' "$older" "$reviewed" | jq -se '
+    .[0] as $older | .[1] as $reviewed |
+    $older.version == "2.0.15" and $older.version != $reviewed.version and
+    $older.system != $reviewed.system and
+    $older.kernel == $reviewed.kernel and $older.zfsModule == $reviewed.zfsModule and
+    $older.zfsTools == $reviewed.zfsTools and all(.[]; .syncthing == .defaultSyncthing)
+  ' >/dev/null || die "package-upgrade fixture changed its application packages or disagrees on kernel/ZFS"
+  printf '%s\n' "$older" "$reviewed" | jq -r '.version' | sort -V -C ||
+    die "package-upgrade fixture would downgrade Syncthing"
+  printf '%s\n' "$older" "$reviewed" | jq -sr '
+    "Package-upgrade fixture: Syncthing \(.[0].version) -> \(.[1].version), shared Linux \(.[0].kernelVersion)"
+  '
+}
+
 run_negative_matrix() {
   local log="$TEMPORARY_DIRECTORY/negative-matrix.log"
   if ! "$ROOT/scripts/nix-negative-tests.sh" >"$log" 2>&1; then
@@ -140,6 +174,7 @@ main() {
 
   require_command nix
   require_command grep
+  require_command jq
 
   cd -- "$ROOT"
   TEMPORARY_DIRECTORY="$(mktemp -d)"
@@ -153,6 +188,7 @@ main() {
     evaluate_configuration "$configuration"
   done
 
+  evaluate_upgrade_fixture
   run_negative_matrix
 }
 
