@@ -1035,6 +1035,54 @@ class StateBundleTests(unittest.TestCase):
             state.restore_unit_state(snapshot)
         self.assertEqual(active, snapshot)
 
+    def test_unit_recovery_reports_observation_and_action_failures_in_snapshot_order(self) -> None:
+        snapshot = {
+            "observe-active.service": True,
+            "start.service": True,
+            "observe-inactive.service": False,
+            "stop.service": False,
+            "later-active.service": True,
+            "later-inactive.service": False,
+        }
+        active = {unit: not desired for unit, desired in snapshot.items()}
+        failures = {
+            ("is-active", "observe-active.service"): OSError("query unavailable"),
+            ("start", "start.service"): state.StateError("start rejected"),
+            ("is-active", "observe-inactive.service"): state.StateError("query timed out"),
+            ("stop", "stop.service"): state.StateError("stop rejected"),
+        }
+        calls = []
+
+        def systemctl(*args, **kwargs):
+            calls.append(args)
+            action, unit = args[0], args[-1]
+            if (action, unit) in failures:
+                raise failures[action, unit]
+            if action == "is-active":
+                return self.completed(0 if active[unit] else 3)
+            active[unit] = action == "start"
+            return self.completed()
+
+        with mock.patch.object(state, "run_systemctl", side_effect=systemctl):
+            with self.assertRaises(state.StateError) as raised:
+                state.restore_unit_state(snapshot)
+            self.assertEqual([call[-1] for call in calls if call[0] == "is-active"], list(snapshot))
+            self.assertNotIn(("start", "observe-active.service"), calls)
+            self.assertNotIn(("stop", "observe-inactive.service"), calls)
+            self.assertTrue(active["later-active.service"])
+            self.assertFalse(active["later-inactive.service"])
+            self.assertEqual(
+                str(raised.exception),
+                "Service state recovery failed: "
+                "is-active observe-active.service: query unavailable; "
+                "start start.service: start rejected; "
+                "is-active observe-inactive.service: query timed out; "
+                "stop stop.service: stop rejected",
+            )
+            failures.clear()
+            state.restore_unit_state(snapshot)
+        self.assertEqual(active, snapshot)
+
     def test_export_cleanup_retains_primary_error_and_attempts_every_unit(self) -> None:
         for primary in (None, state.StateError("database preparation failed")):
             with self.subTest(primary=primary):

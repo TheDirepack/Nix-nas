@@ -1495,10 +1495,11 @@ def stop_active_units(snapshot: Mapping[str, bool]) -> None:
 def restore_unit_state(snapshot: Mapping[str, bool]) -> None:
     recovery_errors: list[str] = []
     for unit, active in snapshot.items():
-        action = "start" if active else "stop"
+        action = "is-active"
         try:
             currently_active = run_systemctl("is-active", "--quiet", unit, check=False).returncode == 0
             if active != currently_active:
+                action = "start" if active else "stop"
                 run_systemctl(action, unit)
         except Exception as exc:
             recovery_errors.append(f"{action} {unit}: {exc}")
