@@ -181,6 +181,11 @@ main() {
   trap cleanup EXIT
 
   evaluate_flake_surface
+  local qemu_shell
+  qemu_shell="$(nix eval --raw --no-write-lock-file "$FLAKE_REF#devShells.x86_64-linux.qemu-test.drvPath")"
+  [[ $qemu_shell == /nix/store/*.drv ]] || die "QEMU test shell returned an invalid derivation path: $qemu_shell"
+  printf 'QEMU test shell evaluation ok: %s\n' "$qemu_shell"
+
   verify_placeholder_is_not_bootable "$TEMPORARY_DIRECTORY/operator-placeholder.log"
 
   local configuration
