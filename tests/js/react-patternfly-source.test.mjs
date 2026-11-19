@@ -117,7 +117,7 @@ test("build follows the Starter Kit esbuild and Sass source-to-dist pattern", as
   assert.match(build, /import\("esbuild-sass-plugin"\)/);
   assert.match(build, /sourceSha256/);
   assert.equal(packageJson.dependencies.react, "18.3.1");
-  assert.equal(packageJson.dependencies["@patternfly/react-core"], "6.1.0");
+  assert.equal(packageJson.dependencies["@patternfly/react-core"], "6.7.0");
   const buildScript = fileURLToPath(new URL("../../cockpit/build.js", import.meta.url));
   const result = spawnSync(process.execPath, [buildScript, "--check-source"], {
     encoding: "utf8",

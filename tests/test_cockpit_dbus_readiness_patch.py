@@ -15,7 +15,7 @@ import unittest
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "tests/fixtures/cockpit-362/dbus-readiness"
+FIXTURE = ROOT / "tests/fixtures/cockpit-368/dbus-readiness"
 PATCH = ROOT / "cockpit/patches/cockpit-dbus-readiness.patch"
 NAME = "org.freedesktop.systemd1"
 OWNER = ":1.42"

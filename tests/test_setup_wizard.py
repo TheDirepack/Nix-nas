@@ -50,7 +50,7 @@ class TestWizardPackaging(unittest.TestCase):
         lock = json.loads(lockfile.read_text(encoding="utf-8"))
         packages = lock.get("packages", {})
         self.assertIn("node_modules/@patternfly/react-core", packages)
-        self.assertEqual(packages["node_modules/@patternfly/react-core"]["version"], "6.1.0")
+        self.assertEqual(packages["node_modules/@patternfly/react-core"]["version"], "6.7.0")
 
     def test_structure_validation_allowlists_the_generated_dist(self):
         validator = (ROOT / "scripts/validate-structure.py").read_text(encoding="utf-8")

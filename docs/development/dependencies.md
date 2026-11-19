@@ -34,6 +34,21 @@ python3 scripts/release-inventory.py --system /nix/store/EXACT-SYSTEM \
   --revision "$(git rev-parse HEAD)" --output /tmp/dependencies.json
 ```
 
+## Linux and OpenZFS
+
+Use a maintained Linux release supported by the locked OpenZFS release. The
+NixOS default kernel and OpenZFS package select the matching ZFS module through
+the kernel package set. Keep that module and the utilities used by the initrd,
+mount guards, and backup tools on the same OpenZFS release. Review the upstream
+[Linux release status](https://www.kernel.org/) and the OpenZFS release's
+[`Linux-Maximum`](https://github.com/openzfs/zfs/blob/zfs-2.4.4/META) when
+refreshing the reviewed Nixpkgs lock.
+
+The NixOS 26.05 release-branch revision in the lock provides Linux 6.18.64 and
+OpenZFS 2.4.4. Linux 7.3 is beyond that OpenZFS release's maximum. Linux 7.2 has
+reached end of life. Qualify both a fresh boot and a reboot after the existing
+package-upgrade rehearsal, including ZFS import and protected service readiness.
+
 ## CopyParty
 
 The CopyParty flake is consumed as one reviewed upstream input and follows this repository's nixpkgs input. Nested lock nodes are not edited independently. A CopyParty update must include flake evaluation, closure builds, and the QEMU matrix.
@@ -67,7 +82,7 @@ qualification; changes still require those tiers before release.
 
 Structured Python fuzz/property testing uses **Hypothesis** from the pinned Nix test shell. Hypothesis is test-only and must not enter appliance runtime closures. Project-local RNG mutation engines are forbidden: tests define strategies and invariants while Hypothesis owns generation, shrinking, replay, and state-machine sequences.
 
-JavaScript property testing uses **fast-check 4.9.0** in the isolated `tests/js-fuzz/` npm workspace. Its lockfile is intentionally separate from `cockpit/package-lock.json`, so adding or updating a fuzzing tool cannot change the production Cockpit dependency graph or source hash. Use fast-check directly for frontend value-space properties that do not require a browser; it may also drive browser-backed cases when the invariant genuinely depends on browser semantics.
+JavaScript property testing uses **fast-check 4.10.3** in the isolated `tests/js-fuzz/` npm workspace. Its lockfile is intentionally separate from `cockpit/package-lock.json`, so adding or updating a fuzzing tool cannot change the production Cockpit dependency graph or source hash. Use fast-check directly for frontend value-space properties that do not require a browser; it may also drive browser-backed cases when the invariant genuinely depends on browser semantics.
 
 Byte-level coverage-guided fuzzing may use Atheris/libFuzzer only for a target that actually consumes opaque or binary input. Do not add it merely to fuzz structured JSON, identifiers, paths, or configuration objects that property strategies can model more efficiently.
 
