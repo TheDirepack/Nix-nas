@@ -8,6 +8,8 @@ condition documented here. Review these conditions on every pinned input update:
 - Authentik CSP, accessibility, known-device-cookie and blueprint-failure patches:
   remove each only when the pinned upstream supplies its behavior and the existing
   native plus installed browser/blueprint regressions pass without the patch.
+  The accessibility patch also requires the installed portal to fit its narrow
+  viewport with its application cards visible.
 - Cockpit D-Bus readiness/cache and framing/error-page CSP patches: retire each
   after the pinned upstream fixes the protected behavior and the existing native
   fixtures and installed login/error/framing tests pass unpatched.
@@ -230,7 +232,8 @@ must remain ordered after this readiness boundary.
 `authentik/patches/authentik-accessibility.patch` to the upstream source before
 Nix builds its frontend and server. It removes invalid required-state ARIA from
 labels, keeps password-manager helper controls out of accessibility/tab order,
-and gives light footer/locale text a solid dark background. All native server,
+and gives light footer/locale text a solid dark background. Its portal CSS allows
+the application grid and fieldsets to shrink at narrow widths. All native server,
 worker, migration, and blueprint commands consume this one package. Dependency
 updates must either retain an applicable source patch or remove it after the
 unchanged installed-login accessibility test passes without it.

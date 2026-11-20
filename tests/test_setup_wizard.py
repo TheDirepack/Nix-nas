@@ -167,7 +167,7 @@ class TestWizardSource(unittest.TestCase):
 
     def test_recovery_notice_precedes_password_steps_and_gates_retry(self):
         index = (WIZARD / "src/index.jsx").read_text(encoding="utf-8")
-        main = index.split('<main className="nas-setup-main">', 1)[1]
+        main = index.split('<main className="nas-setup-main"', 1)[1]
         # SSR tests render SetupNotice itself; this pins where the shipped page mounts it.
         self.assertLess(main.index("<SetupNotice plan={plan}"), main.index("<Wizard"))
         self.assertLess(main.index("<Wizard"), main.index("<AdminStep"))
