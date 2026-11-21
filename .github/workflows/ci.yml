@@ -823,6 +823,7 @@ jobs:
       - name: Install final-VM Playwright system dependencies
         run: npm --prefix cockpit exec -- playwright install-deps chromium firefox webkit
       - name: Install from official NixOS media and reboot-test
+        id: fresh-install
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
       - name: Final VM browser, layout, accessibility, and security checks
         env:
@@ -832,10 +833,13 @@ jobs:
           echo '127.0.0.1 nas-test.local' | sudo tee -a /etc/hosts
           nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh
       - name: Qualify older-to-newer NixOS package upgrade on a fresh installation
+        id: package-upgrade
+        if: ${{ !cancelled() && steps.fresh-install.outcome == 'success' }}
         env:
           NAS_QEMU_PACKAGE_UPGRADE: "1"
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
       - name: Check the upgraded VM browser and security surfaces
+        if: ${{ !cancelled() && steps.package-upgrade.outcome == 'success' }}
         env:
           NAS_FINAL_VM_EVIDENCE_DIR: ${{ runner.temp }}/final-vm-evidence/package-upgrade
         run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh

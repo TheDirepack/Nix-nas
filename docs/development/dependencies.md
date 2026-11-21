@@ -232,7 +232,8 @@ must remain ordered after this readiness boundary.
 `authentik/patches/authentik-accessibility.patch` to the upstream source before
 Nix builds its frontend and server. It removes invalid required-state ARIA from
 labels, keeps password-manager helper controls out of accessibility/tab order,
-and gives light footer/locale text a solid dark background. Its portal CSS allows
+gives light footer/locale text a solid dark background, and names the locale
+selector on the native select control. Its portal CSS allows
 the application grid and fieldsets to shrink at narrow widths. All native server,
 worker, migration, and blueprint commands consume this one package. Dependency
 updates must either retain an applicable source patch or remove it after the
