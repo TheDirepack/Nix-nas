@@ -424,7 +424,9 @@ class CiWorkflowGraphTests(unittest.TestCase):
         steps = self.jobs["installer"]["steps"]
         install = next(step for step in steps if step.get("id") == "fresh-install")
         upgrade = next(step for step in steps if step.get("id") == "package-upgrade")
-        browser = next(step for step in steps if step.get("name") == "Check the upgraded VM browser and security surfaces")
+        browser = next(
+            step for step in steps if step.get("name") == "Check the upgraded VM browser and security surfaces"
+        )
         self.assertLess(steps.index(install), steps.index(upgrade))
         self.assertLess(steps.index(upgrade), steps.index(browser))
         self.assertNotIn("continue-on-error", upgrade)
