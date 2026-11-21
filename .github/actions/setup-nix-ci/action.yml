@@ -15,12 +15,12 @@ runs:
   using: composite
   steps:
     - name: Install Nix
-      uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+      uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
       with:
         github_access_token: ${{ inputs.github-token }}
         enable_kvm: ${{ inputs.enable-kvm }}
     - name: Enable incremental Nix cache
-      uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+      uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
       with:
         diagnostic-endpoint: ""
         use-flakehub: false

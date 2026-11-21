@@ -8,6 +8,8 @@ condition documented here. Review these conditions on every pinned input update:
 - Authentik CSP, accessibility, known-device-cookie and blueprint-failure patches:
   remove each only when the pinned upstream supplies its behavior and the existing
   native plus installed browser/blueprint regressions pass without the patch.
+  The accessibility patch also requires the installed portal to fit its narrow
+  viewport with its application cards visible.
 - Cockpit D-Bus readiness/cache and framing/error-page CSP patches: retire each
   after the pinned upstream fixes the protected behavior and the existing native
   fixtures and installed login/error/framing tests pass unpatched.
@@ -33,6 +35,21 @@ For an already built system, run:
 python3 scripts/release-inventory.py --system /nix/store/EXACT-SYSTEM \
   --revision "$(git rev-parse HEAD)" --output /tmp/dependencies.json
 ```
+
+## Linux and OpenZFS
+
+Use a maintained Linux release supported by the locked OpenZFS release. The
+NixOS default kernel and OpenZFS package select the matching ZFS module through
+the kernel package set. Keep that module and the utilities used by the initrd,
+mount guards, and backup tools on the same OpenZFS release. Review the upstream
+[Linux release status](https://www.kernel.org/) and the OpenZFS release's
+[`Linux-Maximum`](https://github.com/openzfs/zfs/blob/zfs-2.4.4/META) when
+refreshing the reviewed Nixpkgs lock.
+
+The NixOS 26.05 release-branch revision in the lock provides Linux 6.18.64 and
+OpenZFS 2.4.4. Linux 7.3 is beyond that OpenZFS release's maximum. Linux 7.2 has
+reached end of life. Qualify both a fresh boot and a reboot after the existing
+package-upgrade rehearsal, including ZFS import and protected service readiness.
 
 ## CopyParty
 
@@ -67,7 +84,7 @@ qualification; changes still require those tiers before release.
 
 Structured Python fuzz/property testing uses **Hypothesis** from the pinned Nix test shell. Hypothesis is test-only and must not enter appliance runtime closures. Project-local RNG mutation engines are forbidden: tests define strategies and invariants while Hypothesis owns generation, shrinking, replay, and state-machine sequences.
 
-JavaScript property testing uses **fast-check 4.9.0** in the isolated `tests/js-fuzz/` npm workspace. Its lockfile is intentionally separate from `cockpit/package-lock.json`, so adding or updating a fuzzing tool cannot change the production Cockpit dependency graph or source hash. Use fast-check directly for frontend value-space properties that do not require a browser; it may also drive browser-backed cases when the invariant genuinely depends on browser semantics.
+JavaScript property testing uses **fast-check 4.10.3** in the isolated `tests/js-fuzz/` npm workspace. Its lockfile is intentionally separate from `cockpit/package-lock.json`, so adding or updating a fuzzing tool cannot change the production Cockpit dependency graph or source hash. Use fast-check directly for frontend value-space properties that do not require a browser; it may also drive browser-backed cases when the invariant genuinely depends on browser semantics.
 
 Byte-level coverage-guided fuzzing may use Atheris/libFuzzer only for a target that actually consumes opaque or binary input. Do not add it merely to fuzz structured JSON, identifiers, paths, or configuration objects that property strategies can model more efficiently.
 
@@ -215,7 +232,9 @@ must remain ordered after this readiness boundary.
 `authentik/patches/authentik-accessibility.patch` to the upstream source before
 Nix builds its frontend and server. It removes invalid required-state ARIA from
 labels, keeps password-manager helper controls out of accessibility/tab order,
-and gives light footer/locale text a solid dark background. All native server,
+gives light footer/locale text a solid dark background, and names the locale
+selector on the native select control. Its portal CSS allows
+the application grid and fieldsets to shrink at narrow widths. All native server,
 worker, migration, and blueprint commands consume this one package. Dependency
 updates must either retain an applicable source patch or remove it after the
 unchanged installed-login accessibility test passes without it.

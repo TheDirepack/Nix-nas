@@ -72,8 +72,8 @@ class SmartFuzzArchitectureTests(unittest.TestCase):
     def test_javascript_properties_use_isolated_pinned_fast_check(self) -> None:
         package = json.loads((ROOT / "tests/js-fuzz/package.json").read_text(encoding="utf-8"))
         lock = json.loads((ROOT / "tests/js-fuzz/package-lock.json").read_text(encoding="utf-8"))
-        self.assertEqual(package["devDependencies"], {"fast-check": "4.9.0"})
-        self.assertEqual(lock["packages"]["node_modules/fast-check"]["version"], "4.9.0")
+        self.assertEqual(package["devDependencies"], {"fast-check": "4.10.3"})
+        self.assertEqual(lock["packages"]["node_modules/fast-check"]["version"], "4.10.3")
         source = (ROOT / "tests/js-fuzz/frontend-properties.test.mjs").read_text(encoding="utf-8")
         self.assertIn('from "fast-check"', source)
         self.assertNotIn("Math.random", source)

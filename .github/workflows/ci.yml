@@ -67,7 +67,7 @@ jobs:
           (steps.setup-nix.outcome != 'success' ||
            steps.warm-test-shell.outcome != 'success' ||
            steps.shared.outcome != 'success')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: qualification-shared-logs
           if-no-files-found: error
@@ -117,7 +117,7 @@ jobs:
         if: >-
           always() &&
           (steps.setup-nix.outcome != 'success' || steps.checks.outcome != 'success')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: qualification-static-code-logs
           if-no-files-found: error
@@ -161,7 +161,7 @@ jobs:
         if: >-
           always() &&
           (steps.setup-nix.outcome != 'success' || steps.checks.outcome != 'success')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: qualification-static-shell-logs
           if-no-files-found: error
@@ -205,7 +205,7 @@ jobs:
         if: >-
           always() &&
           (steps.setup-nix.outcome != 'success' || steps.checks.outcome != 'success')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: qualification-static-nix-logs
           if-no-files-found: error
@@ -247,7 +247,7 @@ jobs:
         run: bash scripts/ci-qualification.sh unit
       - name: Retain current coverage for PR baseline comparison
         if: always() && hashFiles('coverage.json') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-report
           if-no-files-found: error
@@ -257,7 +257,7 @@ jobs:
         if: >-
           always() &&
           (steps.setup-nix.outcome != 'success' || steps.checks.outcome != 'success')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: qualification-unit-logs
           if-no-files-found: error
@@ -301,7 +301,7 @@ jobs:
         if: >-
           always() &&
           (steps.setup-nix.outcome != 'success' || steps.checks.outcome != 'success')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: qualification-security-logs
           if-no-files-found: error
@@ -345,7 +345,7 @@ jobs:
         if: >-
           always() &&
           (steps.setup-nix.outcome != 'success' || steps.checks.outcome != 'success')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: qualification-nonroot-logs
           if-no-files-found: error
@@ -377,7 +377,7 @@ jobs:
       - name: Set up Node 24 with npm cache
         id: setup-node
         continue-on-error: true
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -402,7 +402,7 @@ jobs:
         if: >-
           always() && hashFiles('cockpit/dist/build-meta.json') != '' &&
           hashFiles('setup/first-run-wizard/dist/build-meta.json') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cockpit-bundle
           if-no-files-found: error
@@ -418,7 +418,7 @@ jobs:
           (steps.setup-node.outcome != 'success' ||
            steps.node-install.outcome != 'success' ||
            steps.checks.outcome != 'success')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: qualification-cockpit-logs
           if-no-files-found: error
@@ -450,7 +450,7 @@ jobs:
       - name: Download current coverage
         id: current-coverage
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: coverage-report
           path: .
@@ -467,7 +467,7 @@ jobs:
         id: main-coverage
         if: steps.current-coverage.outcome == 'success'
         continue-on-error: true
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # A baseline measured on one main revision is not a valid target for
           # a different main revision. The resolved SHA is part of the exact
@@ -572,7 +572,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Restore reviewed Cockpit bundle
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: cockpit-bundle
           path: .
@@ -609,7 +609,7 @@ jobs:
         if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
         id: source-archive-cache
         continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: nas-source-release
           key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ github.sha }}${{ steps.vm-bundle-namespace.outputs.suffix }}
@@ -652,7 +652,7 @@ jobs:
         if: >-
           (github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast') &&
           steps.source-archive-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: nas-source-release
           key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ github.sha }}${{ steps.vm-bundle-namespace.outputs.suffix }}
@@ -666,12 +666,12 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: cockpit/package-lock.json
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: cockpit-bundle
           path: .
@@ -679,7 +679,7 @@ jobs:
         run: npm --prefix cockpit ci --no-audit --no-fund
       - name: Restore Playwright engines
         id: playwright-browsers
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: ${{ env.CI_CACHE_SCHEMA }}-playwright-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
@@ -701,7 +701,7 @@ jobs:
           npm --prefix cockpit run test:browser -- --output "$RUNNER_TEMP/browser-evidence/test-results"
       - name: Retain browser evidence including successful retries
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: browser-test-evidence
           if-no-files-found: ignore
@@ -730,12 +730,12 @@ jobs:
             check: nas-vm-encrypted
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: cockpit-bundle
           path: .
       - run: git add -f cockpit/package-lock.json cockpit/dist setup/first-run-wizard/package-lock.json setup/first-run-wizard/dist
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: vm-bundle-handoff
           path: ${{ runner.temp }}/vm-bundles
@@ -769,17 +769,17 @@ jobs:
     timeout-minutes: 355
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: cockpit/package-lock.json
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: cockpit-bundle
           path: .
       - run: git add -f cockpit/package-lock.json cockpit/dist setup/first-run-wizard/package-lock.json setup/first-run-wizard/dist
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: vm-bundle-handoff
           path: ${{ runner.temp }}/vm-bundles
@@ -787,7 +787,7 @@ jobs:
         id: installer-epoch
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
       - name: Restore immutable installer media
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/nixos-nas-qemu/*.iso
@@ -813,7 +813,7 @@ jobs:
         run: npm --prefix cockpit ci --no-audit --no-fund
       - name: Restore final-VM Playwright engines
         id: installer-playwright
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: ${{ env.CI_CACHE_SCHEMA }}-playwright-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
@@ -823,6 +823,7 @@ jobs:
       - name: Install final-VM Playwright system dependencies
         run: npm --prefix cockpit exec -- playwright install-deps chromium firefox webkit
       - name: Install from official NixOS media and reboot-test
+        id: fresh-install
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
       - name: Final VM browser, layout, accessibility, and security checks
         env:
@@ -832,10 +833,13 @@ jobs:
           echo '127.0.0.1 nas-test.local' | sudo tee -a /etc/hosts
           nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh
       - name: Qualify older-to-newer NixOS package upgrade on a fresh installation
+        id: package-upgrade
+        if: ${{ !cancelled() && steps.fresh-install.outcome == 'success' }}
         env:
           NAS_QEMU_PACKAGE_UPGRADE: "1"
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
       - name: Check the upgraded VM browser and security surfaces
+        if: ${{ !cancelled() && steps.package-upgrade.outcome == 'success' }}
         env:
           NAS_FINAL_VM_EVIDENCE_DIR: ${{ runner.temp }}/final-vm-evidence/package-upgrade
         run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh
@@ -848,7 +852,7 @@ jobs:
             "$RUNNER_TEMP/final-vm-evidence/installed-console.log" 2>/dev/null || true
       - name: Retain final-VM evidence including successful retries
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: final-vm-browser-evidence
           if-no-files-found: ignore
@@ -881,7 +885,7 @@ jobs:
             2>&1 | tee fuzz-evidence/source-fuzz.log
       - name: Retain source fuzz failure evidence
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: source-fuzz-evidence
           if-no-files-found: error
@@ -903,12 +907,12 @@ jobs:
       NAS_ZAP_IMAGE: ${{ vars.NAS_ZAP_IMAGE || 'ghcr.io/zaproxy/zaproxy@sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: cockpit-bundle
           path: .
       - run: git add -f cockpit/package-lock.json cockpit/dist setup/first-run-wizard/package-lock.json setup/first-run-wizard/dist
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: vm-bundle-handoff
           path: ${{ runner.temp }}/vm-bundles
@@ -916,7 +920,7 @@ jobs:
         id: security-installer-epoch
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
       - name: Restore immutable installer media
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/nixos-nas-qemu/*.iso
@@ -975,7 +979,7 @@ jobs:
             -c bash ./scripts/qemu-final-browser.sh
       - name: Retain installed security evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installed-security-evidence
           if-no-files-found: ignore
