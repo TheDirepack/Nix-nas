@@ -56,6 +56,7 @@ class SetupRebootE2eContracts(unittest.TestCase):
             self.assertIn(detail, stderr.getvalue())
             self.assertIn("callback proxy exit status: -9", stderr.getvalue())
             self.assertIs(popen.call_args.kwargs["stderr"], stderr)
+            self.assertIs(popen.call_args.kwargs["restore_signals"], False)
             popen.return_value.terminate.assert_called_once_with()
             popen.return_value.wait.assert_called_once_with(timeout=20)
 
