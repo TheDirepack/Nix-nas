@@ -48,7 +48,8 @@ class MaintainerReleaseTests(MaintainerScriptMixin, unittest.TestCase):
                     check=False,
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
-                expected = ["--flake", f"path:{self.clean_root}#nas-qemu"]
+                configuration = "nas-qemu-package-upgrade" if mode == "1" else "nas-qemu"
+                expected = ["--flake", f"path:{self.clean_root}#{configuration}"]
                 if mode == "1":
                     expected += ["--override-input", "nixpkgs", baseline]
                 self.assertEqual(result.stdout.splitlines(), expected)
@@ -56,16 +57,28 @@ class MaintainerReleaseTests(MaintainerScriptMixin, unittest.TestCase):
     def test_generation_rollback_selects_reviewed_flake_without_legacy_configuration(self) -> None:
         source = (self.clean_root / "tests/vm/reconfigure-system.sh").read_text(encoding="utf-8")
         rollback = next(line for line in source.splitlines() if line.startswith("rebuild --rollback"))
-        result = subprocess.run(
-            ["bash", "-c", 'SOURCE="/reviewed source"; rebuild() { printf "%s\\n" "$@"; }; ' + rollback],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(
-            result.stdout.splitlines(), ["--rollback", "switch", "--flake", "path:/reviewed source#nas-qemu"]
-        )
+        for mode, expected in (("0", "nas-qemu"), ("1", "nas-qemu-package-upgrade")):
+            with self.subTest(mode=mode):
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        'SOURCE="/reviewed source"; unset configuration; '
+                        'if [[ "$2" == 1 ]]; then '
+                        'source "$1/tests/vm/package-upgrade-baseline.sh"; configuration="$PACKAGE_UPGRADE_FLAKE"; fi; '
+                        'rebuild() { printf "%s\n" "$@"; }; ' + rollback,
+                        "test",
+                        str(self.clean_root),
+                        mode,
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    result.stdout.splitlines(), ["--rollback", "switch", "--flake", f"path:/reviewed source#{expected}"]
+                )
 
     def test_installer_rejects_missing_or_untrusted_inputs_before_destructive_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

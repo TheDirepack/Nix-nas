@@ -1,5 +1,9 @@
 import {test, expect} from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import {execFile} from "node:child_process";
+import {promisify} from "node:util";
+
+const runFile = promisify(execFile);
 
 const username = process.env.NAS_VM_TEST_USER;
 const password = process.env.NAS_VM_TEST_PASSWORD;
@@ -557,15 +561,74 @@ test("final VM CSP blocks inline script execution in the NAS component frame", a
   expect(result).toBe(0);
 });
 
-test("installed Services editor reconciles form changes and preserves rejected edits", async ({
+test("installed Services editor reconciles form changes and preserves rejected edits @installed-mutation", async ({
   page,
 }, testInfo) => {
-  test.skip(
-    testInfo.project.name !== "chromium-final-vm",
-    "One mutation flow owns the shared appliance document; other projects qualify rendering and authentication.",
-  );
   const reconcileTimeout = 300_000;
-  test.setTimeout(3 * reconcileTimeout + 180_000);
+  test.setTimeout(3 * reconcileTimeout + 240_000);
+  const readback = process.env.NAS_VM_RECONCILE_READBACK;
+  if (!readback)
+    throw new Error("Run this test through scripts/qemu-final-browser.sh for guest SSH readback");
+  const timeline = [];
+  const record = (event, detail = {}) =>
+    timeline.push(JSON.stringify({hostTime: new Date().toISOString(), event, ...detail}));
+  const observeTransport = (target, label) => {
+    target.on("framedetached", (frame) => {
+      if (isNasComponentFrame(frame)) record("editor frame detached", {page: label});
+    });
+    target.on("websocket", (socket) => {
+      if (!new URL(socket.url()).pathname.endsWith("/cockpit/socket")) return;
+      record("Cockpit WebSocket opened", {page: label});
+      socket.on("socketerror", (error) => record("Cockpit WebSocket error", {page: label, error}));
+      socket.on("close", () => record("Cockpit WebSocket closed", {page: label}));
+    });
+  };
+  const readGuest = async () => {
+    try {
+      const {stdout} = await runFile(readback, [], {timeout: 18_000});
+      const state = JSON.parse(stdout);
+      record("guest readback", {state});
+      return state;
+    } catch (error) {
+      const detail = error.stderr?.trim() || error.message;
+      record("guest readback error", {detail, exit: error.code, signal: error.signal});
+      return {error: detail};
+    }
+  };
+  const expectAppliedName = async (expected, previous) => {
+    let state;
+    await expect
+      .poll(
+        async () => {
+          state = await readGuest();
+          return {
+            ...state,
+            revisionsMatch:
+              Boolean(state.applied) &&
+              state.desired === state.applied &&
+              state.plan === state.applied,
+            documentMatches:
+              Boolean(state.documentHash) && state.documentHash === state.appliedHash,
+            revisionChanged: state.applied !== previous,
+          };
+        },
+        {
+          timeout: reconcileTimeout,
+          intervals: [2_000, 5_000],
+          message: `guest did not settle on ${JSON.stringify(expected)}`,
+        },
+      )
+      .toMatchObject({
+        name: expected,
+        ActiveState: "inactive",
+        Result: "success",
+        pending: false,
+        revisionsMatch: true,
+        documentMatches: true,
+        revisionChanged: true,
+      });
+    return state;
+  };
   const openEditor = async (target) => {
     await target.goto("/console/nas");
     if (/\/identity\//.test(target.url())) await login(target);
@@ -583,10 +646,6 @@ test("installed Services editor reconciles form changes and preserves rejected e
       save: frame.getByRole("button", {name: "Validate, save, and reconcile", exact: true}),
     };
   };
-  // A committed reconcile reloads the Caddy configuration and terminates the
-  // Cockpit transport, which detaches every open editor and makes the in-page
-  // "saving" state unobservable. Read desired and applied authority through a
-  // separate page before allowing the next mutation.
   const openEditorEventually = async (target, timeout = 60_000) => {
     const deadline = Date.now() + timeout;
     for (;;) {
@@ -598,70 +657,39 @@ test("installed Services editor reconciles form changes and preserves rejected e
       }
     }
   };
-  // The save spawn carries the mutation to the authority. Navigating the page
-  // that owns it detaches the Cockpit channel and abandons the write before it
-  // lands, so that page is never reused; the authority is read from a second
-  // page that shares the authenticated browser context.
-  const submitEdit = async (editor) => {
+  const submitEdit = async (editor, operation) => {
+    record("submitting browser edit", {operation});
     await editor.save.click();
-    await expect(editor.save)
-      .toBeDisabled({timeout: 10_000})
-      .catch(() => undefined);
   };
-  const expectPersistedName = async (target, expected) => {
-    const deadline = Date.now() + reconcileTimeout;
-    let detail = "the editor was never opened";
-    for (;;) {
-      try {
-        const opened = await openEditorEventually(target);
-        const value = await opened.name.inputValue();
-        const alerts = await opened.frame.locator(".nas-editor-card .pf-v6-c-alert").count();
-        detail = `editor shows ${JSON.stringify(value)} with ${alerts} alert(s)`;
-        if (value === expected && alerts === 0) {
-          await opened.frame.locator("body").evaluate(async () => {
-            await globalThis.cockpit.spawn(
-              [
-                "bash",
-                "-ceu",
-                "! systemctl is-active --quiet nas-managed-services-reconcile.service; " +
-                  'test "$(systemctl show -p Result --value nas-managed-services-reconcile.service)" = success; ' +
-                  "test ! -e /run/nas-control/reconcile.pending; " +
-                  "cmp /var/lib/nas-control/services.yaml " +
-                  "<(git --git-dir=/tank/nas-control/config-history.git show refs/nas/applied:services.yaml)",
-              ],
-              {superuser: "require"},
-            );
-          });
-          return opened;
-        }
-      } catch (error) {
-        detail = String(error);
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(
-          `installed reconcile did not persist ${JSON.stringify(expected)}: ${detail}`,
-        );
-      }
-      await target.waitForTimeout(5_000);
-    }
-  };
-  await login(page);
-  // A second page reads the authority, because the page that submits the edit
-  // must not navigate while its save spawn is in flight.
-  const probe = await page.context().newPage();
-  const first = await openEditor(page);
-  const original = await first.name.inputValue();
+  const editedName = "VM OCI edited through installed Cockpit";
+  observeTransport(page, "rename");
+  let original;
   let primaryError;
+  let cleanupError;
   try {
-    await first.name.fill("VM OCI edited through installed Cockpit");
-    await submitEdit(first);
-    const reconciled = await expectPersistedName(probe, "VM OCI edited through installed Cockpit");
+    await login(page);
+    const first = await openEditor(page);
+    const originalName = await first.name.inputValue();
+    expect(originalName).not.toBe(editedName);
+    const baseline = await expectAppliedName(originalName);
+    original = originalName;
+    await first.name.fill(editedName);
+    await submitEdit(first, "rename");
+    const applied = await expectAppliedName(editedName, baseline.applied);
+
+    // Caddy can close Cockpit's transport during reconcile. Keep the save page
+    // alive until guest SSH has observed the committed change.
+    const probe = await page.context().newPage();
+    observeTransport(probe, "validation");
+    const reconciled = await openEditorEventually(probe);
+    await expect(reconciled.name).toHaveValue(editedName);
+    await expect(reconciled.frame.locator(".nas-editor-card .pf-v6-c-alert")).toHaveCount(0);
 
     await reconciled.frame.getByRole("button", {name: "Advanced YAML", exact: true}).click();
     const yaml = reconciled.frame.locator(".nas-editor-card textarea");
     const invalid = "schemaVersion: 3\nservices: []\n";
     await yaml.fill(invalid);
-    await reconciled.save.click();
+    await submitEdit(reconciled, "invalid YAML");
     await expect(reconciled.frame.locator(".nas-editor-card .pf-v6-c-alert")).toContainText(
       /services.*not of type.*object/i,
       {
@@ -669,26 +697,43 @@ test("installed Services editor reconciles form changes and preserves rejected e
       },
     );
     await expect(yaml).toHaveValue(invalid);
+    expect(await readGuest()).toMatchObject({
+      name: editedName,
+      documentHash: applied.documentHash,
+      desired: applied.desired,
+      applied: applied.applied,
+      plan: applied.plan,
+      ActiveState: "inactive",
+      Result: "success",
+      pending: false,
+    });
   } catch (error) {
     primaryError = error;
-    throw error;
   } finally {
     try {
-      // Restore the authoritative document even when the mutation above failed.
-      const cleanup = await openEditorEventually(probe);
-      if ((await cleanup.name.inputValue()) !== original) {
-        await cleanup.name.fill(original);
-        await submitEdit(cleanup);
-        await expectPersistedName(page, original);
+      if (original !== undefined) {
+        const restorePage = await page.context().newPage();
+        observeTransport(restorePage, "restore");
+        const cleanup = await openEditorEventually(restorePage);
+        if ((await cleanup.name.inputValue()) !== original) {
+          await cleanup.name.fill(original);
+          await submitEdit(cleanup, "restore");
+        }
+        await expectAppliedName(original);
       }
     } catch (error) {
-      await testInfo.attach("editor-cleanup-error", {
-        body: String(error),
-        contentType: "text/plain",
-      });
-      throw primaryError
-        ? new AggregateError([primaryError, error], "Services editor flow and cleanup both failed")
-        : error;
+      cleanupError = error;
     }
+    await testInfo.attach("services-editor-reconcile-timeline", {
+      body: timeline.join("\n") + "\n",
+      contentType: "text/plain",
+    });
   }
+  if (primaryError && cleanupError) {
+    throw new AggregateError(
+      [primaryError, cleanupError],
+      "Services editor flow and cleanup both failed",
+    );
+  }
+  if (primaryError || cleanupError) throw primaryError || cleanupError;
 });
