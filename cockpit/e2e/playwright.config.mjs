@@ -17,6 +17,14 @@ const testMatch = isFinalVm
       "authentik-csp.spec.mjs",
     ];
 
+const installedMutation = /@installed-mutation/;
+const finalVmProjects = [
+  {name: "chromium-final-vm", use: {...devices["Desktop Chrome"]}},
+  {name: "firefox-final-vm", use: {...devices["Desktop Firefox"]}},
+  {name: "webkit-final-vm", use: {...devices["Desktop Safari"]}},
+  {name: "chromium-mobile-final-vm", use: {...devices["Pixel 7"]}},
+];
+
 export default defineConfig({
   testDir: ".",
   testMatch,
@@ -46,10 +54,14 @@ export default defineConfig({
       },
   projects: isFinalVm
     ? [
-        {name: "chromium-final-vm", use: {...devices["Desktop Chrome"]}},
-        {name: "firefox-final-vm", use: {...devices["Desktop Firefox"]}},
-        {name: "webkit-final-vm", use: {...devices["Desktop Safari"]}},
-        {name: "chromium-mobile-final-vm", use: {...devices["Pixel 7"]}},
+        ...finalVmProjects.map((project) => ({...project, grepInvert: installedMutation})),
+        {
+          name: "chromium-final-vm-mutation",
+          use: {...devices["Desktop Chrome"]},
+          grep: installedMutation,
+          // Reconcile reloads Caddy and closes other tests' Cockpit connections.
+          dependencies: finalVmProjects.map(({name}) => name),
+        },
       ]
     : [
         {name: "chromium-desktop", use: {...devices["Desktop Chrome"]}},

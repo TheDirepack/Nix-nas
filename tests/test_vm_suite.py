@@ -700,6 +700,9 @@ fail() { echo "$*" >&2; exit 1; }
         self.assertIn("--override-input nixpkgs", reconfigure)
         self.assertIn("syncthing-$older_version", reconfigure)
         self.assertIn("syncthing-$current_version", reconfigure)
+        self.assertIn('configuration="$PACKAGE_UPGRADE_FLAKE"', reconfigure)
+        self.assertIn('rebuild switch --flake "path:$SOURCE#$configuration"', reconfigure)
+        self.assertIn("sort -V -C", reconfigure)
         self.assertIn('NAS_QEMU_PACKAGE_UPGRADE: "1"', workflow)
         self.assertIn("final-vm-evidence/installed-console.log", workflow)
 
@@ -710,7 +713,8 @@ fail() { echo "$*" >&2; exit 1; }
         self.assertIn("NAS_INSTALL_PACKAGE_UPGRADE=$package_upgrade", expect)
         self.assertIn('--override-input nixpkgs "github:NixOS/nixpkgs/$OLDER_NIXPKGS_REV"', installer)
         self.assertIn("install_args+=(--override-input nixpkgs", installer)
-        self.assertNotIn('rebuild switch --flake "path:$SOURCE#nas-qemu" --override-input', reconfigure)
+        self.assertIn('install_args=(--flake "path:$SOURCE#$PACKAGE_UPGRADE_FLAKE")', installer)
+        self.assertNotIn('rebuild switch --flake "path:$SOURCE#$configuration" --override-input', reconfigure)
         self.assertIn('fail "installed baseline does not contain the pinned older Syncthing package"', reconfigure)
 
     def test_secret_adversarial_retries_temporary_operation_conflicts(self) -> None:
