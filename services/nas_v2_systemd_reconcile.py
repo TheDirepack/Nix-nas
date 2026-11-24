@@ -21,6 +21,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Mapping
 
 from nas_common import fsync_directory as _fsync_directory
@@ -37,6 +38,10 @@ _QUADLET_DIRECT_NETWORK = re.compile(r"^nas-v2-net-([a-z][a-z0-9-]{0,63})\.netwo
 _QUADLET_SESSION_NETWORK = re.compile(r"^nas-v2-snet-([a-z][a-z0-9-]{0,63})\.network$")
 _QUADLET = re.compile(r"^nas-v2-[A-Za-z0-9_.@:-]+\.(?:container|pod|network|volume|kube|image|build)$")
 _SYSTEMCTL_TIMEOUT_SECONDS = 180
+# Recovery only observes and enqueues; it must not consume the guarded apply's
+# rollback budget waiting on a slow manager. Units left unprobed are reported.
+_RECOVERY_CALL_TIMEOUT_SECONDS = 15
+_RECOVERY_DEADLINE_SECONDS = 90
 _TRANSITIONAL_UNIT_STATES = frozenset({"activating", "deactivating", "reloading", "refreshing"})
 _UNIT_QUERY_STATES = {
     0: frozenset({"active", "reloading", "refreshing"}),
@@ -295,6 +300,66 @@ def _run_systemctl(
     return result
 
 
+def _query_unit_state(systemctl: str, unit: str, *, timeout_seconds: int = _SYSTEMCTL_TIMEOUT_SECONDS) -> str | None:
+    try:
+        result = _run_systemctl(systemctl, "is-active", unit, check=False, timeout_seconds=timeout_seconds)
+    except SystemdReconcileError:
+        return None
+    state = result.stdout.strip()
+    return state if state in _UNIT_QUERY_STATES.get(result.returncode, ()) else None
+
+
+def _queue_expected_units(
+    systemctl: str,
+    start: set[str],
+    readiness_owners: Mapping[str, str],
+    *,
+    exclude: set[str],
+) -> dict[str, Any]:
+    """Queue starts for expected units that are stopped; never wait, reset, or roll back.
+
+    Only cleanly ``inactive`` units are queued. Failed, transitional, and
+    unqueryable units keep their state for diagnosis. A gate is queued only
+    with an owner observed stopped, even if the gate failed for the owner's
+    previous instance, so the new instance's probe outcome becomes observable,
+    not assumed. An owner observed running never has its gate rerun here; if
+    another caller starts the owner before the queued batch runs, the gate
+    probes that live owner, which is still a genuine observation.
+    """
+    deadline = time.monotonic() + _RECOVERY_DEADLINE_SECONDS
+    gates: dict[str, list[str]] = {}
+    for gate, owner in readiness_owners.items():
+        gates.setdefault(owner, []).append(gate)
+    queued: list[str] = []
+    diagnostics: list[str] = []
+    for unit in sorted(start - set(readiness_owners) - exclude):
+        if time.monotonic() >= deadline:
+            diagnostics.append(f"{unit}: recovery time budget exhausted; not queued")
+            continue
+        state = _query_unit_state(systemctl, unit, timeout_seconds=_RECOVERY_CALL_TIMEOUT_SECONDS)
+        if state is None:
+            diagnostics.append(f"{unit}: state unavailable; not queued")
+            continue
+        if state != "inactive":
+            if state not in _UNIT_QUERY_STATES[0]:
+                diagnostics.append(f"{unit}: {state}; not queued")
+            continue
+        batch = [unit, *sorted(gates.get(unit, []))]
+        try:
+            result = _run_systemctl(
+                systemctl, "--no-block", "start", *batch, check=False, timeout_seconds=_RECOVERY_CALL_TIMEOUT_SECONDS
+            )
+        except SystemdReconcileError as exc:
+            diagnostics.append(f"{unit}: {exc}")
+            continue
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()[:500]
+            diagnostics.append(f"{unit}: start could not be queued: {detail}")
+            continue
+        queued.extend(batch)
+    return {"queued": queued, "diagnostics": diagnostics}
+
+
 def _string_set(key: str, source: dict[str, Any]) -> set[str]:
     value = source.get(key, [])
     if not isinstance(value, list) or not all(isinstance(item, str) and _UNIT.fullmatch(item) for item in value):
@@ -475,7 +540,8 @@ def reconcile(
     )
     fingerprint_changed = fingerprints != previous_fingerprints
     if previous and not topology_changed and not lifecycle_changed and not fingerprint_changed:
-        return {"stopped": [], "changed": [], "started": [], "noop": True}
+        recovery = _queue_expected_units(systemctl, start, readiness_owners, exclude=set())
+        return {"stopped": [], "changed": [], "started": [], "noop": True, "recovery": recovery}
 
     retired_units = previous_owned - owned
     units_to_stop = retired_units | (previous_start - start) | stop
@@ -500,12 +566,7 @@ def reconcile(
     units_to_stop.update(changed_sessions)
 
     def unit_state(unit: str) -> str | None:
-        try:
-            result = _run_systemctl(systemctl, "is-active", unit, check=False)
-        except SystemdReconcileError:
-            return None
-        state = result.stdout.strip()
-        return state if state in _UNIT_QUERY_STATES.get(result.returncode, ()) else None
+        return _query_unit_state(systemctl, unit)
 
     def is_active(unit: str, *, activating_is_active: bool = False) -> bool | None:
         state = unit_state(unit)
@@ -697,12 +758,6 @@ def reconcile(
         }
         state_commit_attempted = True
         _atomic_json(state_path, state)
-        return {
-            "stopped": sorted(units_to_stop),
-            "changed": sorted(changed_units),
-            "started": sorted(units_to_start | restarted),
-            "noop": False,
-        }
     except Exception as exc:
         rollback_errors: list[str] = []
         if activated_units:
@@ -772,6 +827,24 @@ def reconcile(
         if isinstance(exc, SystemdReconcileError) and not prior_failures:
             raise
         raise SystemdReconcileError(failure_detail) from exc
+
+    # The apply has committed. Expected units that are merely stopped (for
+    # example by a protected-target stop or a locked-boot condition skip) are
+    # queued outside the transaction: their outcome is reported by V2 status,
+    # never by this apply's success or rollback.
+    recovery = _queue_expected_units(
+        systemctl,
+        start,
+        readiness_owners,
+        exclude=units_to_start | restarted | activated_units | units_to_stop,
+    )
+    return {
+        "stopped": sorted(units_to_stop),
+        "changed": sorted(changed_units),
+        "started": sorted(units_to_start | restarted),
+        "noop": False,
+        "recovery": recovery,
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:

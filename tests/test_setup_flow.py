@@ -178,7 +178,6 @@ class FirstRunRecoveryTests(unittest.TestCase):
             mock.patch.object(setup, "acquire_operation", return_value=contextlib.nullcontext()),
             mock.patch.object(setup, "run_root", return_value=setup.Completed((), "", "")),
             mock.patch.object(setup, "run_root_noninteractive", return_value=SimpleNamespace(returncode=0)),
-            mock.patch.object(setup, "ensure_secret_gated_services"),
         ):
             return setup.first_run(args)
 
@@ -210,10 +209,40 @@ class FirstRunRecoveryTests(unittest.TestCase):
             mock.patch.object(setup, "_first_run_locked", return_value={"status": "complete"}) as locked,
             mock.patch.object(setup, "run_root", return_value=setup.Completed((), "", "")),
             mock.patch.object(setup, "run_root_noninteractive", return_value=SimpleNamespace(returncode=0)),
-            mock.patch.object(setup, "ensure_secret_gated_services"),
         ):
             self.assertEqual(setup.first_run(self.args()), {"status": "complete"})
         locked.assert_called_once()
+
+    def test_reviewed_off_services_are_left_to_v2_after_first_run(self) -> None:
+        services = {"copyparty": "off", "grafana": "off", "victoriametrics": "on"}
+        calls: list[tuple[list[str], object]] = []
+
+        def capture(command: list[str], **kwargs: object) -> setup.Completed:
+            calls.append((list(command), kwargs.get("input_text")))
+            return setup.Completed(tuple(command), "", "")
+
+        def locked(_args: argparse.Namespace) -> dict:
+            setup.apply_services(services)
+            return {"status": "complete"}
+
+        with (
+            mock.patch.object(setup, "acquire_operation", return_value=contextlib.nullcontext()),
+            mock.patch.object(setup, "_first_run_locked", side_effect=locked),
+            mock.patch.object(setup, "coordinated_child", side_effect=lambda command: list(command)),
+            mock.patch.object(setup, "run_root", side_effect=capture),
+            mock.patch.object(setup, "run_root_noninteractive", return_value=SimpleNamespace(returncode=0)),
+        ):
+            self.assertEqual(setup.first_run(self.args()), {"status": "complete"})
+
+        [(command, payload)] = [call for call in calls if "set-many" in call[0]]
+        self.assertEqual(json.loads(str(payload)), services)
+        # Setup starts only the protected target. Its wanted V2 reconcile owns
+        # which applications run, so reviewed "off" modes are never overridden.
+        starts = [command for command, _ in calls if command[:2] == ["systemctl", "start"]]
+        self.assertEqual(starts, [["systemctl", "start", "nas-protected-services.target"]])
+        self.assertFalse(
+            any(unit in command for command, _ in calls for unit in ("copyparty.service", "grafana.service"))
+        )
 
     def test_completed_state_with_interrupted_journal_finishes_the_journal(self) -> None:
         report = self.report()

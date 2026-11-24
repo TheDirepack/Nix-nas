@@ -42,7 +42,6 @@ _SAFE_FILE = re.compile(r"^[A-Za-z0-9_.-]{1,255}$")
 _EXPLICIT_SERVICE_NAME = re.compile(r"(?mi)^\s*ServiceName\s*=")
 _EXPLICIT_CONTAINER_NAME = re.compile(r"(?mi)^\s*ContainerName\s*=")
 _UNIT_HEADER = re.compile(r"(?mi)^\s*\[Unit\]\s*$")
-_SECTION = re.compile(r"(?m)^\s*\[[^]]+\]\s*$")
 _ASSIGNMENT = re.compile(
     r"^(?P<prefix>\s*)(?P<key>[A-Za-z][A-Za-z0-9+_-]*)(?P<equals>=)(?P<value>[^\r\n]*)(?P<newline>\r?\n?)$"
 )
@@ -338,17 +337,16 @@ def _validate_canonical_networking(service_id: str, canonical: bytes) -> None:
             )
 
 
-def _inject_part_of(text: str, owner_unit: str) -> str:
-    directive = f"PartOf={owner_unit}"
-    if directive in text:
+def _inject_unit_lines(text: str, directives: Sequence[str]) -> str:
+    missing = [directive for directive in directives if directive not in text.splitlines()]
+    if not missing:
         return text
+    block = "\n".join(missing)
     match = _UNIT_HEADER.search(text)
     if match is not None:
         insertion = match.end()
-        return text[:insertion] + "\n" + directive + text[insertion:]
-    first_section = _SECTION.search(text)
-    prefix = f"[Unit]\n{directive}\n\n"
-    return prefix + text if first_section is not None else prefix + text
+        return text[:insertion] + "\n" + block + text[insertion:]
+    return f"[Unit]\n{block}\n\n" + text
 
 
 def _rewrite_reference_token(token: str, mapping: dict[str, str], *, volume: bool = False) -> str:
@@ -410,6 +408,7 @@ def _namespace_bundle(
     generated_dir: pathlib.Path,
     *,
     owner_unit: str,
+    unit_lines: Sequence[str],
 ) -> tuple[dict[str, bytes], list[str]]:
     raw_files: dict[str, str] = {}
     for path in sorted(generated_dir.iterdir(), key=lambda p: p.name):
@@ -447,7 +446,10 @@ def _namespace_bundle(
         text = _namespace_quadlet_text(text, mapping)
         new_name = mapping[old_name]
         if pathlib.Path(new_name).suffix in {".container", ".pod", ".kube"}:
-            text = _inject_part_of(text, owner_unit)
+            # PartOf does not propagate transitively, and the aggregate's
+            # condition is checked only after its Requires= entries start, so
+            # each runtime unit carries the caller's lifecycle policy itself.
+            text = _inject_unit_lines(text, (f"PartOf={owner_unit}", *unit_lines))
         if not text.endswith("\n"):
             text += "\n"
         output[new_name] = text.encode("utf-8")
@@ -529,6 +531,7 @@ def import_compose(
     podlet_bin: str,
     podman_bin: str,
     compose_provider_bin: str,
+    unit_lines: Sequence[str],
 ) -> tuple[dict[str, bytes], dict[str, Any]]:
     """Return the cached/native Quadlet bundle for one Compose import."""
     podlet_bin = _absolute_binary(podlet_bin, label=f"Compose service {service_id!r} Podlet binary")
@@ -539,8 +542,13 @@ def import_compose(
         podman_bin=podman_bin,
         compose_provider_bin=compose_provider_bin,
     )
+    owner_unit = effective["derived"]["runtime"][service_id]["ownerUnit"]
     fingerprint = _sha256(
-        b"nas-v2-compose-import-v1\0"
+        b"nas-v2-compose-import-v2\0"
+        + owner_unit.encode("utf-8")
+        + b"\0"
+        + "\n".join(unit_lines).encode("utf-8")
+        + b"\0"
         + str(source).encode("utf-8")
         + b"\0"
         + override
@@ -565,8 +573,7 @@ def import_compose(
         generated.mkdir()
         merged.write_bytes(canonical)
         _run([podlet_bin, "--file", str(generated), "compose", str(merged)])
-        owner_unit = effective["derived"]["runtime"][service_id]["ownerUnit"]
-        files, entry_units = _namespace_bundle(service_id, generated, owner_unit=owner_unit)
+        files, entry_units = _namespace_bundle(service_id, generated, owner_unit=owner_unit, unit_lines=unit_lines)
 
     manifest = {
         "schemaVersion": 1,

@@ -381,7 +381,17 @@ class V2SystemdReconcileTests(unittest.TestCase):
         body = '#!/bin/sh\nprintf "%s\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\n'
         for frag in fail_on:
             body += f'if echo "$*" | grep -q "{frag}"; then exit 1; fi\n'
-        body += 'if [ "$1" = is-active ]; then printf "inactive\\n"; exit 3; fi\n'
+        # Unit states live in root/unit-states/<unit>; absent means inactive.
+        states = root / "unit-states"
+        states.mkdir(exist_ok=True)
+        body += (
+            'if [ "$1" = is-active ]; then\n'
+            f'  if [ -f "{states}/$2" ]; then state=$(cat "{states}/$2"); else state=inactive; fi\n'
+            '  printf "%s\\n" "$state"\n'
+            '  if [ "$state" = active ]; then exit 0; fi\n'
+            "  exit 3\n"
+            "fi\n"
+        )
         body += "exit 0\n"
         script.write_text(body, encoding="utf-8")
         script.chmod(script.stat().st_mode | stat.S_IXUSR)
@@ -503,8 +513,11 @@ class V2SystemdReconcileTests(unittest.TestCase):
             self.assertLess(commands.index("restart " + owner), commands.index("restart " + ready))
             previous = state.read_bytes()
             log.write_text("")
+            (root / "unit-states" / owner).write_text("active")
             self.assertTrue(self.run_reconcile(**kwargs)["noop"])
-            self.assertEqual(log.read_text(), "")
+            # A running owner's unchanged gate is neither queried nor rerun.
+            self.assertEqual(log.read_text(), f"is-active {owner}\n")
+            log.write_text("")
             state.write_text(json.dumps({**json.loads(previous), "readinessOwners": {ready: None}}))
             with self.assertRaisesRegex(reconcile.SystemdReconcileError, "previous.*readinessOwners"):
                 self.run_reconcile(**kwargs)
@@ -609,6 +622,7 @@ class V2SystemdReconcileTests(unittest.TestCase):
                 systemctl=systemctl,
                 log=log,
             )
+            (root / "unit-states" / "nas-v2-demo.service").write_text("active", encoding="utf-8")
             log.write_text("", encoding="utf-8")
             result = self.run_reconcile(
                 manifest=manifest,
@@ -623,7 +637,9 @@ class V2SystemdReconcileTests(unittest.TestCase):
             self.assertEqual(result["changed"], [])
             self.assertEqual(result["started"], [])
             self.assertEqual(result["stopped"], [])
-            self.assertEqual(log.read_text(encoding="utf-8"), "")
+            self.assertEqual(result["recovery"], {"queued": [], "diagnostics": []})
+            # A running expected unit is observed, never restarted or relinked.
+            self.assertEqual(log.read_text(encoding="utf-8"), "is-active nas-v2-demo.service\n")
 
     def test_runtime_fingerprint_change_restarts_without_daemon_reload(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -2381,26 +2381,6 @@ def run_first_start_job(request_file: pathlib.Path, password_file: pathlib.Path)
             cancel_reservation(reservation_token)
 
 
-def ensure_secret_gated_services() -> None:
-    # Units gated on staged secrets are skipped while the appliance is locked;
-    # systemd never retries a skipped unit when its condition later holds, and
-    # target activation does not pull units without install wants.
-    for unit in (
-        "copyparty.service",
-        "nas-v2-timer-identity-sync-0.timer",
-        "ntfy-sh.service",
-        "alertmanager.service",
-        "alertmanager-ntfy.service",
-        "grafana.service",
-        "victoriametrics.service",
-        "telegraf.service",
-        "vmalert-nas.service",
-    ):
-        if run_root(["systemctl", "cat", unit], check=False).returncode != 0:
-            continue
-        run_root(["systemctl", "start", unit])
-
-
 def first_run(args: argparse.Namespace) -> dict[str, Any]:
     reservation_token = getattr(args, "reservation_token", None)
     if not isinstance(reservation_token, str):
@@ -2430,8 +2410,9 @@ def first_run(args: argparse.Namespace) -> dict[str, Any]:
                     )
                 finish_interrupted_setup_journal(recorded)
                 result = recorded
+        # The target wants the V2 reconcile, which queues exactly the units
+        # the reviewed services.yaml expects; setup keeps no start list.
         run_root(["systemctl", "start", "nas-protected-services.target"])
-        ensure_secret_gated_services()
         if (
             run_root_noninteractive(
                 ["systemctl", "is-active", "--quiet", "nas-protected-services.target"], check=False

@@ -1701,6 +1701,27 @@ wait_operation_lock_idle() {
     sleep 2
   done
 }
+# Privileged operations refuse a held lock with exit 75 instead of queueing, and
+# recovered sync timers can take it between an idle check and the launch. The
+# refusal happens before the operation starts, so relaunching is safe.
+retry_when_operation_busy() {
+  local output=$1 status deadline=$((SECONDS + TEST_TIMEOUT))
+  shift
+  while :; do
+    wait_operation_lock_idle
+    status=0
+    "$@" >"$output" 2>&1 || status=$?
+    if ((status != 75)) || ! grep -qF 'Another privileged operation conflicts' "$output" || ((SECONDS >= deadline)); then
+      break
+    fi
+    printf 'Relaunching after an operation-lock conflict: %s\n' "$*" >&2
+  done
+  cat "$output"
+  return "$status"
+}
+activate_wrong_password() {
+  printf '%s\n' wrong-password | run_as_admin nas-secrets activate-stdin
+}
 stop_protected_restart_holder() {
   rm -f /run/nas-vm-protected-restart-lock-held
   [[ -n "${protected_restart_holder:-}" ]] || return 0
@@ -1773,10 +1794,13 @@ protected_restart_ready
 pass "Cockpit GUI protected restart completes and Cockpit recovers with protected services ready"
 
 log "Secret stop/reactivation transaction"
+# Declared before the OCI baseline so that baseline's revision stays exact.
+python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" create
 python3 "$CONFIG_DIR/tests/vm/oci-probe.py" create
-run_as_admin nas-secrets stop
+retry_when_operation_busy /tmp/nas-secrets-stop.log run_as_admin nas-secrets stop
 wait_inactive nas-v2-vm-oci-persist.service
 python3 "$CONFIG_DIR/tests/vm/oci-probe.py" locked
+python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" locked
 wait_inactive caddy.service
 wait_inactive copyparty.service
 wait_inactive authentik.service
@@ -1787,16 +1811,42 @@ wait_active nas-cockpit-sso.service
 ! ss -ltnp | grep -F 'cockpit-ws' || fail "Unauthenticated Cockpit root bridge opened a TCP listener"
 [[ ! -e /run/nas-secrets ]] || fail "runtime secret tree survived nas-secrets stop"
 
-activate_secrets
+retry_when_operation_busy /tmp/nas-secrets-activate.log activate_secrets
 wait_active caddy.service
 wait_active copyparty.service
 wait_active authentik.service
+python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" recovered
 
-! printf '%s\n' wrong-password | run_as_admin nas-secrets activate-stdin \
-  >/tmp/nas-secrets-wrong-active.log 2>&1 || fail "wrong password was accepted while active"
+! retry_when_operation_busy /tmp/nas-secrets-wrong-active.log activate_wrong_password ||
+  fail "wrong password was accepted while active"
+! grep -F 'Another privileged operation conflicts' /tmp/nas-secrets-wrong-active.log >/dev/null ||
+  fail "wrong-password activation was refused by operation coordination instead of being checked"
 systemctl is-active --quiet nas-protected-services.target
 [[ -f /run/nas-secrets/ready ]]
 pass "secret stop, reactivation, and wrong-password rollback behavior passed"
+
+log "Managed Services recovery across secret activation and rollback"
+python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" break
+retry_when_operation_busy /tmp/nas-secrets-stop.log run_as_admin nas-secrets stop
+retry_when_operation_busy /tmp/nas-secrets-activate.log activate_secrets ||
+  fail "an unhealthy V2 application made secret activation fail"
+python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" recovered-failed
+python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" fail-outpost
+post_swap_status=0
+# Swap and rollback rename whole trees, so a restored tree keeps its identity.
+previous_secret_tree="$(stat -c '%d:%i' /run/nas-secrets)"
+# set +e does not suppress the ERR trap; an || list does.
+retry_when_operation_busy /tmp/nas-secrets-post-swap-failure.log activate_secrets || post_swap_status=$?
+[[ "$post_swap_status" -eq 71 ]] || { cat /tmp/nas-secrets-post-swap-failure.log >&2; fail "post-swap activation failure returned $post_swap_status"; }
+grep -q 'outpost failed to restart' /tmp/nas-secrets-post-swap-failure.log || fail "post-swap failure was not the injected outpost failure"
+[[ -f /run/nas-secrets/ready ]] || fail "rollback did not restore the previous secret tree"
+[[ "$(stat -c '%d:%i' /run/nas-secrets)" == "$previous_secret_tree" ]] ||
+  fail "rollback left a different secret tree in place of the previous one"
+systemctl is-active --quiet nas-protected-services.target || fail "rollback left the protected target stopped"
+python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" recovered-failed
+python3 "$CONFIG_DIR/tests/vm/lifecycle-probe.py" repair
+wait_active nas-authentik-proxy-outpost.service
+pass "V2 applications recover after same-boot activation and activation rollback; workload failure stays in V2 status"
 
 log "Final state"
 python3 "$CONFIG_DIR/tests/vm/oci-probe.py" verify --stage secret-reactivation

@@ -335,8 +335,17 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     projection.unlink()
                     projection.symlink_to(manifests["healthy"].parent)
                     calls.clear()
-                    self.assertTrue(apply(manifests["healthy"])["noop"])
-                    self.assertEqual(calls, [])
+                    unchanged = apply(manifests["healthy"])
+                    self.assertTrue(unchanged["noop"])
+                    # An unchanged apply only queues a stopped expected owner
+                    # with its gate; it never restarts, probes, or resets.
+                    gated = failure_stage != "dependency-ungated-error"
+                    queued = [] if initially_active else [owner, *([ready] if gated else [])]
+                    self.assertEqual(unchanged["recovery"], {"queued": queued, "diagnostics": []})
+                    self.assertEqual(
+                        calls,
+                        [("is-active", owner)] + ([] if initially_active else [("--no-block", "start", *queued)]),
+                    )
                     self.assertEqual(running["version"], "healthy" if initially_active else None)
                     projection.unlink()
                     projection.symlink_to(manifests["candidate"].parent)

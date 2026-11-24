@@ -971,7 +971,7 @@ class V2ReleaseManifestIdempotenceTests(unittest.TestCase):
             log = root / "log"
             script = root / "systemctl"
             script.write_text(
-                '#!/bin/sh\nprintf "%s\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\nif [ "$1" = is-active ]; then printf "inactive\\n"; exit 3; fi\nexit 0\n',
+                '#!/bin/sh\nprintf "%s\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\nif [ "$1" = is-active ]; then printf "active\\n"; exit 0; fi\nexit 0\n',
                 encoding="utf-8",
             )
             script.chmod(script.stat().st_mode | stat.S_IXUSR)
@@ -995,7 +995,8 @@ class V2ReleaseManifestIdempotenceTests(unittest.TestCase):
                     systemctl=str(script),
                 )
             self.assertTrue(result["noop"])
-            self.assertEqual(log.read_text(encoding="utf-8"), "")
+            # The running expected unit is only observed.
+            self.assertEqual(log.read_text(encoding="utf-8"), "is-active nas-v2-demo.service\n")
 
     def test_firewall_backend_projection_filters_disabled_services(self):
         eff = {

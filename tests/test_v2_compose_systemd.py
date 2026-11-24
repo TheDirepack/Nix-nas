@@ -160,6 +160,12 @@ if [ -n "${NAS_V2_PODLET_COUNT_FILE:-}" ]; then printf '1\n' >> "$NAS_V2_PODLET_
         self.assertIn("Requires=nas-v2-demo-web.service", owner)
         self.assertNotIn("podman compose", owner)
         self.assertIn("PartOf=nas-v2-demo.target", quadlet)
+        # PartOf is not transitive and the aggregate's condition is evaluated
+        # only after its required entries start: each container carries the
+        # protected stop and unlock scope itself.
+        unit_section = quadlet.split("[Container]", 1)[0]
+        for line in systemd.PROTECTED_STACK_LINES:
+            self.assertIn(line, unit_section.splitlines())
         self.assertIn("nas-v2-demo-web.service", manifest["ownedUnits"])
         self.assertIn("nas-v2-demo.target", manifest["startUnits"])
 
@@ -180,8 +186,21 @@ if [ -n "${NAS_V2_PODLET_COUNT_FILE:-}" ]; then printf '1\n' >> "$NAS_V2_PODLET_
                     podlet_bin=str(podlet),
                     podman_bin=str(podman),
                     compose_provider_bin=str(provider),
+                    unit_lines=(),
+                )
+                # The cache key covers the injected policy: a changed scope regenerates the bundle.
+                gated, _manifest = compose_import.import_compose(
+                    effective,
+                    "demo",
+                    effective["services"]["demo"],
+                    podlet_bin=str(podlet),
+                    podman_bin=str(podman),
+                    compose_provider_bin=str(provider),
+                    unit_lines=("PartOf=nas-protected-services.target",),
                 )
         self.assertIn("PartOf=compiled-compose-owner.service", bundle["nas-v2-demo-web.container"].decode())
+        self.assertNotIn("PartOf=nas-protected-services.target", bundle["nas-v2-demo-web.container"].decode())
+        self.assertIn("PartOf=nas-protected-services.target", gated["nas-v2-demo-web.container"].decode())
 
     def test_on_demand_import_uses_socket_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -366,7 +385,9 @@ VolumeName=data.volume
                 encoding="utf-8",
             )
 
-            files, entry_units = compose_import._namespace_bundle("demo", generated, owner_unit="nas-v2-demo.target")
+            files, entry_units = compose_import._namespace_bundle(
+                "demo", generated, owner_unit="nas-v2-demo.target", unit_lines=("ConditionPathExists=/run/ready",)
+            )
 
         rendered = files["nas-v2-demo-web.container"].decode()
         self.assertIn("Network=nas-v2-demo-default.network", rendered)
@@ -377,6 +398,10 @@ VolumeName=data.volume
         self.assertIn("Description=web.container is a literal value", rendered)
         self.assertEqual(entry_units, ["nas-v2-demo-web.service"])
         self.assertIn("NetworkName=default.network", files["nas-v2-demo-default.network"].decode())
+        self.assertIn("\nConditionPathExists=/run/ready\n", rendered)
+        for name in ("nas-v2-demo-default.network", "nas-v2-demo-data.volume"):
+            self.assertNotIn("ConditionPathExists", files[name].decode())
+            self.assertNotIn("PartOf=", files[name].decode())
 
     def test_nix_module_pins_podlet(self) -> None:
         module = (ROOT / "modules/nas/config/managed-services-compose-import.nix").read_text(encoding="utf-8")

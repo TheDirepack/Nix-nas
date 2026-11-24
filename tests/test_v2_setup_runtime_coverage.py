@@ -469,22 +469,6 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             setup.prepare_storage_runtime("pw")
         activate.assert_not_called()
 
-    def test_secret_gated_services_start_only_installed_units(self) -> None:
-        calls: list[list[str]] = []
-
-        def capture(command: list[str], **kwargs: object) -> setup.Completed:
-            calls.append(list(command))
-            if command[:2] == ["systemctl", "cat"]:
-                code = 0 if command[2] in {"alertmanager.service", "alertmanager-ntfy.service"} else 4
-                return setup.Completed(tuple(command), "", "", code)
-            return setup.Completed(tuple(command), "", "", 0)
-
-        with mock.patch.object(setup, "run_root", side_effect=capture):
-            setup.ensure_secret_gated_services()
-        self.assertIn(["systemctl", "start", "alertmanager.service"], calls)
-        self.assertIn(["systemctl", "start", "alertmanager-ntfy.service"], calls)
-        self.assertNotIn(["systemctl", "start", "ntfy-sh.service"], calls)
-
     def test_apply_accounts_validates_json_result_and_confirmation_flag(self) -> None:
         with (
             mock.patch.object(setup, "coordinated_child", side_effect=lambda command: list(command)),

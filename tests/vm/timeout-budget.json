@@ -139,9 +139,19 @@
     {
       "id": "secrets",
       "label": "Secret stop/reactivation transaction",
-      "ordinaryWaits": 9,
+      "ordinaryWaits": 11,
       "fixedSeconds": 240,
       "timeoutKeys": [
+        "secretActivation"
+      ]
+    },
+    {
+      "id": "v2-lifecycle",
+      "label": "Managed Services recovery across secret activation and rollback",
+      "ordinaryWaits": 6,
+      "fixedSeconds": 120,
+      "timeoutKeys": [
+        "secretActivation",
         "secretActivation"
       ]
     },
