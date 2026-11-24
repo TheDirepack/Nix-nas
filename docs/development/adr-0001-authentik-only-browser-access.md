@@ -2,81 +2,75 @@
 
 ## Status
 
-Accepted
+Accepted. This document describes the implemented permissioned-socket design.
 
 ## Context
 
-The appliance requires Authentik to be the sole browser authentication authority,
-including for management functions. The existing first-boot design proxies Cockpit
-through Caddy at `/console`; Cockpit then creates a separate local PAM session.
+Authentik owns browser authentication, MFA, and application memberships. Local
+PAM administrators, console access, SSH recovery keys, and hardware KVM provide
+the recovery plane when Authentik or the protected stack is unavailable.
 
-Authentik forward-auth can control access to Cockpit but cannot create Cockpit's
-required Unix session. Cockpit's OAuth support uses an implicit flow and requires a
-Bearer authentication command to verify the token before starting its bridge.
-
-The old design also exposed Cockpit as browser-based recovery while Authentik and
-Caddy were unavailable during locked boot. That conflicts with a literal
-Authentik-only browser-login requirement.
+Cockpit needs a Unix host session to execute administrative work. The appliance
+starts one shared privileged bridge using Cockpit's native `--local-session`
+mode. Caddy's authentication and authorization checks protect access to it.
 
 ## Decision
 
-- Authentik is the sole authentication authority for every network-reachable browser
-  route that reaches management or an application.
-- Cockpit remains browser-accessible only through Caddy. Caddy must enforce the
-  Authentik Cockpit administrator capability before proxying any request.
-- Cockpit runs its normal loopback-only web service. Its Bearer authentication
-  command verifies a short-lived Authentik OAuth token against Authentik's JWKS,
-  requires the `nas_admin` claim, and only then starts the privileged bridge.
-  It does not accept forward-auth headers or present a second browser login form.
-- Locked-boot recovery is out of band only: local console, SSH with an explicitly
-  provisioned recovery key, or hardware KVM. No HTTPS recovery UI is exposed while
-  Authentik is unavailable.
-- The initial browser bootstrap may serve static setup guidance only. It cannot
-  authenticate a user, unlock secrets, create a Cockpit session, or reach a protected
-  application. Operators complete first start from the out-of-band recovery plane.
-- A later locked boot has the same out-of-band recovery requirement; static guidance
-  is not a recovery UI.
-- First boot uses Authentik's fixed bootstrap username `akadmin` with the
-  documented temporary password `nas-admin-first-boot`. Setup retires that
-  identity after it verifies the chosen administrator.
+- Network browser access to Cockpit passes through Caddy and Authentik. The
+  bootstrap proxy and generated V2 route require `application.cockpit.admin`
+  membership or `nas_admin` before connecting to Cockpit.
+- Cockpit listens only on `/run/nas-cockpit-sso/ws.sock`, owned by root and the
+  Caddy group with mode `0660`. It inherits this socket from systemd and may not
+  bind TCP listeners. The packaged Cockpit TCP socket is disabled.
+- `cockpit-ws --no-tls --local-session cockpit-bridge` runs the shared host
+  session. It does not independently validate Authentik JWTs or create a
+  different Unix account/session for each browser user. The permissioned Unix
+  socket and Caddy are the authentication boundary.
+- Caddy removes client-supplied identity headers, obtains identity from the
+  Authentik outpost, and checks the route's capability on each HTTP request.
+  V2 generates capabilities and routes but never assigns human memberships.
+- A WebSocket upgrade is one HTTP request. Subsequent messages on the upgraded
+  connection do not repeat forward authentication. Revoking a group, disabling
+  an account, or ending its Authentik session does not by itself close an
+  established Cockpit connection. There is no configured finite stream lifetime
+  or per-user connection-revocation mechanism.
+- Before setup completes, the bootstrap Authentik instance and authenticated
+  setup wizard form the browser setup path. The `akadmin` password is randomly
+  generated on first boot and obtained through the recovery plane. Setup
+  verifies the chosen administrator before retiring bootstrap authority.
+- After setup, locked boot serves only the static unlock notice. It exposes no
+  browser management or unlock endpoint; recovery requires console, authorized
+  SSH, or hardware KVM.
+
+Implementation authority lives in `application-services.nix`,
+`caddy-bootstrap.nix`, `caddy-helpers.nix`, the V2 cockpit seed, and
+`nas_v2_caddy.py`. The behavioral Cockpit and Caddy tests cover their boundaries.
 
 ## Consequences
 
-### Positive
+Browser users authenticate through Authentik without a second PAM login. All
+users granted Cockpit access must be fully trusted appliance administrators:
+they enter the same privileged host session. Authentik and Caddy record browser
+access, but that does not give every backend command a separate Unix identity.
 
-- Browser users authenticate once through Authentik, including MFA and session
-  revocation policy.
-- No fixed Cockpit credentials or forwarded identity-header bypass is introduced.
-- Caddy authorizes every Cockpit browser request before it can reach Cockpit, and
-  Cockpit independently verifies the Authentik OAuth token and `nas_admin` claim.
+Immediate removal of established console access requires a recovery-plane
+administrator to revoke the Authentik grants and sessions, then restart
+`nas-cockpit-sso.service`. This disconnects every console user. Verify that new
+access is denied; ending the transport does not undo work or necessarily stop
+independently launched jobs. See [Accounts and access](../src/admin/accounts.md).
 
-### Negative
+V2 routes served under paths on the management hostname share its browser
+origin. Proxy capability checks and cross-origin response headers do not
+isolate scripts by path. Applications sharing that origin must be trusted;
+applications needing separate browser trust should use V2 hostname exposure.
 
-- Operators lose browser-based recovery during locked boot.
-- Console, SSH, or KVM recovery must be documented and qualified on real hardware
-  and in QEMU.
-- All Authentik Cockpit administrators share the privileged Cockpit host session;
-  Authentik and Caddy logs provide the browser access audit trail.
+The remaining revocation and origin boundaries are tracked in
+[Known risks](known-risks.md). Caddy's [streaming documentation](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#streaming)
+describes WebSocket tunneling, configuration-reload closure, and stream limits.
 
-### Neutral
+## Alternatives
 
-- Local PAM accounts remain a recovery authority, but never a network browser login
-  authority.
-- Earlier bootstrap plans that described `/console` as an HTTPS recovery surface are superseded.
-
-## Alternatives considered
-
-### Authentik-gated Cockpit with local PAM login
-
-- **Pros:** Preserves the current Cockpit recovery workflow.
-- **Cons:** Requires a second browser login and does not meet the requirement.
-- **Why rejected:** It prompts for a second browser credential after Authentik.
-
-### Custom Authentik token-to-Cockpit session bridge
-
-- **Pros:** Could theoretically retain Cockpit with one browser login.
-- **Cons:** Requires a privileged custom authentication launcher, token validation,
-  subject-to-Unix-user mapping, and session lifecycle implementation.
-- **Decision:** Required. Cockpit documents this as its supported Bearer
-  authentication extension point. The implementation validates Authentik's
-  signed token and never trusts a proxy header or disables Cockpit authentication.
+A second PAM login would introduce another browser authentication authority.
+A custom token-to-Unix-session launcher would add token validation and session
+lifecycle responsibilities that the current implementation does not provide.
+Neither is part of the implemented design.
