@@ -401,11 +401,13 @@ def browser_sign_in(stage: str) -> None:
             path.write_text(value + "\n", encoding="utf-8")
             path.chmod(0o600)
         # Inherit the journal stream: an unread stderr pipe can stall the proxy.
+        # Keep SIGPIPE ignored so a closed browser connection cannot kill the proxy.
         proxy = subprocess.Popen(
             [str(activate), "--listen", "127.0.0.1:8443", str(proxyd), "127.0.0.1:443"],
             stdout=subprocess.DEVNULL,
             stderr=sys.stderr,
             text=True,
+            restore_signals=False,
         )
         try:
             wait_http(

@@ -86,6 +86,7 @@ cleanup() {
   if [[ -n "${ssh_control_dir:-}" ]]; then
     ssh -S "$ssh_control_dir/control" -O exit -p "$SSH_PORT" admin@"${HOST_BIND_ADDRESS:-127.0.0.1}" >/dev/null 2>&1 || true
     rm -f -- "$ssh_control_dir/control"
+    rm -f -- "$ssh_control_dir/reconcile-readback"
     rmdir -- "$ssh_control_dir"
     ssh_control_dir=""
   fi
@@ -112,7 +113,9 @@ record managed-apply-state systemctl show nas-managed-services-reconcile.service
   -p ActiveState -p SubState -p Result -p MainPID -p ExecMainStatus
 record managed-apply-journal journalctl -b --no-pager -n 2000 -o short-iso-precise \
   -u nas-managed-services-reconcile.service -u nas-v2-apply-failed.service \
-  -u caddy.service -u nas-caddy.service -u nas-cockpit-sso.service
+  -u 'nas-v2-apply-rollback-*.service' \
+  -u nas-managed-services-dirty.service -u caddy.service -u nas-caddy.service \
+  -u nas-cockpit-sso.service -u cockpit.service -u 'cockpit-wsinstance*.service'
 record process-waits ps -eo user,pid,ppid,stat,wchan:32,comm
 record pending-systemd-jobs systemctl list-jobs --no-pager
 record failed-units systemctl --failed --no-legend --plain --no-pager
@@ -317,29 +320,27 @@ PY
 case "$WORKLOAD" in
   deterministic-browser)
     log "Running deterministic authenticated and unauthenticated browser checks against the final VM"
+    readback="$ssh_control_dir/reconcile-readback"
+    {
+      printf '#!/usr/bin/env bash\n'
+      printf 'exec timeout --kill-after=2s 15s ssh'
+      printf ' %q' "${ssh_args[@]}" "admin@$HOST_BIND_ADDRESS" 'sudo -n timeout 12s bash -s'
+      printf ' < %q\n' "$ROOT/tests/vm/final-browser-reconcile-readback.sh"
+    } >"$readback"
+    chmod 0700 "$readback"
     CI=1 \
     NAS_BROWSER_SUITE=vm \
     NAS_VM_BASE_URL="https://nas-test.local:$HTTPS_PORT" \
     NAS_VM_TEST_USER="$TEST_USER" \
     NAS_VM_TEST_PASSWORD="$TEST_PASSWORD" \
+    NAS_VM_RECONCILE_READBACK="$readback" \
     PLAYWRIGHT_HTML_OUTPUT_DIR="$EVIDENCE_DIR/playwright-report" \
     npm --prefix "$ROOT/cockpit" exec -- playwright test --config "$ROOT/cockpit/e2e/playwright.config.mjs" \
       --output "$EVIDENCE_DIR/test-results"
-    # The editor flow can only observe the desired document; a reconcile that
-    # fails before arming rollback leaves it changed without applying it.
-    log "Verify the installed authority for the edited service is applied"
+    log "Verify the installed service after the browser suite restores its name"
     ssh "${ssh_args[@]}" admin@"${HOST_BIND_ADDRESS:-127.0.0.1}" \
       'sudo -n bash -s -- verify-applied-authority' <<'AUTHORITY'
 set -euo pipefail
-deadline=$((SECONDS + 300))
-while systemctl is-active --quiet nas-managed-services-reconcile.service \
-  || [[ -e /run/nas-control/reconcile.pending ]]; do
-  if ((SECONDS >= deadline)); then
-    echo "a reconcile did not settle after the browser suite" >&2
-    exit 1
-  fi
-  sleep 5
-done
 status=$(nas-managed-services-control status)
 jq -e '(.services | map(select(.id == "vm-oci-persist")) | length == 1)
   and (.services[] | select(.id == "vm-oci-persist") | .verified == true)' <<<"$status" >/dev/null || {

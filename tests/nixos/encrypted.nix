@@ -35,6 +35,12 @@ in
 pkgs.testers.runNixOSTest {
   name = "nixos-nas-encrypted-zfs";
 
+  # The driver covers both sequential guests, including boot, shutdown, and TERM grace.
+  globalTimeout =
+    2 * (timeoutBudget.timeouts.encryptedGuest + outerKillAfter
+      + timeoutBudget.outer.nativeBoot + timeoutBudget.outer.nativeShutdown)
+    + timeoutBudget.outer.slack;
+
   nodes = {
     machine = encryptedNode;
     api = encryptedNode;
