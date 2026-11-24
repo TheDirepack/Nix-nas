@@ -6,7 +6,10 @@ import vm from "node:vm";
 
 const source = readFileSync(new URL("../../cockpit/e2e/final-vm.spec.mjs", import.meta.url), "utf8")
   .replace('import {test, expect} from "@playwright/test";\n', "")
-  .replace('import AxeBuilder from "@axe-core/playwright";\n', "");
+  .replace('import AxeBuilder from "@axe-core/playwright";\n', "")
+  .replace('import {execFile} from "node:child_process";\n', "")
+  .replace('import {promisify} from "node:util";\n', "")
+  .replace("const runFile = promisify(execFile);\n", "");
 
 const expectedHostilePayloads = [
   "<script>globalThis.__nas_login_xss=1</script>",
