@@ -35,6 +35,10 @@
           ./tests/nixos/module-consumer.nix
         ] ++ extraModules;
       };
+      qemuSystem = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = commonModules ++ [ ./tests/nixos/qemu-installed.nix ];
+      };
     in
     {
       nixosModules = rec {
@@ -68,9 +72,10 @@
         ];
       };
 
-      nixosConfigurations.nas-qemu = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
-        modules = commonModules ++ [ ./tests/nixos/qemu-installed.nix ];
+      nixosConfigurations.nas-qemu = qemuSystem;
+
+      nixosConfigurations.nas-qemu-package-upgrade = qemuSystem.extendModules {
+        modules = [ ./tests/nixos/qemu-package-upgrade.nix ];
       };
 
       nixosConfigurations.nas-module-consumer = mkConsumer [ ];
