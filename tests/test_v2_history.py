@@ -9,6 +9,7 @@ import unittest
 import io
 import json
 from contextlib import redirect_stdout
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
@@ -105,6 +106,83 @@ class V2HistoryTests(unittest.TestCase):
             history.record_desired(authority=authority, repository=repository)
             with self.assertRaisesRegex(history.DesiredStateHistoryError, "no applied revision"):
                 history.ensure_bootstrap_applied(authority=authority, repository=repository)
+
+    def test_bootstrap_ref_lock_failure_leaves_no_refs_and_can_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            original = "schemaVersion: 3\nservices:\n  demo: {}\n"
+            authority = self.write_authority(root, original)
+            repository = root / "history.git"
+            history.ensure_repository(authority=authority, repository=repository)
+            lock = repository / f"{history.APPLIED_REF}.lock"
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            lock.touch()
+
+            with self.assertRaises(history.DesiredStateHistoryError):
+                history.ensure_bootstrap_applied(authority=authority, repository=repository)
+            for ref in (history.DESIRED_REF, history.APPLIED_REF):
+                self.assertIsNone(history._rev_parse(repository, authority, "git", ref))
+            self.assertEqual(authority.read_text(encoding="utf-8"), original)
+
+            lock.unlink()
+            baseline = history.ensure_bootstrap_applied(authority=authority, repository=repository)
+            self.assertTrue(baseline["created"])
+            for ref in (history.DESIRED_REF, history.APPLIED_REF):
+                self.assertEqual(history._rev_parse(repository, authority, "git", ref), baseline["applied"])
+
+    def test_bootstrap_interrupted_transaction_can_retry(self) -> None:
+        for committed in (False, True):
+            with self.subTest(committed=committed), tempfile.TemporaryDirectory() as raw:
+                root = pathlib.Path(raw)
+                authority = self.write_authority(root, "schemaVersion: 3\nservices:\n  demo: {}\n")
+                original = authority.read_bytes()
+                repository = root / "history.git"
+                run = history._run
+
+                def interrupt(command, **kwargs):
+                    if "update-ref" in command:
+                        if "--stdin" in command:
+                            if not committed:
+                                # EOF after prepare aborts a real Git transaction.
+                                kwargs["input_text"] = kwargs["input_text"].replace("commit\n", "")
+                            run(command, **kwargs)
+                        elif history.APPLIED_REF not in command:
+                            return run(command, **kwargs)
+                        elif committed:
+                            run(command, **kwargs)
+                        raise history.DesiredStateHistoryError("injected interruption")
+                    return run(command, **kwargs)
+
+                with mock.patch.object(history, "_run", side_effect=interrupt):
+                    with self.assertRaisesRegex(history.DesiredStateHistoryError, "injected interruption"):
+                        history.ensure_bootstrap_applied(authority=authority, repository=repository)
+
+                desired = history._rev_parse(repository, authority, "git", history.DESIRED_REF)
+                applied = history._rev_parse(repository, authority, "git", history.APPLIED_REF)
+                self.assertEqual(desired, applied)
+                self.assertEqual(applied is not None, committed)
+                retry = history.ensure_bootstrap_applied(authority=authority, repository=repository)
+                self.assertEqual(retry["created"], not committed)
+                self.assertEqual(
+                    history._rev_parse(repository, authority, "git", history.DESIRED_REF), retry["applied"]
+                )
+                self.assertEqual(
+                    history._rev_parse(repository, authority, "git", history.APPLIED_REF), retry["applied"]
+                )
+                self.assertEqual(authority.read_bytes(), original)
+
+    def test_bootstrap_refuses_legacy_partial_baseline_without_changing_it(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            authority = self.write_authority(root, "schemaVersion: 3\nservices: {}\n")
+            repository = root / "history.git"
+            baseline = history.ensure_bootstrap_applied(authority=authority, repository=repository)
+            history._git(repository, authority, "git", "update-ref", "-d", history.APPLIED_REF)
+
+            with self.assertRaisesRegex(history.DesiredStateHistoryError, "no applied revision"):
+                history.ensure_bootstrap_applied(authority=authority, repository=repository)
+            self.assertEqual(history._rev_parse(repository, authority, "git", history.DESIRED_REF), baseline["applied"])
+            self.assertIsNone(history._rev_parse(repository, authority, "git", history.APPLIED_REF))
 
     def test_bootstrap_cli_creates_the_baseline_before_reconciliation(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

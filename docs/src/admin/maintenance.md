@@ -67,6 +67,21 @@ inspect the named units before retrying. Do not clear a readiness failure just
 to make an update appear successful; earlier probe failures remain in the
 journal even when a later probe succeeds.
 
+## Missing applied configuration history
+
+If reconciliation reports `history has desired revisions but no applied revision`,
+stop and inspect the history through console or SSH recovery access. Preserve
+`/var/lib/nas-control/config-history.git` and `services.yaml` before any repair.
+An interrupted bootstrap from an older installation can leave this state, but
+so can a genuine desired history that was never successfully applied. Even an
+empty bootstrap document does not prove what runtime state was applied.
+
+Bootstrap refuses to invent a rollback target and cannot automatically repair
+this preexisting state. Restore verified matching history from backup or have
+an administrator establish the actual last-applied state before repairing the
+refs. Do not delete the repository or mark the desired revision applied merely
+to bypass the error.
+
 ## Replication drill cleanup
 
 `./scripts/live-validation.sh syncoid` creates a disposable child dataset under `NAS_SYNCOID_SOURCE` and claims `<NAS_SYNCOID_TARGET>/nas-live-<timestamp>` on the receiving host. A successful drill destroys the source child and its snapshot, the clone, the replicated `@validation` snapshot, the replica, and the claim, all non-recursively. No replicated target dataset remains after a successful drill.
