@@ -43,6 +43,7 @@ if [[ "$PACKAGE_UPGRADE" == 1 ]]; then
   # Initialize native databases with older packages; never downgrade migrated state.
   # shellcheck source=tests/vm/package-upgrade-baseline.sh
   source "$SOURCE/tests/vm/package-upgrade-baseline.sh"
+  install_args=(--flake "path:$SOURCE#$PACKAGE_UPGRADE_FLAKE")
   install_args+=(--override-input nixpkgs "github:NixOS/nixpkgs/$OLDER_NIXPKGS_REV")
 fi
 nixos-install \
