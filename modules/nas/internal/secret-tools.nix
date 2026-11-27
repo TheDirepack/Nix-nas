@@ -32,7 +32,7 @@ let
     ];
     env.CGO_ENABLED = 0;
     ldflags = [ "-s" "-w" ];
-    # The compile-fail typestate test needs a writable module tree.
+    # The compile-fail probes resolve the module via the local Go module cache.
     checkFlags = [ "-short" ];
     meta.mainProgram = "nas-secrets";
   };

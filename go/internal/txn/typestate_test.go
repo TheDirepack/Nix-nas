@@ -1,6 +1,7 @@
 package txn_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,11 +67,13 @@ func TestTypestateRejectsMisuseAtCompileTime(t *testing.T) {
 	}
 	for name, c := range mustNotCompile {
 		t.Run(name, func(t *testing.T) {
-			dir, err := os.MkdirTemp(wd, "typestate-*")
-			if err != nil {
+			dir := t.TempDir()
+			mod := fmt.Sprintf("module github.com/TheDirepack/Nix-nas/go/typestateprobe\n\ngo 1.26.0\n\n"+
+				"require github.com/TheDirepack/Nix-nas/go v0.0.0\n"+
+				"replace github.com/TheDirepack/Nix-nas/go => %q\n", filepath.Join(wd, "../.."))
+			if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(mod), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			defer os.RemoveAll(dir)
 			src := "package probe\n\nimport (\n\t\"context\"\n\n" +
 				"\t\"github.com/TheDirepack/Nix-nas/go/internal/cmdexec\"\n" +
 				"\t\"github.com/TheDirepack/Nix-nas/go/internal/secret\"\n" +
@@ -80,7 +83,10 @@ func TestTypestateRejectsMisuseAtCompileTime(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "probe.go"), []byte(src), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			out, err := exec.Command(gobin, "build", "-o", os.DevNull, "./"+filepath.Base(dir)).CombinedOutput() // #nosec G204 -- test toolchain
+			cmd := exec.Command(gobin, "build", "-mod=mod", "-o", os.DevNull, ".") // #nosec G204 -- test toolchain
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "GOWORK=off")
+			out, err := cmd.CombinedOutput()
 			if err == nil {
 				t.Fatalf("misuse compiled:\n%s", c.body)
 			}
