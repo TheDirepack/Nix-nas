@@ -263,5 +263,65 @@ class ThrottleTests(unittest.TestCase):
         self.assertFalse(unlock.groups_include_admin(""))
 
 
+class HelperTests(unittest.TestCase):
+    def test_activation_timeout_is_reported(self) -> None:
+        with mock.patch.object(unlock.subprocess, "run", side_effect=unlock.subprocess.TimeoutExpired("x", 1)):
+            with mock.patch.object(unlock.syslog, "syslog"):
+                with self.assertRaises(unlock.UnlockError) as raised:
+                    unlock.activate(PASSWORD)
+        self.assertEqual(raised.exception.status, 504)
+
+    def test_restore_is_skipped_once_unlocked(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            ready = pathlib.Path(raw) / "ready"
+            ready.write_text("", encoding="utf-8")
+            with mock.patch.object(unlock, "SECRET_READY", ready), mock.patch.object(unlock.subprocess, "run") as run:
+                unlock.restore_locked_identity()
+            run.assert_not_called()
+
+    def test_caddy_uids_fall_back_to_root(self) -> None:
+        with mock.patch.dict(os.environ, {"NAS_CADDY_USER": "nas-unlock-test-missing-user"}):
+            self.assertEqual(unlock.caddy_uids(), {0})
+        with mock.patch.dict(os.environ, {"NAS_CADDY_USER": "root"}):
+            self.assertEqual(unlock.caddy_uids(), {0})
+
+    def test_serve_rejects_relative_socket_path(self) -> None:
+        for path in ("relative.sock", "/run/../tmp/unlock.sock"):
+            with self.subTest(path=path), mock.patch("sys.stderr"):
+                self.assertEqual(unlock.serve(pathlib.Path(path)), 1)
+
+    def test_serve_sets_socket_mode_and_closes(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = pathlib.Path(raw) / "unlock.sock"
+            seen: list[int] = []
+
+            def stop(server: unlock.UnlockServer) -> None:
+                seen.append(path.stat().st_mode & 0o777)
+                raise KeyboardInterrupt
+
+            with (
+                mock.patch.dict(os.environ, {"NAS_CADDY_GROUP": ""}),
+                mock.patch.object(unlock.UnlockServer, "serve_forever", stop),
+                mock.patch.object(unlock.syslog, "syslog"),
+            ):
+                self.assertEqual(unlock.serve(path), 0)
+            self.assertEqual(seen, [0o660])
+
+    def test_main_requires_root(self) -> None:
+        with (
+            mock.patch.object(unlock.os, "geteuid", return_value=1000),
+            mock.patch.object(unlock.syslog, "openlog"),
+            mock.patch("sys.stderr"),
+        ):
+            self.assertEqual(unlock.main(["--socket-path", "/run/nas-unlock/unlock.sock"]), 1)
+        with (
+            mock.patch.object(unlock.os, "geteuid", return_value=0),
+            mock.patch.object(unlock.syslog, "openlog"),
+            mock.patch.object(unlock, "serve", return_value=0) as serve,
+        ):
+            self.assertEqual(unlock.main(["--socket-path", "/run/nas-unlock/unlock.sock"]), 0)
+        serve.assert_called_once_with(pathlib.Path("/run/nas-unlock/unlock.sock"))
+
+
 if __name__ == "__main__":
     unittest.main()
