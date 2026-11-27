@@ -1,13 +1,5 @@
 {
   "executables": {
-    "scripts/check-architecture-boundary.py": {
-      "source": "scripts/check-architecture-boundary.py",
-      "sourceFuzzStrategy": "source-check",
-      "systemTest": "tests/test_architecture_boundary.py",
-      "tests": [
-        "tests/test_architecture_boundary.py"
-      ]
-    },
     "cockpit/build.js": {
       "source": "cockpit/build.js",
       "sourceFuzzStrategy": "source-check",
@@ -71,6 +63,18 @@
         "tests/test_contract_identity.py"
       ]
     },
+    "nas-keepass-setup": {
+      "fuzzStrategy": "unknown-argv",
+      "sources": [
+        "zig/src/keepass_setup.zig"
+      ],
+      "systemTest": "tests/vm/adversarial-installed.py",
+      "tests": [
+        "tests/test_keepass_setup.py",
+        "tests/test_setup.py",
+        "tests/test_v2_setup_runtime_coverage.py"
+      ]
+    },
     "nas-operation-run": {
       "fuzzStrategy": "unknown-argv",
       "source": "services/nas_operation_lock.py",
@@ -90,11 +94,15 @@
     },
     "nas-secrets": {
       "fuzzStrategy": "unknown-verb",
-      "source": "modules/nas/internal/secret-tools.nix",
+      "sources": [
+        "zig/src/nas_secrets.zig"
+      ],
       "systemTest": "tests/vm/guest-test.sh",
       "tests": [
+        "tests/test_nas_secrets.py",
         "tests/test_secret_transaction.py",
-        "tests/bats/nas-secret-transaction.bats"
+        "tests/test_secret_security.py",
+        "tests/test_secret_security_fuzz.py"
       ]
     },
     "nas-setup": {
@@ -120,6 +128,16 @@
       "tests": [
         "tests/test_state.py",
         "tests/test_secret_transaction.py"
+      ]
+    },
+    "nas-unlock-api": {
+      "fuzzStrategy": "unknown-argv",
+      "sources": [
+        "zig/src/unlock_api.zig"
+      ],
+      "systemTest": "tests/vm/setup-reboot-e2e.py",
+      "tests": [
+        "tests/test_unlock_api.py"
       ]
     },
     "nas-update": {
@@ -179,6 +197,14 @@
         "tests/test_contract_operations.py"
       ]
     },
+    "scripts/check-architecture-boundary.py": {
+      "source": "scripts/check-architecture-boundary.py",
+      "sourceFuzzStrategy": "source-check",
+      "systemTest": "tests/test_architecture_boundary.py",
+      "tests": [
+        "tests/test_architecture_boundary.py"
+      ]
+    },
     "scripts/check-coverage.py": {
       "source": "scripts/check-coverage.py",
       "sourceFuzzStrategy": "hostile-argv",
@@ -216,16 +242,6 @@
       "sourceFuzzStrategy": "unknown-option",
       "systemTest": "tests/test_maintainer_scripts.py",
       "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/lib/nas-secret-transaction.sh": {
-      "source": "scripts/lib/nas-secret-transaction.sh",
-      "sourceFuzzStrategy": "shell-parse",
-      "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_secret_transaction.py",
-        "tests/bats/nas-secret-transaction.bats",
         "tests/test_maintainer_scripts.py"
       ]
     },
@@ -426,16 +442,6 @@
       "tests": [
         "tests/test_contract_operations.py"
       ]
-    },
-    "nas-unlock-api": {
-      "fuzzStrategy": "unknown-argv",
-      "sources": [
-        "services/nas_unlock_api.py"
-      ],
-      "systemTest": "tests/vm/setup-reboot-e2e.py",
-      "tests": [
-        "tests/test_unlock_api.py"
-      ]
     }
   },
   "pythonModules": {
@@ -484,15 +490,15 @@
       "tests/test_adversarial_security.py",
       "tests/test_setup.py"
     ],
-    "services/nas_setup_first_start.py": [
-      "tests/test_setup_first_start.py"
-    ],
     "services/nas_setup_config.py": [
       "tests/test_adversarial_security.py",
       "tests/test_fuzz_boundaries.py",
       "tests/test_property_invariants.py",
       "tests/test_setup.py",
       "tests/test_v2_setup_config_coverage.py"
+    ],
+    "services/nas_setup_first_start.py": [
+      "tests/test_setup_first_start.py"
     ],
     "services/nas_state.py": [
       "tests/test_fuzz_boundaries.py",
@@ -503,9 +509,6 @@
       "tests/test_fuzz_boundaries.py",
       "tests/test_property_invariants.py",
       "tests/test_syncthing_devices.py"
-    ],
-    "services/nas_unlock_api.py": [
-      "tests/test_unlock_api.py"
     ]
   },
   "schemaVersion": 3

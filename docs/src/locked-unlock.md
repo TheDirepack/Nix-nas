@@ -13,6 +13,8 @@ After setup, a locked NAS still runs Authentik so that you must sign in before a
 
 The page sends the password once, over HTTPS, to a root-only Unix socket that passes it to `nas-secrets activate-stdin` on standard input. Nothing stores it. Only one attempt runs at a time, and each failure doubles a delay that starts at 5 seconds and is capped at 5 minutes. `journalctl -t nas-unlock-api` records which Authentik user made each attempt.
 
+The page reports a rejected password (HTTP 401) differently from an activation that failed and was rolled back (HTTP 500) and from one that exceeded 15 minutes (HTTP 504). On a timeout the unlock service first asks `nas-secrets` to stop so that it can restore the previous secret tree, and forces it to stop only if that does not finish within a minute.
+
 While locked, Authentik's user and admin interfaces redirect to `/unlock/`. Authentik uses a signing key generated for this boot only, so any session from before the unlock stops working once it completes.
 
 If Authentik or its outpost cannot start, the browser shows a static notice instead and you must use the recovery console.
@@ -29,7 +31,7 @@ Enter the KeePass database password only at the local terminal prompt. The comma
 
 ## Activation transaction
 
-Activation performs the following transaction:
+`nas-secrets` reads the password as one line of at most 4096 characters. Activation performs the following transaction:
 
 1. Verify the KDBX database and optional key file.
 2. Materialize all configured service secrets into a private staging directory.
@@ -38,7 +40,7 @@ Activation performs the following transaction:
 5. Load the ZFS encryption key when enabled.
 6. Restart Authentik with the KeePass environment and start the protected service target.
 7. Validate Authentik API readiness, CopyParty's Unix socket, and required service state.
-8. Roll back to the previous secret tree and service state if validation fails.
+8. Roll back to the previous secret tree and service state if validation fails, or if the command is interrupted (`Ctrl-C`, `SIGTERM`, `SIGHUP`) before the commit.
 
 `activate-stdin` exists for trusted process integrations. Do not pipe passwords through shell history, command substitutions, or network tools.
 

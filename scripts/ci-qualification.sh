@@ -118,6 +118,9 @@ case "$section" in
     ;;
 
   unit)
+    ci_run unit zig-secrets "Zig KeePass unit, fuzz corpus, and compile-error tests" \
+      nix develop .#test -c zig build --build-file zig/build.zig test compile-errors || failed=1
+
     ci_run unit fast-python "Fast Python unit tests" \
       nix develop .#test -c ./scripts/run-unit-tests.py \
       --coverage coverage.json --quiet --jobs 4 --group fast || failed=1

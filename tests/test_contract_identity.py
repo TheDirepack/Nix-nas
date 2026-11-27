@@ -28,19 +28,21 @@ class ContractTests(unittest.TestCase):
         secrets = text("modules/nas/internal/secret-tools.nix")
         unlock = text("cockpit/src/api.js")
         self.assertIn("keepassxc-cli", secrets)
-        self.assertNotIn("--pw-stdin", secrets)
-        self.assertIn("printf '%s\\n' \"$keepass_password\" | keepassxc-cli", secrets)
-        self.assertRegex(secrets, r"read\s+-r\s+-s")
-        self.assertIn("activate-stdin)", secrets)
-        self.assertIn("activate-setup-stdin)", secrets)
-        self.assertIn("systemctl start --job-mode=ignore-dependencies authentik.service", secrets)
-        self.assertIn("systemctl start --job-mode=ignore-dependencies caddy.service", secrets)
+        activation = text("zig/src/nas_secrets.zig")
+        keepass = text("zig/src/keepass.zig")
+        self.assertNotIn("--pw-stdin", keepass)
+        self.assertIn("Payload", keepass)
+        self.assertIn("fn promptUnlock(", activation)
+        self.assertIn('.@"activate-stdin" => commandActivate(&app, .runtime)', activation)
+        self.assertIn('.@"activate-setup-stdin" => commandActivate(&app, .setup)', activation)
+        for unit in ("authentik.service", "caddy.service"):
+            self.assertIn(f'"start", "--job-mode=ignore-dependencies", "{unit}"', activation)
         self.assertIn('superuser: "require"', unlock)
         self.assertIn("process.input", unlock)
         self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", secrets)
 
     def test_authentik_token_authorities_are_separate(self) -> None:
-        secrets = text("modules/nas/internal/secret-tools.nix")
+        secrets = text("zig/src/nas_secrets.zig")
         identity = text("services/nas_identity_sync.py") + text("services/nas_identity_model.py")
         self.assertIn("authentik-bootstrap-token", secrets)
         self.assertIn("authentik-api-token", secrets)
@@ -49,16 +51,13 @@ class ContractTests(unittest.TestCase):
         self.assertIn("authentik_token(bootstrap=True)", identity)
 
     def test_secret_reactivation_restores_proxy_outpost_after_authentik(self) -> None:
-        secrets = text("modules/nas/internal/secret-tools.nix")
-        activation = secrets.split("command_activate() (", 1)[1].split("command_status() {", 1)[0]
+        source = text("zig/src/nas_secrets.zig")
+        bring_up = source.split("fn bringUp(", 1)[1].split("fn commandStatus(", 1)[0]
+        activation = source.split("fn commandActivate(", 1)[1].split("fn finishRollback(", 1)[0]
         self.assertLess(
-            activation.index("http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}-/health/ready/"),
-            activation.index("sudo systemctl start nas-authentik-proxy-outpost.service"),
+            bring_up.index("cfg.authentik_ready_url"), bring_up.index('"start", "nas-authentik-proxy-outpost.service"')
         )
-        self.assertLess(
-            activation.index("sudo systemctl start nas-authentik-proxy-outpost.service"),
-            activation.index("nas_secret_tx_commit"),
-        )
+        self.assertLess(activation.index("bringUp("), activation.index("swapped.commit()"))
 
     def test_copyparty_is_the_only_share_authority(self) -> None:
         identity = text("services/nas_identity_sync.py") + text("services/nas_identity_model.py")

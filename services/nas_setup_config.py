@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import os
 import pathlib
+import shutil
 import stat
+import subprocess
 import sys
+from collections.abc import Sequence
 from typing import Any, Mapping
 
 from nas_common import ADMIN_GROUP, DISABLED_GROUP, GUEST_GROUP, RESERVED_GROUPS, USER_GROUP
@@ -233,22 +236,74 @@ def normalize_secret_line(raw: str, label: str) -> str:
 
 KEEPASS_PASSWORD_MIN_LENGTH = 16
 KEEPASS_PASSWORD_MIN_DISTINCT = 6
+KEEPASS_SETUP_TIMEOUT_SECONDS = 120
+
+
+def keepass_setup_bin() -> str:
+    """Resolve the Zig `nas-keepass-setup` helper at call time."""
+    explicit = os.environ.get("NAS_KEEPASS_SETUP_BIN")
+    if explicit:
+        return explicit
+    found = shutil.which("nas-keepass-setup")
+    if found is None:
+        raise SetupError("nas-keepass-setup is unavailable")
+    return found
+
+
+def run_keepass_setup(
+    arguments: Sequence[str],
+    secret_input: bytes,
+    *,
+    timeout: float = KEEPASS_SETUP_TIMEOUT_SECONDS,
+    launcher: Any = None,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run the KeePass helper; secrets travel only on stdin.
+
+    Its stderr is kept even though stdin was secret: the helper cannot format
+    a secret (that is a compile error in zig/src/secret.zig), so unlike an
+    arbitrary command it cannot echo protected input back.
+    """
+    command = [keepass_setup_bin(), *arguments]
+    if launcher is not None:
+        command = list(launcher(command))
+    try:
+        return subprocess.run(
+            command,
+            input=secret_input,
+            capture_output=True,
+            check=False,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SetupError(f"nas-keepass-setup {arguments[0]} failed: {exc.__class__.__name__}") from exc
+
+
+def refusal(completed: subprocess.CompletedProcess[bytes], fallback: str) -> SetupError:
+    detail = completed.stderr.decode("utf-8", "replace").strip().splitlines()
+    return SetupError(detail[-1] if detail else fallback)
+
+
+def secret_line(value: str, label: str) -> bytes:
+    if "\n" in value or "\r" in value or "\x00" in value:
+        raise SetupError(f"{label} must contain exactly one non-empty line without control characters")
+    return value.encode("utf-8") + b"\n"
 
 
 def validate_keepass_password_strength(password: str, administrator_password: str | None = None) -> str:
     """Enforce the floor for the only secret protecting the KDBX and ZFS key.
 
     The KDBX sits on the unencrypted system disk and in Restic, so its password
-    is the sole offline barrier. Keep in sync with the wizard's ConfirmStep.
+    is the sole offline barrier. The rule lives in zig/src/validate.zig
+    (StrongKeePassPassword); keep the wizard's ConfirmStep in sync with it.
     """
-    if len(password) < KEEPASS_PASSWORD_MIN_LENGTH:
-        raise SetupError(f"KeePass database password must contain at least {KEEPASS_PASSWORD_MIN_LENGTH} characters")
-    if len(set(password)) < KEEPASS_PASSWORD_MIN_DISTINCT:
-        raise SetupError(
-            f"KeePass database password must use at least {KEEPASS_PASSWORD_MIN_DISTINCT} different characters"
-        )
-    if administrator_password is not None and password.casefold() == administrator_password.casefold():
-        raise SetupError("KeePass database password must differ from the administrator password")
+    payload = secret_line(password, "KeePass database password")
+    arguments = ["check-strength"]
+    if administrator_password is not None:
+        payload += secret_line(administrator_password, "Administrator password")
+        arguments.append("--with-administrator")
+    completed = run_keepass_setup(arguments, payload)
+    if completed.returncode != 0:
+        raise refusal(completed, "KeePass database password does not meet the strength floor")
     return password
 
 

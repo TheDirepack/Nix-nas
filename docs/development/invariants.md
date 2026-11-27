@@ -42,6 +42,7 @@ An Authentik administrator is not automatically a Linux/PAM administrator. Brows
 - Secret stdin is one bounded nonempty line.
 - Password files are absolute, private, regular, non-symlink files and are opened once.
 - Long setup operations use pre-authorized, noninteractive sudo; payload stdin must never be consumed by sudo.
+- In the Zig KeePass tools, secret bytes stay in `secret.Secret`: never add a `format`/`jsonStringify` path, a `[]const u8` accessor, an argv route, or a stdin payload on `Runner.privileged`. `zig build compile-errors` must keep failing the misuse snippets.
 
 ## Storage
 

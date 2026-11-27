@@ -81,11 +81,11 @@ class ContractTests(unittest.TestCase):
         self.assertIn("nas-protected-services", schedules)
 
     def test_secret_readiness_is_bounded_and_diagnostic(self) -> None:
-        secrets = text("modules/nas/internal/secret-tools.nix")
+        secrets = text("zig/src/nas_secrets.zig")
         authentik = text("modules/nas/config/application-services.nix")
-        self.assertIn("timeout 90s curl", secrets)
+        self.assertIn('cfg.tools.timeout,   "90s", cfg.tools.curl', secrets)
         for code in (71, 72, 73):
-            self.assertIn(f"exit {code}", secrets)
+            self.assertIn(f"app.fail({code},", secrets)
         self.assertNotIn("seq 1 90", secrets)
         self.assertIn("/bin/timeout 180s", authentik)
         self.assertIn("--retry 180", authentik)
@@ -144,7 +144,7 @@ class ContractTests(unittest.TestCase):
         applications = text("modules/nas/config/application-services.nix")
         services = text("modules/nas/config/systemd-services.nix")
         setup = text("services/nas_setup.py")
-        secrets = text("modules/nas/internal/secret-tools.nix")
+        secrets = text("zig/src/nas_secrets.zig")
         self.assertIn("nas-bootstrap-runtime-select.service", applications)
         self.assertIn("bootstrapAuthentikDataDir", applications)
         self.assertIn("bootstrapPostgresqlDataDir", applications)
@@ -156,16 +156,14 @@ class ContractTests(unittest.TestCase):
         self.assertIn("retire-bootstrap", setup)
         self.assertIn("retire-authentik-bootstrap-stdin", setup)
         self.assertNotIn('run_root(["mv", str(source), str(destination)])', setup)
-        self.assertIn("command_retire_authentik_bootstrap_stdin", secrets)
-        self.assertIn(
-            '[[ -n "$authentik_bootstrap_token" && "$authentik_api_token" == "$authentik_bootstrap_token" ]]', secrets
-        )
+        self.assertIn("commandRetireBootstrap", secrets)
+        self.assertIn("if (m.bootstrap_token) |t| t.eql(m.api_token.?) else false", secrets)
         self.assertIn('ConditionPathExists = "!/var/lib/nas-setup/state.json"', services)
 
     def test_first_boot_authentik_uses_only_a_random_bootstrap_runtime_environment(self) -> None:
         applications = text("modules/nas/config/application-services.nix")
         base = text("modules/nas/internal/base.nix")
-        secrets = text("modules/nas/internal/secret-tools.nix")
+        secrets = text("zig/src/nas_secrets.zig")
         services = text("modules/nas/config/systemd-services.nix")
         setup = text("services/nas_setup.py")
         self.assertIn("nas-bootstrap-authentik-secrets", applications)
@@ -180,7 +178,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("openssl rand -hex 24", applications)
         self.assertIn('authentikRuntimeEnvironmentFile = "/run/nas-authentik/environment";', base)
         self.assertIn('authentikRuntimeApiTokenFile = "/run/nas-authentik/api-token";', base)
-        self.assertIn("sudo systemctl reset-failed", secrets)
+        self.assertIn('app.systemctl(.{ "reset-failed",', secrets)
         self.assertNotIn("EnvironmentFile = [ authentikEnvironmentFile ];", applications)
         self.assertIn("ConditionPathExists = authentikRuntimeEnvironmentFile;", services)
         self.assertNotIn('ConditionPathExists = [ "${secretRoot}/ready" authentikEnvironmentFile ];', services)
@@ -197,7 +195,7 @@ class ContractTests(unittest.TestCase):
         firewall = text("modules/nas/config/network-firewall.nix")
         caddy = text("modules/nas/config/caddy-bootstrap.nix")
         services = text("modules/nas/config/application-services.nix")
-        secrets = text("modules/nas/internal/secret-tools.nix")
+        secrets = text("zig/src/nas_secrets.zig")
         self.assertNotIn('protectedServiceUnits = [\n    "cockpit.socket"', base)
         self.assertIn("systemd.sockets.cockpit.enable = false;", system)
         self.assertNotIn("directCockpitRecovery", firewall)
@@ -214,7 +212,7 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("--port", services)
         self.assertIn('ListenStream = "/run/nas-cockpit-sso/ws.sock";', services)
         self.assertIn("AllowUnencrypted = false", services)
-        self.assertIn("activate-stdin)", secrets)
+        self.assertIn('.@"activate-stdin" => commandActivate(&app, .runtime)', secrets)
 
     def test_firewall_defaults_fail_closed_and_vm_interfaces_are_explicit(self) -> None:
         firewall = text("modules/nas/config/network-firewall.nix")
@@ -280,7 +278,7 @@ class ContractTests(unittest.TestCase):
     def test_shared_operation_coordinator_covers_update_secrets_and_setup_children(self) -> None:
         system = text("modules/nas/config/system.nix")
         identities = text("modules/nas/config/identities.nix")
-        secrets = text("modules/nas/internal/secret-tools.nix")
+        secrets = text("zig/src/nas_secrets.zig")
         services = text("modules/nas/config/systemd-services.nix")
         update = text("scripts/update-nas.sh")
         package = text("pyproject.toml")
@@ -289,7 +287,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("users.groups.nas-operations", identities)
         self.assertIn('extraGroups = [ "copyparty" ]', identities)
         self.assertIn('nas-operation-run = "nas_operation_lock:main"', package)
-        self.assertIn("enter_operation_coordinator", secrets)
+        self.assertIn("enterOperationCoordinator", secrets)
         self.assertIn("operation_class=update", update)
         self.assertNotIn("exec 8>/run/nas-operations/appliance.lock", update)
         syncthing_sync = services.split("nas-syncthing-sync =", 1)[1].split("nas-caddy-ca-export =", 1)[0]

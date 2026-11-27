@@ -14,6 +14,11 @@ if str(SERVICES) not in sys.path:
 
 from nas_setup_config import SetupError  # noqa: E402
 from nas_setup_first_start import parse_first_start_request, parse_first_start_secrets  # noqa: E402
+from keepass_fakes import export_keepass_setup  # noqa: E402
+
+
+def setUpModule() -> None:
+    export_keepass_setup()
 
 
 def valid_request() -> dict:

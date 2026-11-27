@@ -318,7 +318,7 @@ in
         NAS_CADDY_GROUP = config.services.caddy.group;
       };
       serviceConfig = {
-        ExecStart = "${nasPythonApplication}/bin/nas-unlock-api --socket-path /run/nas-unlock/unlock.sock";
+        ExecStart = "${nasSecrets}/bin/nas-unlock-api --socket-path /run/nas-unlock/unlock.sock";
         RuntimeDirectory = "nas-unlock";
         RuntimeDirectoryMode = "0750";
         ExecStartPost = "${pkgs.coreutils}/bin/chgrp ${config.services.caddy.group} /run/nas-unlock";

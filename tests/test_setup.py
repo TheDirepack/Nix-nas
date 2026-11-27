@@ -21,6 +21,11 @@ if str(SERVICES) not in sys.path:
 import nas_setup as setup  # noqa: E402
 import nas_setup_config as setup_config  # noqa: E402
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from keepass_fakes import export_keepass_setup, fake_keepass  # noqa: E402
+
+export_keepass_setup()
+
 
 class SetupApplicationRetirementTests(unittest.TestCase):
     def retire(self, stdout: str) -> tuple[dict[str, object] | None, mock.Mock, pathlib.Path, BaseException | None]:
@@ -1235,35 +1240,27 @@ class ConfiguredAdministratorTests(unittest.TestCase):
             database = pathlib.Path(tmp) / "secrets" / "NAS.kdbx"
             database.parent.mkdir()
             database.write_text("fixture", encoding="utf-8")
-
-            def root(command, **_kwargs):
-                if command[:3] == ["mv", "--no-clobber", "--"]:
-                    pathlib.Path(command[3]).rename(command[4])
-                return setup.Completed(tuple(command), "", "")
-
-            def admin(command, **_kwargs):
-                if "db-create" in command:
-                    database.write_text("fresh", encoding="utf-8")
-                return setup.Completed(tuple(command), "", "")
-
             with (
                 mock.patch.object(setup, "KEEPASS_DATABASE", database),
                 mock.patch.object(setup, "managed_dataset_encrypted", return_value=False),
-                mock.patch.object(setup, "run_root", side_effect=root) as run_root,
-                mock.patch.object(setup, "run_admin", side_effect=admin) as run_admin,
+                mock.patch.object(setup, "run_root") as run_root,
+                fake_keepass(setup) as keepass,
             ):
-                self.assertEqual(setup.verify_or_create_database("password", True), "created")
+                self.assertEqual(setup.verify_or_create_database("kdbx-s3cret", True), "created")
+                create, verify = keepass.calls()
             preserved = list(database.parent.glob("NAS.kdbx.replaced-*"))
             self.assertEqual(len(preserved), 1)
             self.assertEqual(preserved[0].read_text(encoding="utf-8"), "fixture")
             self.assertEqual(database.read_text(encoding="utf-8"), "fresh")
         commands = [call.args[0] for call in run_root.call_args_list]
         self.assertEqual(commands[0][0], "install")
-        self.assertFalse([command for command in commands if command[0] == "rm"])
-        create = run_admin.call_args_list[0].args[0]
-        self.assertIn("db-create", create)
-        self.assertEqual(create[create.index("--decryption-time") + 1], setup.KEEPASS_DECRYPTION_TIME_MS)
-        self.assertIn("db-info", run_admin.call_args_list[1].args[0])
+        self.assertFalse([command for command in commands if command[0] in {"rm", "mv"}])
+        self.assertEqual(create["argv"][0], "db-create")
+        argv = list(create["argv"])
+        self.assertEqual(argv[argv.index("--decryption-time") + 1], setup.KEEPASS_DECRYPTION_TIME_MS)
+        self.assertEqual(create["stdin"], "kdbx-s3cret\nkdbx-s3cret\n")
+        self.assertEqual(verify["argv"][0], "db-info")
+        self.assertNotIn("kdbx-s3cret", " ".join(argv))
 
 
 class KeePassAuthorityGuardTests(unittest.TestCase):
@@ -1273,28 +1270,23 @@ class KeePassAuthorityGuardTests(unittest.TestCase):
         self, database: pathlib.Path, *, opens: bool
     ) -> tuple[str | Exception, list[list[str]], list[list[str]]]:
         roots: list[list[str]] = []
-        admins: list[list[str]] = []
 
         def root(command, **_kwargs):
             roots.append(list(command))
-            return setup.Completed(tuple(command), "", "")
-
-        def admin(command, **_kwargs):
-            admins.append(list(command))
-            if "db-info" in command and not opens:
-                raise setup.SetupError("keepassxc-cli failed")
             return setup.Completed(tuple(command), "", "")
 
         with (
             mock.patch.object(setup, "KEEPASS_DATABASE", database),
             mock.patch.object(setup, "managed_dataset_encrypted", return_value=True),
             mock.patch.object(setup, "run_root", side_effect=root),
-            mock.patch.object(setup, "run_admin", side_effect=admin),
+            fake_keepass(setup, opens=opens) as keepass,
         ):
             try:
                 result: str | Exception = setup.verify_or_create_database("retyped-password", True)
             except setup.SetupError as exc:
                 result = exc
+            admins = keepass.argv()
+        self.assertFalse(list(database.parent.glob("*.replaced-*")))
         return result, roots, admins
 
     def test_retry_after_journal_clear_keeps_the_database_holding_the_dataset_key(self) -> None:

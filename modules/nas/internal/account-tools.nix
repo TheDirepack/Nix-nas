@@ -7,6 +7,7 @@ let
     cfg
     copypartyUserConfigDir
     lib
+    nasKeepassTools
     nasSecrets
     nasUpdate
     nasPreflight
@@ -64,12 +65,14 @@ let
       "nas_setup"
       "nas_setup_first_start"
       "nas_state"
-      "nas_unlock_api"
       "nas_v2_backup"
       "nas_v2_control"
       "nas_v2_editor"
       "nas_v2_session"
     ];
+    # The KeePass strength floor, setup verifier and database guard run in the
+    # Zig helper; resolve it from the store rather than from the caller's PATH.
+    makeWrapperArgs = [ "--set" "NAS_KEEPASS_SETUP_BIN" "${nasKeepassTools}/bin/nas-keepass-setup" ];
     doCheck = false;
   };
   nasIdentitySyncScript = "${nasPythonApplication}/bin/nas-identity-sync";

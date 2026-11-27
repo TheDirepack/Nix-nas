@@ -31,6 +31,13 @@ sys.modules[SPEC.name] = api
 SPEC.loader.exec_module(api)
 
 
+from keepass_fakes import export_keepass_setup  # noqa: E402
+
+
+def setUpModule() -> None:
+    export_keepass_setup()
+
+
 class CockpitApiTests(unittest.TestCase):
     def test_overview_preserves_unknown_failed_unit_and_pool_probes(self):
         for code, output, expected in ((1, "", None), (0, "DEGRADED", False), (0, "all pools are healthy", True)):

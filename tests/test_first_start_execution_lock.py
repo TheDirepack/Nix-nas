@@ -16,6 +16,13 @@ import nas_operation_lock as locks  # noqa: E402
 import nas_setup as setup  # noqa: E402
 
 
+from keepass_fakes import export_keepass_setup  # noqa: E402
+
+
+def setUpModule() -> None:
+    export_keepass_setup()
+
+
 class FirstStartExecutionLockTests(unittest.TestCase):
     def worker(self, root: pathlib.Path, token: str) -> subprocess.CompletedProcess[str]:
         request = root / "request.json"

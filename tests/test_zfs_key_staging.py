@@ -1,70 +1,45 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import pathlib
 import pty
+import shlex
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tests"))
+
+from test_nas_secrets import Appliance  # noqa: E402
+from zig_binaries import harness_bin_dir  # noqa: E402
 
 PROMPT = b"KeePass database password: "
 PASSWORD = b"fixture-password"
 
 
-def extract_shell_function(source: str, name: str) -> str:
-    """Extract one nas-secrets shell function from the Nix string literal."""
-    lines = source.splitlines()
-    marker = f"      {name}() {{"
-    try:
-        start = lines.index(marker)
-    except ValueError as exc:
-        raise AssertionError(f"{name} is missing from secret-tools.nix") from exc
-    for end in range(start + 1, len(lines)):
-        if lines[end] == "      }":
-            block = lines[start : end + 1]
-            return "\n".join(line[6:] if line.startswith("      ") else line for line in block)
-    raise AssertionError(f"{name} is not terminated in secret-tools.nix")
-
-
 class ZfsKeyStagingTests(unittest.TestCase):
-    def reader_script(self) -> str:
-        """Build the nas-secrets reader from the real prompt and key commands.
+    def reader_script(self, work: pathlib.Path, key: str) -> str:
+        """Run the real nas-secrets reader against a fake KeePass database.
 
-        Only the KeePassXC database access is stubbed. The prompt, its terminal
-        handling, the key emission, and the newline that follows a password
-        entry are the production code paths, so prompt output that reaches
-        stdout makes the captured key unusable and fails these tests.
+        Only KeePassXC is stubbed. The prompt, its terminal handling, the key
+        emission, and the newline that follows a password entry are the
+        production code paths, so prompt output that reaches stdout makes the
+        captured key unusable and fails these tests.
         """
-        source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text()
-        functions = "\n\n".join(
-            extract_shell_function(source, name)
-            for name in (
-                "prompt_unlock",
-                "command_show_zfs_key",
-                "command_show_zfs_key_stdin",
-            )
-        ).replace("''${", "${")
-        return (
-            "#!/usr/bin/env bash\n"
-            "set -euo pipefail\n"
-            'database="$PWD/fixture.kdbx"\n'
-            'key_file=""\n'
-            "password_from_stdin=false\n"
-            'keepass_password=""\n'
-            "require_database() { :; }\n"
-            "get_secret() { printf '%s' \"$TEST_KEY\"; }\n"
-            f"{functions}\n"
-            'case "${1:-}" in\n'
-            "  show-zfs-key) command_show_zfs_key ;;\n"
-            "  show-zfs-key-stdin) command_show_zfs_key_stdin ;;\n"
-            '  *) echo "unexpected reader action: ${1:-}" >&2; exit 2 ;;\n'
-            "esac\n"
-        )
+        nas = Appliance(work / "appliance")
+        data = json.loads(nas.db.read_text(encoding="utf-8"))
+        data["password"] = PASSWORD.decode()
+        data["groups"] = ["NAS"]
+        data["entries"]["NAS/zfs-dataset-key"] = key
+        nas.db.write_text(json.dumps(data), encoding="utf-8")
+        exports = "".join(f"export {name}={shlex.quote(value)}\n" for name, value in nas.env.items())
+        return f'#!/bin/sh\n{exports}exec {shlex.quote(str(harness_bin_dir() / "nas-secrets"))} "$@"\n'
 
     def run_key_path(self, *, export: bool, fail_install: bool = False, tty: bool = False):
         source = (ROOT / "modules/nas/internal/zfs-tools.nix").read_text()
@@ -113,7 +88,7 @@ sudo() {
   esac
 }
 """
-            (work / "reader").write_text(self.reader_script())
+            (work / "reader").write_text(self.reader_script(work, key))
             (work / "reader").chmod(0o700)
             # Provide keepassxc-cli as a real executable on PATH, matching how
             # the production reader resolves it.
@@ -257,7 +232,7 @@ sudo() {
         with tempfile.TemporaryDirectory() as raw:
             work = pathlib.Path(raw)
             key = "cd" * 32
-            (work / "reader").write_text(self.reader_script())
+            (work / "reader").write_text(self.reader_script(work, key))
             (work / "reader").chmod(0o700)
             stub_bin = work / "bin"
             stub_bin.mkdir()

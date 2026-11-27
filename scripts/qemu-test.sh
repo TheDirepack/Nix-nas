@@ -260,6 +260,8 @@ stage = pathlib.Path(sys.argv[2]).resolve()
 ignored_parts = {
     ".git",
     ".cache",
+    ".zig-cache",
+    "zig-out",
     ".hypothesis",
     ".pytest_cache",
     "__pycache__",

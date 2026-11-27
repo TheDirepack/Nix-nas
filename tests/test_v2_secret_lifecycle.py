@@ -1,83 +1,90 @@
 from __future__ import annotations
 
+import json
 import pathlib
-import subprocess
+import sys
 import tempfile
+import textwrap
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+NAS_SECRETS = ROOT / "zig/src/nas_secrets.zig"
+sys.path.insert(0, str(ROOT / "tests"))
+
+from test_nas_secrets import PASSWORD, SECRET_ROOT, Appliance  # noqa: E402
 
 
 class V2SecretLifecycleTests(unittest.TestCase):
     def test_stop_revokes_readiness_before_systemd_can_reactivate_dependencies(self) -> None:
-        source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
-        stop = source.split("command_stop() {", 1)[1].split("command_check_authentik_token() {", 1)[0]
-        with tempfile.TemporaryDirectory() as directory:
-            root = pathlib.Path(directory) / "secrets"
-            root.mkdir()
+        with tempfile.TemporaryDirectory() as raw:
+            nas = Appliance(pathlib.Path(raw))
+            root = nas.path(SECRET_ROOT)
+            root.mkdir(parents=True)
             (root / "ready").touch()
             (root / "credential").touch()
-            result = subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    'set -euo pipefail\nsecret_root="$1"\n'
-                    "acquire_lock() { :; }\n"
-                    "sudo() {\n"
-                    '  if [[ "$1" == systemctl ]]; then\n'
-                    '    [[ ! -e "$secret_root/ready" ]] || return 91\n'
-                    '    [[ -e "$secret_root/credential" ]] || return 92\n'
-                    '  else "$@"; fi\n'
-                    "}\ncommand_stop() {" + stop + '\ncommand_stop\n[[ ! -e "$secret_root" ]]',
-                    "stop-test",
-                    str(root),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
+            # The stop must observe the ready marker already gone and the credential still present.
+            guard = nas.bin / "systemctl"
+            guard.write_text(
+                textwrap.dedent(
+                    f"""\
+                    #!/bin/sh
+                    [ ! -e {root}/ready ] || exit 91
+                    [ -e {root}/credential ] || exit 92
+                    exit 0
+                    """
+                ),
+                encoding="utf-8",
             )
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            result = nas.run("stop", stdin="")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(root.exists())
 
     def test_secret_activation_remains_keepass_backed_and_transactional(self) -> None:
-        source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
-        activate = source.split("command_activate() (", 1)[1].split("command_status() {", 1)[0]
-
-        self.assertIn("prompt_unlock", activate)
-        self.assertIn("get_secret authentik-secret-key", activate)
-        self.assertIn("nas_secret_tx_swap", activate)
-        self.assertIn("nas_secret_tx_commit", activate)
-        self.assertIn("kp_args() {", source)
-        self.assertIn("get_secret() {", source)
+        source = NAS_SECRETS.read_text(encoding="utf-8")
+        activate = source[source.index("fn commandActivate(") : source.index("fn finishRollback(")]
+        self.assertIn("app.promptUnlock()", activate)
+        self.assertIn("transaction.init(&ctx", activate)
+        self.assertIn("staged.swap()", activate)
+        self.assertIn("swapped.commit()", activate)
+        self.assertIn('db.get(.@"authentik-secret-key")', source)
 
     def test_secret_activation_validates_platform_substrate_not_copyparty(self) -> None:
-        source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
-        activate = source.split("command_activate() (", 1)[1].split("command_status() {", 1)[0]
-
-        self.assertIn("authentik.service authentik-worker.service caddy.service", activate)
-        self.assertNotIn("/run/copyparty/http.sock", activate)
-        core, _, convergence = activate.partition("for gated_unit in")
-        self.assertIn("for gated_unit in", activate)
-        self.assertNotIn("copyparty.service", core)
-        self.assertIn("v2_systemd_state=/run/nas-control/systemd-reconciled.json", core)
-        self.assertIn(".startUnits", core)
-        self.assertIn("for gated_unit in \"''${v2_start_units[@]}\"", convergence)
-        self.assertNotIn("for gated_unit in copyparty.service", convergence)
+        source = NAS_SECRETS.read_text(encoding="utf-8")
+        self.assertIn(
+            'const failed_units = [_]UnitName{ UnitName.lit("authentik.service"), UnitName.lit("authentik-worker.service"), UnitName.lit("caddy.service") };',
+            source,
+        )
+        self.assertNotIn("copyparty", source)
+        self.assertIn(
+            'v2_systemd_state: []const u8 = "/run/nas-control/systemd-reconciled.json"',
+            (ROOT / "zig/src/config.zig").read_text(),
+        )
+        self.assertIn("startUnits", source)
 
     def test_discarded_generation_helpers_do_not_return(self) -> None:
-        source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
-
-        self.assertNotIn("nas-secret-stage-copyparty", source)
-        self.assertNotIn("nas-secret-stage-authentik", source)
-        self.assertNotIn("nas-keepass-validate", source)
-        self.assertNotIn("nas-secret-fault-test", source)
+        sources = (ROOT / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8") + NAS_SECRETS.read_text()
+        for name in (
+            "nas-secret-stage-copyparty",
+            "nas-secret-stage-authentik",
+            "nas-keepass-validate",
+            "nas-secret-fault-test",
+        ):
+            self.assertNotIn(name, sources)
 
     def test_authentik_token_check_accepts_retired_bootstrap_authority(self) -> None:
-        source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
-        check = source.split("command_check_authentik_token() {", 1)[1].split("command_set_authentik_token() {", 1)[0]
-
-        self.assertIn("if ! has_secret authentik-bootstrap-token; then", check)
-        self.assertIn("Authentik bootstrap token is retired", check)
-        self.assertIn('if [[ "$bootstrap" == "$api" ]]', check)
+        with tempfile.TemporaryDirectory() as raw:
+            nas = Appliance(pathlib.Path(raw))
+            nas.initialise()
+            reused = nas.run("check-authentik-token")
+            self.assertEqual(reused.returncode, 1)
+            self.assertIn("still the bootstrap token", reused.stderr)
+            data = json.loads(nas.db.read_text(encoding="utf-8"))
+            del data["entries"]["NAS/authentik-bootstrap-token"]
+            nas.db.write_text(json.dumps(data), encoding="utf-8")
+            retired = nas.run("check-authentik-token")
+            self.assertEqual(retired.returncode, 0, retired.stderr)
+            self.assertIn("Authentik bootstrap token is retired", retired.stdout)
+            self.assertNotIn(PASSWORD, retired.stdout + retired.stderr)
 
 
 if __name__ == "__main__":

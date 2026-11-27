@@ -103,6 +103,8 @@ ignored_release_suffixes = (".zip.sha256", ".provenance.json")
 
 
 def ignored(relative: pathlib.PurePath) -> bool:
+    if relative.parts[:2] in {("zig", ".zig-cache"), ("zig", "zig-out")}:
+        return True
     if any(part in ignored_parts or part.endswith(".egg-info") for part in relative.parts):
         return True
     if relative.name in known_generated or relative.suffix in ignored_suffixes:
