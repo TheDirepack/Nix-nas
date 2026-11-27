@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
@@ -23,13 +24,14 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertEqual(boundary.violations(), [])
 
     def test_scanner_detects_application_names_in_a_generic_path(self) -> None:
-        source = ROOT / "services" / "nas_v2_systemd_native.py"
-        original = source.read_text(encoding="utf-8")
-        try:
-            source.write_text(original + "\n# syncthing\n", encoding="utf-8")
-            found = boundary.violations((source,))
-        finally:
-            source.write_text(original, encoding="utf-8")
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            relative = pathlib.Path("services/nas_v2_systemd_native.py")
+            source = root / relative
+            source.parent.mkdir()
+            source.write_text((ROOT / relative).read_text(encoding="utf-8") + "\n# syncthing\n", encoding="utf-8")
+            with patch.object(boundary, "ROOT", root):
+                found = boundary.violations((source,))
         self.assertEqual(
             [(path, name) for path, name, _line in found],
             [(pathlib.Path("services/nas_v2_systemd_native.py"), "syncthing")],
