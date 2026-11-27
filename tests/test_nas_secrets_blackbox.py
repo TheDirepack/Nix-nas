@@ -380,6 +380,15 @@ class SecretStoreTests(Base):
         self.assert_ok(retired)
         self.assertIn("bootstrap token is retired", retired.stdout)
 
+    def test_failed_bootstrap_entry_deletion_preserves_the_entry(self) -> None:
+        original = "bootstrap-token-0123456789"
+        self.app.write_store(entries(**{"authentik-bootstrap-token": original}))
+        result = self.app.run("retire-authentik-bootstrap-stdin", FAKE_KP_FAIL_RM="2")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unable to remove KeePassXC entry", result.stderr)
+        self.assertEqual(self.app.entries()["authentik-bootstrap-token"], original)
+        self.assert_no_secret_leak(result)
+
     def test_init_creates_only_missing_items(self) -> None:
         self.app.write_store({"zfs-dataset-key": "keep-me"})
         result = self.app.run("init")

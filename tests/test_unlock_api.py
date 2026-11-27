@@ -52,7 +52,7 @@ class Fixture:
             f'IFS= read -r line; printf "%s\\n" "$line" >> "{self.stdin}"\n'
             f'if [ "$line" = "{PASSWORD}" ]; then : > "{self.ready}"; exit 0; fi\n'
             'if [ "$line" = "explode" ]; then echo "Protected service target failed to start" >&2; exit 71; fi\n'
-            'if [ "$line" = "slow down" ]; then trap \'echo rolled-back >&2; exit 143\' TERM; sleep 30 >/dev/null 2>&1 & wait; fi\n'
+            'if [ "$line" = "slow down" ]; then trap \'kill "$sleeper"; wait "$sleeper"; echo rolled-back >&2; exit 143\' TERM; sleep 30 >/dev/null 2>&1 & sleeper=$!; wait "$sleeper"; fi\n'
             'echo "Unable to unlock the KeePassXC database." >&2\n'
             "exit 1\n",
             encoding="utf-8",
