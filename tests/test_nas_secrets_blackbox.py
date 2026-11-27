@@ -12,6 +12,7 @@ import os
 import pty
 import select
 import subprocess
+import termios
 import time
 import unittest
 
@@ -325,6 +326,7 @@ class PasswordInputTests(Base):
             ready, _, _ = select.select([process.stderr], [], [], 0.2)
             if ready:
                 seen += os.read(process.stderr.fileno(), 1024)
+        echo_when_prompted = termios.tcgetattr(primary)[3] & termios.ECHO
         os.write(primary, KEEPASS.encode() + b"\n")
         stdout, stderr = process.communicate(timeout=30)
         echoed = b""
@@ -334,6 +336,8 @@ class PasswordInputTests(Base):
             except OSError:
                 break
         os.close(primary)
+        self.assertIn(b"KeePass database password: ", seen)
+        self.assertFalse(echo_when_prompted)
         self.assertEqual(process.returncode, 0, stderr)
         self.assertEqual(stdout, b"c" * 64)
         self.assertNotIn(KEEPASS.encode(), echoed, "the password must not echo")

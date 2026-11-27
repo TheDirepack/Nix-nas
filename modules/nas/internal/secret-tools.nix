@@ -17,7 +17,10 @@ let
   # The KeePass secret system: nas-secrets, nas-unlock-api and
   # nas-keepass-setup. Regenerate vendorHash with scripts/go-vendor-hash.py
   # after a go.mod change.
-  nasKeepass = pkgs.buildGoModule {
+  buildKeepassGoModule = pkgs.buildGoModule.override {
+    go = pkgs.buildPackages.callPackage ../../../go/toolchain.nix { };
+  };
+  nasKeepass = buildKeepassGoModule {
     pname = "nas-keepass";
     version = lib.removeSuffix "\n" (builtins.readFile ../../../VERSION);
     src = lib.cleanSource ../../../go;

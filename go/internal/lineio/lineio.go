@@ -66,15 +66,20 @@ func (s *Stdin) IsTerminal() bool {
 // stdin is a terminal. The trailing newline goes to stderr so stdout stays
 // clean for commands whose output is a secret.
 func (s *Stdin) Prompt(prompt string) (secret.Secret, error) {
-	_, _ = io.WriteString(os.Stderr, prompt)
 	fd := int(s.f.Fd()) // #nosec -- fd fits int
-	if old, err := unix.IoctlGetTermios(fd, unix.TCGETS); err == nil {
+	old, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	switch {
+	case err == nil:
 		quiet := *old
 		quiet.Lflag &^= unix.ECHO
-		if err := unix.IoctlSetTermios(fd, unix.TCSETS, &quiet); err == nil {
-			defer func() { _ = unix.IoctlSetTermios(fd, unix.TCSETS, old) }()
+		if err := unix.IoctlSetTermios(fd, unix.TCSETS, &quiet); err != nil {
+			return secret.Secret{}, err
 		}
+		defer func() { _ = unix.IoctlSetTermios(fd, unix.TCSETS, old) }()
+	case !errors.Is(err, unix.ENOTTY):
+		return secret.Secret{}, err
 	}
+	_, _ = io.WriteString(os.Stderr, prompt)
 	line, err := s.Line()
 	_, _ = io.WriteString(os.Stderr, "\n")
 	return line, err

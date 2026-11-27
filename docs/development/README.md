@@ -27,6 +27,7 @@ Historical context lives in [decision history](history.md). Release-specific imp
 ```text
 modules/       NixOS options, implementation fragments, internal registries
 services/      privileged appliance commands and pure control-plane models
+go/            KeePass activation, unlock API, and setup helper
 cockpit/       React/PatternFly Cockpit package (build via `npm --prefix cockpit ci && npm --prefix cockpit run build`)
 schemas/       cross-process JSON schemas (V3 at `schemas/managed-services-v3.schema.json`)
 scripts/       validation, packaging, update, and VM tooling

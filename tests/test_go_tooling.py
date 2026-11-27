@@ -46,7 +46,10 @@ class GoToolingTests(unittest.TestCase):
         language = re.search(r"^go (\d+)\.(\d+)", mod, re.MULTILINE)
         assert language is not None
         self.assertLessEqual((int(language.group(1)), int(language.group(2))), (1, 26))
-        self.assertRegex(mod, r"(?m)^toolchain go1\.27\.\d+$")
+        toolchain = re.search(r"(?m)^toolchain go(1\.27\.\d+)$", mod)
+        assert toolchain is not None
+        pin = (ROOT / "go/toolchain.nix").read_text(encoding="utf-8")
+        self.assertIn(f'version = "{toolchain.group(1)}";', pin)
 
 
 if __name__ == "__main__":
