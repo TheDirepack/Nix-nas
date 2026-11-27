@@ -1,7 +1,13 @@
 args:
 let
   inherit (args)
+    authentikApiTokenFile
     authentikPort
+    authentikRuntimeApiTokenFile
+    authentikRuntimeEnvironmentFile
+    authentikRuntimeOutpostTokenFile
+    authentikUnlockedEnvironmentFile
+    bootstrapAuthentikDataDir
     bootstrapPassword
     cfg
     lib
@@ -69,16 +75,20 @@ let
       prompt_unlock() {
         require_database
         if $password_from_stdin; then
-          IFS= read -r keepass_password || {
+          IFS= read -r -n 4097 keepass_password || {
             echo "Unable to read the KeePass database password from standard input." >&2
             exit 1
           }
         else
-          read -r -s -p "KeePass database password: " keepass_password
+          IFS= read -r -s -n 4097 -p "KeePass database password: " keepass_password
           echo >&2
         fi
         [[ -n "$keepass_password" ]] || {
           echo "The KeePass database password cannot be empty." >&2
+          exit 1
+        }
+        (( ''${#keepass_password} <= 4096 )) || {
+          echo "The KeePass database password exceeds 4096 characters." >&2
           exit 1
         }
         # keepassxc >= 2.7 reads a piped database password from stdin without an explicit flag.
@@ -316,6 +326,29 @@ let
 
         install -d -m 0700 "$local_stage"/{authentik,vaultwarden,zfs,observability,power,state}
 
+        local boot_authentik_dir=${lib.escapeShellArg bootstrapAuthentikDataDir}
+        local post_setup=false retire_boot_environment=false
+        if [[ "$setup_activation" != true ]] && sudo test -e /var/lib/nas-setup/state.json; then
+          post_setup=true
+        fi
+        # Setup adopted the first-boot key from a plaintext file that may also
+        # be in backups. Replace it in KeePass before that file is retired. A
+        # symlinked runtime environment means this boot still uses that file.
+        if $post_setup && sudo test -e "$boot_authentik_dir/environment" \
+          && ! sudo test -L ${lib.escapeShellArg authentikRuntimeEnvironmentFile}; then
+          local database_owner database_mode
+          database_owner="$(stat -c '%u:%g' "$database")"
+          database_mode="$(stat -c '%a' "$database")"
+          ensure_group
+          store_value authentik-secret-key "$(openssl rand -hex 64)"
+          # KeePassXC saves by replacing the file; a root activation must not
+          # take the database away from its administrator owner.
+          sudo chown -- "$database_owner" "$database"
+          sudo chmod -- "$database_mode" "$database"
+          retire_boot_environment=true
+          echo "Rotated the Authentik secret key held in KeePassXC; the first-boot copy will be removed."
+        fi
+
         authentik_secret="$(get_secret authentik-secret-key)"
         authentik_bootstrap_token="$(get_secret_optional authentik-bootstrap-token)"
         authentik_bootstrap_password="$(get_secret_optional authentik-bootstrap-password)"
@@ -446,6 +479,9 @@ NTFY_ENV
         fi
 
         nas_secret_tx_swap
+        if $post_setup; then
+          sudo ln -sfn -- "$secret_root/authentik/environment" ${lib.escapeShellArg authentikUnlockedEnvironmentFile}
+        fi
 
         sudo systemctl reset-failed \
           postgresql.service postgresql-setup.service \
@@ -459,6 +495,9 @@ NTFY_ENV
             echo "Setup identity services failed to start; inspect systemctl --failed." >&2
             exit 71
           fi
+        elif ! sudo systemctl try-restart authentik-worker.service authentik.service; then
+          echo "Authentik failed to restart with the KeePassXC environment; inspect systemctl --failed." >&2
+          exit 71
         elif ! sudo systemctl start nas-protected-services.target; then
           echo "Protected service target failed to start; inspect systemctl --failed." >&2
           exit 71
@@ -513,6 +552,22 @@ NTFY_ENV
         fi
 
         nas_secret_tx_commit
+
+        if $post_setup; then
+          # Locked boots need only the least-privilege outpost token on disk;
+          # the superuser API token now resolves through the KeePass tree.
+          if [[ -n "$authentik_outpost_token" ]] \
+            && sudo install -m 0400 -o root -g root "$secret_root/authentik/outpost-token" "$boot_authentik_dir/outpost-token"; then
+            sudo rm -f -- "$boot_authentik_dir/api-token"
+            sudo ln -sfn -- "$boot_authentik_dir/outpost-token" ${lib.escapeShellArg authentikRuntimeOutpostTokenFile}
+            sudo ln -sfn -- ${lib.escapeShellArg authentikApiTokenFile} ${lib.escapeShellArg authentikRuntimeApiTokenFile}
+          else
+            echo "WARNING: the boot-side Authentik outpost token was not refreshed; browser unlock may be unavailable after reboot." >&2
+          fi
+          if $retire_boot_environment; then
+            sudo rm -f -- "$boot_authentik_dir/environment"
+          fi
+        fi
         echo "Runtime service secrets activated. Authentik remains the identity source of truth."
       )
 

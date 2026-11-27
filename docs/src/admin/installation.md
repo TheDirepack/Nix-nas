@@ -157,4 +157,4 @@ Everything below happens after setup completes and the system reboots.
 
 ## If something goes wrong
 
-Protected services stay stopped until secrets and storage checks succeed; this is intentional. There is no browser recovery path while the system is locked. Recover from the local console, SSH with a provisioned recovery key, or hardware KVM using `sudo nas-secrets activate`, then follow the [Recovery runbook](../../operator/recovery.md) if the failure persists.
+Protected services stay stopped until secrets and storage checks succeed; this is intentional. While locked, a `nas_admin` member can sign in and unlock at `/unlock/`. If that page is unavailable or activation fails, recover from the local console, SSH with a provisioned recovery key, or hardware KVM using `sudo nas-secrets activate`, then follow the [Recovery runbook](../../operator/recovery.md) if the failure persists.

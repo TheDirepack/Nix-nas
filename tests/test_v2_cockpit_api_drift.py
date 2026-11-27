@@ -194,7 +194,7 @@ class CockpitApiDriftTests(unittest.TestCase):
             ({"password": "x\ny", "administrator": self.administrator(), "planDigest": "a" * 64}, "single line"),
             (
                 {
-                    "password": "pw",
+                    "password": "keepass fixture passphrase",
                     "administrator": {**self.administrator(), "email": "not-an-email"},
                     "planDigest": "a" * 64,
                 },
@@ -202,7 +202,7 @@ class CockpitApiDriftTests(unittest.TestCase):
             ),
             (
                 {
-                    "password": "pw",
+                    "password": "keepass fixture passphrase",
                     "administrator": {**self.administrator(), "password": "too-short"},
                     "planDigest": "a" * 64,
                 },
@@ -210,16 +210,19 @@ class CockpitApiDriftTests(unittest.TestCase):
             ),
             (
                 {
-                    "password": "pw",
+                    "password": "keepass fixture passphrase",
                     "administrator": {**self.administrator(), "username": "akadmin"},
                     "planDigest": "a" * 64,
                 },
                 "reserved bootstrap",
             ),
-            ({"password": "pw", "administrator": self.administrator(), "planDigest": "bad"}, "plan digest"),
+            (
+                {"password": "keepass fixture passphrase", "administrator": self.administrator(), "planDigest": "bad"},
+                "plan digest",
+            ),
             (
                 {
-                    "password": "pw",
+                    "password": "keepass fixture passphrase",
                     "administrator": self.administrator(),
                     "planDigest": "a" * 64,
                     "devices": ["/dev/a", "/dev/a"],
@@ -228,7 +231,7 @@ class CockpitApiDriftTests(unittest.TestCase):
             ),
             (
                 {
-                    "password": "pw",
+                    "password": "keepass fixture passphrase",
                     "administrator": self.administrator(),
                     "planDigest": "a" * 64,
                     "allowDestructiveStorage": "yes",
@@ -244,7 +247,7 @@ class CockpitApiDriftTests(unittest.TestCase):
 
     def test_start_first_start_rejects_status_digest_device_and_destructive_mismatches(self) -> None:
         request = {
-            "password": "pw",
+            "password": "keepass fixture passphrase",
             "administrator": self.administrator(),
             "planDigest": "a" * 64,
             "devices": ["/dev/a", "/dev/b"],
@@ -270,7 +273,7 @@ class CockpitApiDriftTests(unittest.TestCase):
 
     def test_start_first_start_submits_private_job_and_cancels_on_failure(self) -> None:
         request = {
-            "password": "db-password",
+            "password": "db keepass passphrase",
             "administrator": self.administrator(),
             "planDigest": "a" * 64,
             "devices": ["/dev/a", "/dev/b"],
@@ -293,9 +296,9 @@ class CockpitApiDriftTests(unittest.TestCase):
         self.assertEqual(result, {"schemaVersion": 1, "jobId": "c" * 24, "status": "submitted"})
         self.assertEqual(len(writes), 2)
         self.assertIn("reservation-token", writes[0][1])
-        self.assertNotIn("db-password", writes[0][1])
+        self.assertNotIn("db keepass passphrase", writes[0][1])
         self.assertFalse(json.loads(writes[0][1])["encryptStorage"])
-        self.assertEqual(json.loads(writes[1][1])["keepass"], "db-password")
+        self.assertEqual(json.loads(writes[1][1])["keepass"], "db keepass passphrase")
         self.assertEqual(json.loads(writes[1][1])["administrator"]["password"], "admin-password")
 
         with (
@@ -315,7 +318,7 @@ class CockpitApiDriftTests(unittest.TestCase):
 
     def test_start_first_start_rechecks_recovery_after_reserving(self) -> None:
         request = {
-            "password": "db-password",
+            "password": "db keepass passphrase",
             "administrator": self.administrator(),
             "planDigest": "a" * 64,
             "devices": ["/dev/a", "/dev/b"],

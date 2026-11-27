@@ -1230,15 +1230,15 @@ class ConfiguredAdministratorTests(unittest.TestCase):
         self.assertEqual(len(plan["accounts"]), 1)
         self.assertEqual(plan["accounts"][0]["password"], "new-password")
 
-    def test_existing_keepass_database_is_replaced_after_directory_ownership_setup(self) -> None:
+    def test_existing_keepass_database_is_moved_aside_never_deleted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             database = pathlib.Path(tmp) / "secrets" / "NAS.kdbx"
             database.parent.mkdir()
             database.write_text("fixture", encoding="utf-8")
 
             def root(command, **_kwargs):
-                if command[:2] == ["rm", "--"]:
-                    database.unlink()
+                if command[:3] == ["mv", "--no-clobber", "--"]:
+                    pathlib.Path(command[3]).rename(command[4])
                 return setup.Completed(tuple(command), "", "")
 
             def admin(command, **_kwargs):
@@ -1248,14 +1248,181 @@ class ConfiguredAdministratorTests(unittest.TestCase):
 
             with (
                 mock.patch.object(setup, "KEEPASS_DATABASE", database),
+                mock.patch.object(setup, "managed_dataset_encrypted", return_value=False),
                 mock.patch.object(setup, "run_root", side_effect=root) as run_root,
                 mock.patch.object(setup, "run_admin", side_effect=admin) as run_admin,
             ):
                 self.assertEqual(setup.verify_or_create_database("password", True), "created")
-        self.assertEqual(run_root.call_args_list[0].args[0][0], "install")
-        self.assertEqual(run_root.call_args_list[1].args[0][:2], ["rm", "--"])
-        self.assertIn("db-create", run_admin.call_args_list[0].args[0])
+            preserved = list(database.parent.glob("NAS.kdbx.replaced-*"))
+            self.assertEqual(len(preserved), 1)
+            self.assertEqual(preserved[0].read_text(encoding="utf-8"), "fixture")
+            self.assertEqual(database.read_text(encoding="utf-8"), "fresh")
+        commands = [call.args[0] for call in run_root.call_args_list]
+        self.assertEqual(commands[0][0], "install")
+        self.assertFalse([command for command in commands if command[0] == "rm"])
+        create = run_admin.call_args_list[0].args[0]
+        self.assertIn("db-create", create)
+        self.assertEqual(create[create.index("--decryption-time") + 1], setup.KEEPASS_DECRYPTION_TIME_MS)
         self.assertIn("db-info", run_admin.call_args_list[1].args[0])
+
+
+class KeePassAuthorityGuardTests(unittest.TestCase):
+    """A cleared or cancelled journal must never orphan an encrypted dataset's key."""
+
+    def run_create(
+        self, database: pathlib.Path, *, opens: bool
+    ) -> tuple[str | Exception, list[list[str]], list[list[str]]]:
+        roots: list[list[str]] = []
+        admins: list[list[str]] = []
+
+        def root(command, **_kwargs):
+            roots.append(list(command))
+            return setup.Completed(tuple(command), "", "")
+
+        def admin(command, **_kwargs):
+            admins.append(list(command))
+            if "db-info" in command and not opens:
+                raise setup.SetupError("keepassxc-cli failed")
+            return setup.Completed(tuple(command), "", "")
+
+        with (
+            mock.patch.object(setup, "KEEPASS_DATABASE", database),
+            mock.patch.object(setup, "managed_dataset_encrypted", return_value=True),
+            mock.patch.object(setup, "run_root", side_effect=root),
+            mock.patch.object(setup, "run_admin", side_effect=admin),
+        ):
+            try:
+                result: str | Exception = setup.verify_or_create_database("retyped-password", True)
+            except setup.SetupError as exc:
+                result = exc
+        return result, roots, admins
+
+    def test_retry_after_journal_clear_keeps_the_database_holding_the_dataset_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            database = pathlib.Path(tmp) / "NAS.kdbx"
+            database.write_text("holds zfs-dataset-key", encoding="utf-8")
+            result, roots, admins = self.run_create(database, opens=True)
+            self.assertEqual(result, "existing")
+            self.assertEqual(database.read_text(encoding="utf-8"), "holds zfs-dataset-key")
+        self.assertFalse([command for command in roots if command[0] in {"rm", "mv"}])
+        self.assertFalse([command for command in admins if "db-create" in command])
+
+    def test_wrong_password_for_the_encrypted_dataset_database_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            database = pathlib.Path(tmp) / "NAS.kdbx"
+            database.write_text("holds zfs-dataset-key", encoding="utf-8")
+            result, roots, admins = self.run_create(database, opens=False)
+            self.assertIsInstance(result, setup.SetupError)
+            self.assertIn("never replaces", str(result))
+            self.assertEqual(database.read_text(encoding="utf-8"), "holds zfs-dataset-key")
+        self.assertFalse([command for command in roots if command[0] in {"rm", "mv"}])
+        self.assertFalse([command for command in admins if "db-create" in command])
+
+    def test_dataset_encryption_probe_fails_closed(self) -> None:
+        with mock.patch.object(setup, "dataset_exists", return_value=False):
+            self.assertFalse(setup.managed_dataset_encrypted())
+        with mock.patch.object(setup, "dataset_exists", side_effect=FileNotFoundError("zfs")):
+            self.assertTrue(setup.managed_dataset_encrypted())
+        for completed, expected in (
+            (setup.Completed(("zfs",), "off\n", "", 0), False),
+            (setup.Completed(("zfs",), "aes-256-gcm\n", "", 0), True),
+            (setup.Completed(("zfs",), "", "boom", 1), True),
+        ):
+            with (
+                mock.patch.object(setup, "dataset_exists", return_value=True),
+                mock.patch.object(setup, "run_storage_host", return_value=completed),
+            ):
+                self.assertEqual(setup.managed_dataset_encrypted(), expected)
+
+
+class SetupPasswordVerifierTests(unittest.TestCase):
+    PLAN = {"accounts": [{"username": "nasadmin", "password": "administrator-password"}, {"username": "bob"}]}
+    KEEPASS = "keepass database passphrase"
+
+    def test_verifier_is_salted_and_contains_no_fast_oracle(self) -> None:
+        first = setup.password_verifier(self.PLAN, self.KEEPASS)
+        second = setup.password_verifier(self.PLAN, self.KEEPASS)
+        self.assertEqual(set(first), {"algorithm", "salt", "digest"})
+        self.assertNotEqual(first["salt"], second["salt"])
+        self.assertNotEqual(first["digest"], second["digest"])
+        legacy = setup.legacy_password_input_authenticators(self.PLAN, self.KEEPASS)
+        self.assertNotIn(legacy["nasadmin"], json.dumps(first))
+        self.assertTrue(setup.password_verifier_matches(first, self.PLAN, self.KEEPASS))
+        self.assertFalse(setup.password_verifier_matches(first, self.PLAN, "another passphrase!!"))
+        changed = {"accounts": [{"username": "nasadmin", "password": "different-admin-pw"}]}
+        self.assertFalse(setup.password_verifier_matches(first, changed, self.KEEPASS))
+        for broken in (None, {}, {**first, "algorithm": "sha256"}, {**first, "salt": "zz"}):
+            self.assertFalse(setup.password_verifier_matches(broken, self.PLAN, self.KEEPASS))
+
+    def test_fingerprint_carries_no_password_material(self) -> None:
+        config = {"storage": {}, "accounts": [], "services": {}, "runPreflight": False}
+        args = mock.Mock(create_database=True, confirm_storage_device=[], allow_destructive_storage=False)
+        args.encrypt_storage = True
+        args.skip_preflight = False
+        current = setup.setup_fingerprint(config, args)
+        legacy = setup.setup_fingerprint(config, args, self.PLAN, self.KEEPASS)
+        self.assertNotEqual(current, legacy)
+        self.assertEqual(current, setup.setup_fingerprint(config, args))
+
+    def journal(self, root: pathlib.Path, value: dict) -> pathlib.Path:
+        path = root / "first-run-journal.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return path
+
+    def test_resume_with_different_passwords_is_refused_without_suggesting_deletion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.journal(
+                pathlib.Path(tmp),
+                {
+                    "schemaVersion": 1,
+                    "workflow": "first-run-v2",
+                    "status": "failed",
+                    "fingerprint": "a" * 64,
+                    "passwordVerifier": setup.password_verifier(self.PLAN, self.KEEPASS),
+                },
+            )
+            with mock.patch.object(setup, "JOURNAL_PATH", path):
+                setup.verify_journal_password_inputs(("a" * 64,), ("b" * 64,), self.PLAN, self.KEEPASS)
+                with self.assertRaisesRegex(setup.JournalError, "different passwords") as raised:
+                    setup.verify_journal_password_inputs(("a" * 64,), ("b" * 64,), self.PLAN, "wrong passphrase!!")
+        self.assertNotIn("clear", str(raised.exception))
+
+    def test_legacy_journal_is_migrated_to_a_salted_verifier(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.journal(
+                pathlib.Path(tmp),
+                {"schemaVersion": 1, "workflow": "first-run-v2", "status": "failed", "fingerprint": "b" * 64},
+            )
+            with mock.patch.object(setup, "JOURNAL_PATH", path):
+                setup.verify_journal_password_inputs(
+                    ("a" * 64, "c" * 64), ("b" * 64, "d" * 64), self.PLAN, self.KEEPASS
+                )
+            migrated = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(migrated["fingerprint"], "a" * 64)
+        self.assertTrue(setup.password_verifier_matches(migrated["passwordVerifier"], self.PLAN, self.KEEPASS))
+
+    def test_completed_journal_drops_the_verifier(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "journal.json"
+            journal = setup.OperationJournal.open(path, workflow="first-run-v2", fingerprint="a" * 64)
+            journal.value["passwordVerifier"] = setup.password_verifier(self.PLAN, self.KEEPASS)
+            journal.save()
+            journal.complete({"ok": True})
+            self.assertNotIn("passwordVerifier", json.loads(path.read_text(encoding="utf-8")))
+
+
+class KeePassPasswordStrengthTests(unittest.TestCase):
+    def test_strength_floor(self) -> None:
+        validate = setup_config.validate_keepass_password_strength
+        self.assertEqual(validate("correct horse battery staple"), "correct horse battery staple")
+        for weak, message in (
+            ("short-pass", "at least 16"),
+            ("aaaaabbbbbaaaaabbbbb", "different characters"),
+        ):
+            with self.subTest(weak=weak), self.assertRaisesRegex(setup.SetupError, message):
+                validate(weak)
+        with self.assertRaisesRegex(setup.SetupError, "differ from the administrator"):
+            validate("Same Password For Both", "same password for both")
 
 
 class CliTests(unittest.TestCase):

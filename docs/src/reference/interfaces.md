@@ -23,4 +23,4 @@ All browser routes use `https://<nas-hostname>.local`. Authentik authenticates e
 
 Routes compiled out by disabled Nix options do not exist. On-demand services may start when an authorized request arrives; authorization-only capability checks do not themselves grant a feature or application permission.
 
-While locked, no browser recovery endpoint exists. Use console, SSH, or hardware KVM to activate secrets; see [Locked-state unlock](../locked-unlock.md).
+While locked, the only browser endpoints are Authentik sign-in and the `nas_admin`-gated `/unlock/` page, backed by `nas-unlock-api` on `/run/nas-unlock/unlock.sock`. Console, SSH, or hardware KVM remain the recovery path; see [Locked-state unlock](../locked-unlock.md).

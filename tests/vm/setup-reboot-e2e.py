@@ -213,19 +213,21 @@ def syncthing_api_key() -> str:
     raise CheckError("Syncthing API key is unavailable")
 
 
-LOCKED_NOTICE_MARKER = 'id="nas-locked"'
-LOCKED_ROUTES = (
+UNLOCK_SOCKET = "/run/nas-unlock/unlock.sock"
+KEEPASS_PASSWORD = "nixos-nas-vm-test-password"
+LOCKED_REDIRECT_ROUTES = (
     "/",
     "/console/",
     "/setup/",
     "/setup/api/first-start",
     "/identity/if/user/",
+    "/identity/if/admin/",
     "/shares/",
     "/index.html/",
 )
 
 
-def locked_request(path: str, *extra: str) -> tuple[str, str]:
+def locked_request(path: str, *extra: str) -> tuple[str, str, str]:
     result = run(
         "curl",
         "--insecure",
@@ -236,69 +238,129 @@ def locked_request(path: str, *extra: str) -> tuple[str, str]:
         "--resolve",
         "nas-test.local:443:127.0.0.1",
         "--write-out",
-        "\n%{http_code}",
+        "\n%{http_code} %{redirect_url}",
         *extra,
         f"https://nas-test.local{path}",
         timeout=30,
     )
     if result.returncode:
         raise CheckError(f"locked route {path} was unreachable: {result.stderr.strip()[-400:]}")
+    body, _, trailer = result.stdout.rpartition("\n")
+    code, _, location = trailer.partition(" ")
+    return code, location, body
+
+
+def unlock_api(payload: str) -> tuple[str, dict[str, Any]]:
+    """Call nas-unlock-api exactly as the locked Caddy route forwards a nas_admin request."""
+    result = run(
+        "curl",
+        "--silent",
+        "--show-error",
+        "--max-time",
+        "900",
+        "--unix-socket",
+        UNLOCK_SOCKET,
+        "--header",
+        "Host: nas-test.local",
+        "--header",
+        "Origin: https://nas-test.local",
+        "--header",
+        "Remote-User: nasadmin",
+        "--header",
+        "Remote-Groups: nas_admin",
+        "--header",
+        "Content-Type: application/json",
+        "--data-binary",
+        "@-",
+        "--write-out",
+        "\n%{http_code}",
+        "http://nas-test.local/unlock/api/activate",
+        input_text=payload,
+        timeout=960,
+    )
+    if result.returncode:
+        raise CheckError(f"nas-unlock-api was unreachable: {result.stderr.strip()[-400:]}")
     body, _, code = result.stdout.rpartition("\n")
-    return code, body
+    try:
+        document = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise CheckError(f"nas-unlock-api returned non-JSON (HTTP {code}): {body[-400:]}") from exc
+    return code, document
 
 
 def verify_locked_browser_surface() -> None:
-    """After setup, a locked boot serves only static unlock guidance on every route."""
-    wait_active("caddy.service")
-    for path in LOCKED_ROUTES:
-        code, body = locked_request(path)
-        if code != "503" or LOCKED_NOTICE_MARKER not in body or "nas-secrets activate" not in body:
-            raise CheckError(f"locked route {path} did not return the static unlock notice (HTTP {code})")
-    code, body = locked_request("/setup/api/reboot", "--request", "POST", "--data", "{}")
-    if code not in {"405", "503"} or "rebooting" in body:
+    """After setup, a locked boot serves only Authentik sign-in and the gated unlock page."""
+    for unit in ("caddy.service", "authentik.service", "nas-authentik-proxy-outpost.service", "nas-unlock-api.service"):
+        wait_active(unit)
+    for path in LOCKED_REDIRECT_ROUTES:
+        code, location, _body = locked_request(path)
+        if code != "303" or not location.endswith("/unlock/"):
+            raise CheckError(f"locked route {path} did not redirect to /unlock/ (HTTP {code} {location})")
+    code, location, body = locked_request("/unlock/")
+    if code not in {"302", "303", "307"} or "unlock-form" in body:
+        raise CheckError(f"unauthenticated /unlock/ was not sent to Authentik sign-in (HTTP {code} {location})")
+    code, _location, body = locked_request(
+        "/unlock/api/activate",
+        "--request",
+        "POST",
+        "--header",
+        "Content-Type: application/json",
+        "--header",
+        "Remote-Groups: nas_admin",
+        "--header",
+        "Remote-User: nasadmin",
+        "--data",
+        json.dumps({"password": KEEPASS_PASSWORD}),
+    )
+    if code.startswith("2") or "unlocked" in body:
+        raise CheckError(f"unauthenticated unlock submission reached nas-unlock-api (HTTP {code})")
+    code, _location, _body = locked_request("/identity/-/health/live/")
+    if code not in {"200", "204"}:
+        raise CheckError(f"Authentik sign-in is not served while locked (HTTP {code})")
+    code, _location, body = locked_request("/setup/api/reboot", "--request", "POST", "--data", "{}")
+    if code != "303" or "rebooting" in body:
         raise CheckError(f"locked setup API reboot route reached a backend (HTTP {code})")
+    if pathlib.Path("/var/lib/nas-control-plane/authentik/api-token").exists():
+        raise CheckError("a superuser Authentik API token is stored on disk while locked")
+    if not pathlib.Path("/var/lib/nas-control-plane/authentik/outpost-token").is_file():
+        raise CheckError("the boot-side Authentik outpost token is missing")
+
+
+def authentik_started_at() -> int:
+    value = require(("systemctl", "show", "--value", "--property=ActiveEnterTimestampMonotonic", "authentik.service"))
+    return int(value.strip() or "0")
 
 
 def activate_after_reboot() -> None:
-    verify_locked_browser_surface()
     status = json.loads(require(("nas-setup", "status")))
     if (
         status.get("runtimeSecretsActive")
         or run("systemctl", "is-active", "--quiet", "nas-protected-services.target").returncode == 0
     ):
         raise CheckError("protected services or runtime secrets remained active across the locked reboot")
+    verify_locked_browser_surface()
     require(("nas-vm-guest-test", "--oci-probe", "locked"))
     require(("zpool", "import", "-N", "tank"))
-    result = run(
-        "runuser",
-        "-u",
-        "nasadmin",
-        "--",
-        "env",
-        "-C",
-        "/",
-        "HOME=/tank/homes/nasadmin",
-        "nas-secrets",
-        "activate-stdin",
-        input_text="nixos-nas-vm-test-password\n",
-        timeout=600,
-    )
-    if result.returncode:
+    code, document = unlock_api(json.dumps({"password": "not-the-keepass-password"}))
+    if code != "401":
+        raise CheckError(f"nas-unlock-api accepted or mishandled a wrong password (HTTP {code}): {document}")
+    wait_active("authentik.service", timeout_seconds=120)
+    time.sleep(6)
+    locked_started = authentik_started_at()
+    code, document = unlock_api(json.dumps({"password": KEEPASS_PASSWORD}))
+    if code != "200" or document.get("unlocked") is not True:
         failed = run("systemctl", "--failed", "--no-pager", timeout=30)
-        journal = run(
-            "journalctl",
-            "-b",
-            "-n",
-            "90",
-            "--no-pager",
-            timeout=30,
-        )
+        journal = run("journalctl", "-b", "-n", "90", "--no-pager", timeout=30)
         raise CheckError(
-            f"post-reboot secret activation failed ({result.returncode}): {result.stderr[-600:]}\n"
+            f"browser unlock failed (HTTP {code}): {document}\n"
             f"failed units: {failed.stdout[-1200:]}\n"
             f"activation journal: {journal.stdout[-7000:]}"
         )
     wait_active("nas-authentik-proxy-outpost.service", timeout_seconds=120)
+    if authentik_started_at() <= locked_started:
+        raise CheckError("Authentik was not restarted with the KeePassXC environment after unlock")
+    if pathlib.Path("/var/lib/nas-control-plane/authentik/environment").exists():
+        raise CheckError("the plaintext first-boot Authentik environment survived unlock")
 
 
 def verify_services(stage: str) -> None:

@@ -14,6 +14,10 @@ let
   authentikEnvironmentFile = "${authentikSecretDir}/environment";
   authentikRuntimeEnvironmentFile = "/run/nas-authentik/environment";
   authentikRuntimeApiTokenFile = "/run/nas-authentik/api-token";
+  authentikRuntimeOutpostTokenFile = "/run/nas-authentik/outpost-token";
+  # Activation links this to the KeePass environment only after setup; first
+  # start regenerates the boot environment while KeePass still holds the old one.
+  authentikUnlockedEnvironmentFile = "/run/nas-authentik/unlocked-environment";
   authentikApiTokenFile = "${authentikSecretDir}/api-token";
   authentikBootstrapTokenFile = "${authentikSecretDir}/bootstrap-token";
   authentikOutpostTokenFile = "${authentikSecretDir}/outpost-token";
@@ -129,7 +133,8 @@ in
 {
   inherit
     cfg systemStateVersion lanHost identityAdminGroup secretRoot authentikSecretDir authentikEnvironmentFile
-    authentikRuntimeEnvironmentFile authentikRuntimeApiTokenFile
+    authentikRuntimeEnvironmentFile authentikRuntimeApiTokenFile authentikRuntimeOutpostTokenFile
+    authentikUnlockedEnvironmentFile
     authentikApiTokenFile authentikBootstrapTokenFile authentikOutpostTokenFile copypartyUserConfigDir copypartyDataDir
     authentikPort cockpitPort syncthingGuiPort syncthingSyncPort syncthingDiscoveryPort vaultwardenPort nutUpsdPort
     authentikOutpostPort authentikOutpostPath

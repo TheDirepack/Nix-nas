@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import io
+import json
 import pathlib
 import subprocess
 import tempfile
@@ -89,41 +90,72 @@ class SetupRebootE2eContracts(unittest.TestCase):
         ):
             runner.verify_services("test reboot")
 
-    def test_reboot_reactivation_checks_locked_state_and_sends_password_only_on_stdin(self) -> None:
+    def test_reboot_unlocks_through_the_unlock_api_with_the_password_only_on_stdin(self) -> None:
         runner = self.runner()
         calls = []
+        started = iter(["100", "200"])
 
         def require(command, **_kwargs):
             calls.append(command)
             if command == ("nas-setup", "status"):
                 return '{"runtimeSecretsActive":false}'
+            if command[:2] == ("systemctl", "show"):
+                return next(started)
             return ""
 
         def run(*command, **kwargs):
             calls.append(command)
             if command[0] == "systemctl":
                 return subprocess.CompletedProcess(command, 3, "", "")
-            self.assertEqual(command[-2:], ("nas-secrets", "activate-stdin"))
-            self.assertEqual(kwargs["input_text"], "nixos-nas-vm-test-password\n")
-            self.assertEqual(kwargs["timeout"], 600)
+            self.assertEqual(command[0], "curl")
+            self.assertIn("/run/nas-unlock/unlock.sock", command)
+            self.assertIn("Remote-Groups: nas_admin", command)
             self.assertNotIn("nixos-nas-vm-test-password", " ".join(command))
-            return subprocess.CompletedProcess(command, 0, "", "")
+            password = json.loads(kwargs["input_text"])["password"]
+            if password == "nixos-nas-vm-test-password":
+                return subprocess.CompletedProcess(command, 0, '{"locked": false, "unlocked": true}\n200', "")
+            return subprocess.CompletedProcess(command, 0, '{"error": "not accepted"}\n401', "")
 
         with (
             mock.patch.object(runner, "require", side_effect=require),
             mock.patch.object(runner, "run", side_effect=run),
             mock.patch.object(runner, "verify_locked_browser_surface") as locked_surface,
             mock.patch.object(runner, "wait_active") as wait_active,
+            mock.patch.object(runner.time, "sleep"),
+            mock.patch.object(runner.pathlib.Path, "exists", return_value=False),
         ):
             runner.activate_after_reboot()
         locked_surface.assert_called_once_with()
-        wait_active.assert_called_once_with("nas-authentik-proxy-outpost.service", timeout_seconds=120)
+        wait_active.assert_any_call("nas-authentik-proxy-outpost.service", timeout_seconds=120)
         self.assertEqual(calls[0], ("nas-setup", "status"))
-        self.assertEqual(calls[2], ("nas-vm-guest-test", "--oci-probe", "locked"))
-        self.assertEqual(calls[3], ("zpool", "import", "-N", "tank"))
-        self.assertEqual(
-            calls[4][:8], ("runuser", "-u", "nasadmin", "--", "env", "-C", "/", "HOME=/tank/homes/nasadmin")
-        )
+        self.assertIn(("nas-vm-guest-test", "--oci-probe", "locked"), calls)
+        self.assertIn(("zpool", "import", "-N", "tank"), calls)
+        self.assertEqual(sum(1 for call in calls if call[0] == "curl"), 2)
+
+    def test_reboot_requires_authentik_restart_after_unlock(self) -> None:
+        runner = self.runner()
+
+        def require(command, **_kwargs):
+            if command == ("nas-setup", "status"):
+                return '{"runtimeSecretsActive":false}'
+            return "100" if command[:2] == ("systemctl", "show") else ""
+
+        def run(*command, **kwargs):
+            if command[0] == "systemctl":
+                return subprocess.CompletedProcess(command, 3, "", "")
+            if json.loads(kwargs["input_text"])["password"] == "nixos-nas-vm-test-password":
+                return subprocess.CompletedProcess(command, 0, '{"unlocked": true}\n200', "")
+            return subprocess.CompletedProcess(command, 0, '{"error": "x"}\n401', "")
+
+        with (
+            mock.patch.object(runner, "require", side_effect=require),
+            mock.patch.object(runner, "run", side_effect=run),
+            mock.patch.object(runner, "verify_locked_browser_surface"),
+            mock.patch.object(runner, "wait_active"),
+            mock.patch.object(runner.time, "sleep"),
+            self.assertRaisesRegex(Exception, "not restarted"),
+        ):
+            runner.activate_after_reboot()
 
     def locked_surface(self, responses):
         runner = self.runner()
@@ -133,38 +165,49 @@ class SetupRebootE2eContracts(unittest.TestCase):
             requests.append(command)
             path = command[-1].removeprefix("https://nas-test.local")
             method = "POST" if "--request" in command else "GET"
-            code, body = responses(method, path)
-            return subprocess.CompletedProcess(command, 0, f"{body}\n{code}", "")
+            code, location, body = responses(method, path)
+            return subprocess.CompletedProcess(command, 0, f"{body}\n{code} {location}", "")
+
+        def exists(path):
+            return str(path).endswith("outpost-token")
 
         with (
             mock.patch.object(runner, "run", side_effect=run),
-            mock.patch.object(runner, "wait_active") as wait_active,
+            mock.patch.object(runner, "wait_active"),
+            mock.patch.object(runner.pathlib.Path, "exists", exists),
+            mock.patch.object(runner.pathlib.Path, "is_file", exists),
         ):
-            try:
-                runner.verify_locked_browser_surface()
-            finally:
-                wait_active.assert_called_once_with("caddy.service")
+            runner.verify_locked_browser_surface()
         return runner, requests
 
-    def test_locked_boot_serves_only_the_static_unlock_notice(self) -> None:
-        notice = '<h1 id="nas-locked">This NAS is locked</h1> run sudo nas-secrets activate'
-        _runner, requests = self.locked_surface(
-            lambda method, _path: ("405", "") if method == "POST" else ("503", notice)
-        )
+    @staticmethod
+    def healthy_locked(method, path):
+        if path == "/unlock/":
+            return "302", "https://nas-test.local/outpost.goauthentik.io/start", ""
+        if path == "/unlock/api/activate":
+            return "302", "https://nas-test.local/outpost.goauthentik.io/start", ""
+        if path == "/identity/-/health/live/":
+            return "204", "", ""
+        return "303", "https://nas-test.local/unlock/", ""
+
+    def test_locked_boot_serves_only_sign_in_and_the_gated_unlock_page(self) -> None:
+        _runner, requests = self.locked_surface(self.healthy_locked)
         paths = [command[-1].removeprefix("https://nas-test.local") for command in requests]
-        for route in ("/", "/console/", "/setup/api/first-start", "/identity/if/user/", "/setup/api/reboot"):
+        for route in ("/", "/console/", "/identity/if/admin/", "/unlock/", "/unlock/api/activate", "/setup/api/reboot"):
             self.assertIn(route, paths)
 
+        def override(target, answer):
+            return lambda method, path: answer if path == target else self.healthy_locked(method, path)
+
         for label, responses in (
-            ("Authentik redirect", lambda _m, path: ("303", "") if path == "/" else ("503", notice)),
-            ("Cockpit proxied", lambda _m, path: ("200", "cockpit") if path == "/console/" else ("503", notice)),
-            ("notice without guidance", lambda _m, _p: ("503", '<h1 id="nas-locked">')),
-            (
-                "setup API reachable",
-                lambda method, _p: ("200", '{"rebooting": true}') if method == "POST" else ("503", notice),
-            ),
+            ("Cockpit proxied", override("/console/", ("200", "", "cockpit"))),
+            ("admin interface served", override("/identity/if/admin/", ("200", "", "admin"))),
+            ("unlock page without sign-in", override("/unlock/", ("200", "", '<form id="unlock-form">'))),
+            ("unlock API without sign-in", override("/unlock/api/activate", ("200", "", '{"unlocked": true}'))),
+            ("Authentik down", override("/identity/-/health/live/", ("503", "", "notice"))),
+            ("setup API reachable", override("/setup/api/reboot", ("200", "", '{"rebooting": true}'))),
         ):
-            with self.subTest(label), self.assertRaisesRegex(Exception, "locked") as raised:
+            with self.subTest(label), self.assertRaises(Exception) as raised:
                 self.locked_surface(responses)
             self.assertEqual(type(raised.exception).__name__, "CheckError")
 
@@ -213,7 +256,8 @@ class SetupRebootE2eContracts(unittest.TestCase):
         )
         self.assertIn('"http://127.0.0.1:9010/outpost.goauthentik.io/ping"', source)
         self.assertIn('require(("zpool", "import", "-N", "tank"))', source)
-        self.assertIn('input_text="nixos-nas-vm-test-password\\n"', source)
+        self.assertIn('KEEPASS_PASSWORD = "nixos-nas-vm-test-password"', source)
+        self.assertIn('"nas-unlock-api.service"', source)
         self.assertIn("activate_after_reboot()", source)
         self.assertIn('"nas-managed-services-reconcile.service"', source)
 

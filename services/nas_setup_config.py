@@ -231,6 +231,27 @@ def normalize_secret_line(raw: str, label: str) -> str:
     return value
 
 
+KEEPASS_PASSWORD_MIN_LENGTH = 16
+KEEPASS_PASSWORD_MIN_DISTINCT = 6
+
+
+def validate_keepass_password_strength(password: str, administrator_password: str | None = None) -> str:
+    """Enforce the floor for the only secret protecting the KDBX and ZFS key.
+
+    The KDBX sits on the unencrypted system disk and in Restic, so its password
+    is the sole offline barrier. Keep in sync with the wizard's ConfirmStep.
+    """
+    if len(password) < KEEPASS_PASSWORD_MIN_LENGTH:
+        raise SetupError(f"KeePass database password must contain at least {KEEPASS_PASSWORD_MIN_LENGTH} characters")
+    if len(set(password)) < KEEPASS_PASSWORD_MIN_DISTINCT:
+        raise SetupError(
+            f"KeePass database password must use at least {KEEPASS_PASSWORD_MIN_DISTINCT} different characters"
+        )
+    if administrator_password is not None and password.casefold() == administrator_password.casefold():
+        raise SetupError("KeePass database password must differ from the administrator password")
+    return password
+
+
 def read_secret_stdin(label: str) -> str:
     return normalize_secret_line(sys.stdin.read(4099), label)
 

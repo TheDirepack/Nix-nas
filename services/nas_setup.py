@@ -58,6 +58,7 @@ from nas_setup_config import (
     normalize_secret_line,
     read_password_file,
     read_secret_stdin,
+    validate_keepass_password_strength,
 )
 from nas_syncthing_devices import DeviceError, validate_username
 
@@ -76,6 +77,9 @@ ADMIN_STATE_PATH = pathlib.Path(os.environ.get("NAS_ADMIN_STATE", "/var/lib/nas-
 BOOTSTRAP_RUNTIME_ROOT = pathlib.Path(os.environ.get("NAS_BOOTSTRAP_RUNTIME_ROOT", "/var/lib/nas-control-plane"))
 BOOTSTRAP_AUTHENTIK_ENVIRONMENT = BOOTSTRAP_RUNTIME_ROOT / "authentik/environment"
 BOOTSTRAP_AUTHENTIK_TOKEN = BOOTSTRAP_RUNTIME_ROOT / "authentik/api-token"
+BOOTSTRAP_AUTHENTIK_OUTPOST_TOKEN = BOOTSTRAP_RUNTIME_ROOT / "authentik/outpost-token"
+KEEPASS_DECRYPTION_TIME_MS = "1000"
+PASSWORD_VERIFIER_ALGORITHM = "scrypt-n32768-r8-p1"
 SETUP_BLUEPRINT_PATH = BOOTSTRAP_RUNTIME_ROOT / "authentik/blueprints/nas-setup.yaml"
 KEEPASS_DATABASE = pathlib.Path(
     os.environ.get("NAS_KEEPASS_DATABASE", "/var/lib/nas-control-plane/nas-secrets/NAS.kdbx")
@@ -822,6 +826,17 @@ def retire_bootstrap_runtime(
     return {"bootstrapRetired": True}
 
 
+def managed_dataset_encrypted() -> bool:
+    """Report whether the managed dataset exists with encryption; unknown counts as encrypted."""
+    try:
+        if not dataset_exists():
+            return False
+        completed = run_storage_host(["zfs", "get", "-H", "-o", "value", "encryption", ZFS_DATASET], check=False)
+    except (OSError, SetupError, subprocess.TimeoutExpired):
+        return True
+    return completed.returncode != 0 or completed.stdout.strip() != "off"
+
+
 def verify_or_create_database(password: str, create: bool) -> str:
     key_args = ["--key-file", KEEPASS_KEY_FILE] if KEEPASS_KEY_FILE else []
     run_root(
@@ -850,10 +865,37 @@ def verify_or_create_database(password: str, create: bool) -> str:
         )
         return "existing"
     if existing_mode is not None:
-        run_root(["rm", "--", str(KEEPASS_DATABASE)])
+        if managed_dataset_encrypted():
+            # The encrypted dataset's only key lives in this database; a fresh
+            # database would silently orphan the data.
+            try:
+                run_admin(
+                    ["keepassxc-cli", "db-info", "--quiet", *key_args, str(KEEPASS_DATABASE)],
+                    input_text=password + "\n",
+                )
+            except SetupError as exc:
+                raise SetupError(
+                    f"The managed ZFS dataset is already encrypted with a key held in {KEEPASS_DATABASE}. "
+                    "Setup never replaces that database; retry with its password."
+                ) from exc
+            return "existing"
+        preserved = KEEPASS_DATABASE.with_name(
+            f"{KEEPASS_DATABASE.name}.replaced-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+        )
+        run_root(["mv", "--no-clobber", "--", str(KEEPASS_DATABASE), str(preserved)])
+        if KEEPASS_DATABASE.exists() or KEEPASS_DATABASE.is_symlink():
+            raise SetupError(f"Unable to move the existing KeePassXC database aside to {preserved}")
+        progress(f"kept the previous KeePassXC database as {preserved}")
     if not create:
         raise SetupError(f"KeePass database does not exist: {KEEPASS_DATABASE}")
-    create_args = ["keepassxc-cli", "db-create", "--quiet", "--set-password"]
+    create_args = [
+        "keepassxc-cli",
+        "db-create",
+        "--quiet",
+        "--set-password",
+        "--decryption-time",
+        KEEPASS_DECRYPTION_TIME_MS,
+    ]
     if KEEPASS_KEY_FILE:
         create_args.extend(["--set-key-file", KEEPASS_KEY_FILE])
     create_args.append(str(KEEPASS_DATABASE))
@@ -1064,22 +1106,62 @@ def write_state(report: Mapping[str, Any]) -> None:
         temp_path.unlink(missing_ok=True)
 
 
-def password_input_authenticators(account_plan: Mapping[str, Any], keepass_password: str) -> dict[str, str]:
-    key = hashlib.sha256(b"nixos-nas/setup-password-fingerprint/v2\0" + keepass_password.encode("utf-8")).digest()
-    authenticators: dict[str, str] = {}
+def _password_inputs(account_plan: Mapping[str, Any]) -> list[tuple[str, str]]:
     accounts = account_plan.get("accounts", [])
     if not isinstance(accounts, Sequence):
         raise SetupError("Account plan is invalid")
+    inputs: list[tuple[str, str]] = []
     for account in accounts:
         if not isinstance(account, Mapping):
             raise SetupError("Account plan is invalid")
         password = account.get("password")
-        if not isinstance(password, str):
-            continue
-        username = str(account.get("username", ""))
-        payload = username.encode("utf-8") + b"\0" + password.encode("utf-8")
-        authenticators[username] = hmac.new(key, payload, hashlib.sha256).hexdigest()
-    return authenticators
+        if isinstance(password, str):
+            inputs.append((str(account.get("username", "")), password))
+    return sorted(inputs)
+
+
+def legacy_password_input_authenticators(account_plan: Mapping[str, Any], keepass_password: str) -> dict[str, str]:
+    """Recompute the unsalted v2 authenticators only to recognize older journals.
+
+    They were a SHA-256-speed oracle for the KeePass password, so new journals
+    never store them; see password_verifier.
+    """
+    key = hashlib.sha256(b"nixos-nas/setup-password-fingerprint/v2\0" + keepass_password.encode("utf-8")).digest()
+    return {
+        username: hmac.new(key, username.encode("utf-8") + b"\0" + password.encode("utf-8"), hashlib.sha256).hexdigest()
+        for username, password in _password_inputs(account_plan)
+    }
+
+
+def _password_verifier_digest(account_plan: Mapping[str, Any], keepass_password: str, salt: bytes) -> str:
+    material = json.dumps(
+        {"keepass": keepass_password, "accounts": _password_inputs(account_plan)},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    # Memory-hard and salted per journal, so a backed-up journal costs an
+    # attacker at least as much per guess as the KDBX key derivation.
+    return hashlib.scrypt(material, salt=salt, n=2**15, r=8, p=1, maxmem=64 * 1024 * 1024, dklen=32).hex()
+
+
+def password_verifier(account_plan: Mapping[str, Any], keepass_password: str) -> dict[str, str]:
+    salt = secrets.token_bytes(16)
+    return {
+        "algorithm": PASSWORD_VERIFIER_ALGORITHM,
+        "salt": salt.hex(),
+        "digest": _password_verifier_digest(account_plan, keepass_password, salt),
+    }
+
+
+def password_verifier_matches(verifier: Any, account_plan: Mapping[str, Any], keepass_password: str) -> bool:
+    if not isinstance(verifier, Mapping) or verifier.get("algorithm") != PASSWORD_VERIFIER_ALGORITHM:
+        return False
+    salt = verifier.get("salt")
+    digest = verifier.get("digest")
+    if not isinstance(salt, str) or not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{32}", salt) is None:
+        return False
+    expected = _password_verifier_digest(account_plan, keepass_password, bytes.fromhex(salt))
+    return secrets.compare_digest(expected, digest)
 
 
 def canonical_setup_plan(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -1131,14 +1213,20 @@ def require_confirmed_plan(config: Mapping[str, Any], supplied: str | None) -> s
 def setup_fingerprint(
     config: Mapping[str, Any],
     args: argparse.Namespace,
-    account_plan: Mapping[str, Any],
-    keepass_password: str,
+    account_plan: Mapping[str, Any] | None = None,
+    keepass_password: str | None = None,
 ) -> str:
-    value = {
+    """Fingerprint the non-secret request; with passwords, the legacy v2 form."""
+    value: dict[str, Any] = {
         "schemaVersion": SCHEMA_VERSION,
         "config": config,
         "planDigest": setup_plan_digest(config),
-        "passwordInputAuthenticators": password_input_authenticators(account_plan, keepass_password),
+    }
+    if account_plan is not None and keepass_password is not None:
+        value["passwordInputAuthenticators"] = legacy_password_input_authenticators(account_plan, keepass_password)
+    else:
+        value["fingerprintVersion"] = 3
+    value |= {
         "createDatabase": bool(args.create_database),
         "confirmedStorageDevices": sorted(str(item) for item in args.confirm_storage_device),
         "allowDestructiveStorage": bool(args.allow_destructive_storage),
@@ -1197,6 +1285,22 @@ def install_runtime_identity_token(keepass_password: str) -> dict[str, Any]:
         run_root(
             ["install", "-m", "0400", "-o", "root", "-g", "root", "/dev/stdin", str(BOOTSTRAP_AUTHENTIK_TOKEN)],
             input_text=token,
+        )
+        # Locked boots need only this least-privilege token to run the proxy
+        # outpost; the superuser token above is retired after setup completes.
+        run_root(
+            [
+                "install",
+                "-m",
+                "0400",
+                "-o",
+                "root",
+                "-g",
+                "root",
+                "/dev/stdin",
+                str(BOOTSTRAP_AUTHENTIK_OUTPOST_TOKEN),
+            ],
+            input_text=outpost_token,
         )
         run_interactive_privileged(
             coordinated_child(["nas-secrets", "activate-stdin"]), input_text=f"{keepass_password}\n"
@@ -1290,6 +1394,44 @@ def storage_ready(_result: Any = None, *, probe_timeout_seconds: float | None = 
         return False
 
 
+def verify_journal_password_inputs(
+    fingerprints: Sequence[str],
+    legacy_fingerprints: Sequence[str],
+    account_plan: Mapping[str, Any],
+    keepass_password: str,
+) -> None:
+    """Bind a resumed journal to the passwords it started with.
+
+    Legacy journals carried unsalted password authenticators inside the
+    fingerprint; a matching one is rewritten to the non-secret fingerprint plus
+    a salted verifier before anything else reads it.
+    """
+    existing = load_json(JOURNAL_PATH)
+    if (
+        existing is None
+        or existing.get("workflow") != "first-run-v2"
+        or existing.get("status") in {"complete", "cancelled"}
+    ):
+        return
+    verifier = existing.get("passwordVerifier")
+    if verifier is not None:
+        if not password_verifier_matches(verifier, account_plan, keepass_password):
+            raise JournalError(
+                "The interrupted first-run-v2 operation was started with different passwords; "
+                "enter the same administrator and KeePassXC passwords as before"
+            )
+        return
+    stored = existing.get("fingerprint")
+    if not isinstance(stored, str):
+        return
+    for legacy, current in zip(legacy_fingerprints, fingerprints, strict=True):
+        if secrets.compare_digest(stored, legacy):
+            existing["fingerprint"] = current
+            existing["passwordVerifier"] = password_verifier(account_plan, keepass_password)
+            OperationJournal(JOURNAL_PATH, existing).save()
+            return
+
+
 def reconcile_verified_storage_retry(
     fingerprints: Sequence[str], storage: Mapping[str, Any], encrypt_storage: bool | None = None
 ) -> str | None:
@@ -1304,7 +1446,9 @@ def reconcile_verified_storage_retry(
     if not isinstance(fingerprint, str) or not any(
         secrets.compare_digest(fingerprint, candidate) for candidate in fingerprints
     ):
-        raise JournalError(f"A different first-run-v2 operation is incomplete; reconcile or clear {JOURNAL_PATH}")
+        raise JournalError(
+            f"A different first-run-v2 operation is incomplete; reconcile {JOURNAL_PATH} before retrying and do not delete it"
+        )
     creation_request = None
     if storage.get("createPool"):
         creation_request = {
@@ -1577,10 +1721,20 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
             administrator_password = str(administrator_password_value)
             local_administrator = local_administrator_details(administrator)
             include_local_administrator(account_plan, local_administrator, administrator_password)
-            fingerprint = setup_fingerprint(config, args, account_plan, password)
+            validate_keepass_password_strength(password, administrator_password)
+            fingerprint = setup_fingerprint(config, args)
             retry_args = argparse.Namespace(**vars(args))
             retry_args.allow_destructive_storage = not bool(args.allow_destructive_storage)
-            compatible_fingerprints = (fingerprint, setup_fingerprint(config, retry_args, account_plan, password))
+            compatible_fingerprints = (fingerprint, setup_fingerprint(config, retry_args))
+            verify_journal_password_inputs(
+                compatible_fingerprints,
+                (
+                    setup_fingerprint(config, args, account_plan, password),
+                    setup_fingerprint(config, retry_args, account_plan, password),
+                ),
+                account_plan,
+                password,
+            )
             fingerprint = (
                 reconcile_verified_storage_retry(compatible_fingerprints, config["storage"], args.encrypt_storage)
                 or fingerprint
@@ -1596,6 +1750,9 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                     "planDigest": confirmed_plan_digest,
                 },
             )
+            if "passwordVerifier" not in journal.value:
+                journal.value["passwordVerifier"] = password_verifier(account_plan, password)
+                journal.save()
             progress("verifying or creating the KeePassXC database")
             database_result = run_setup_stage(
                 journal,

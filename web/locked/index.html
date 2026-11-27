@@ -27,12 +27,12 @@
 <body>
   <main>
     <h1 id="nas-locked">This NAS is locked</h1>
-    <p>Setup is complete, but the KeePassXC database has not been unlocked since the appliance started. Sign-in, Cockpit, files and applications stay unavailable until it is.</p>
+    <p>Setup is complete, but the KeePassXC database has not been unlocked since the appliance started. Browser sign-in and unlock are not available right now, so files, applications and Cockpit stay unavailable.</p>
     <section>
       <h2>Unlock from the recovery console</h2>
       <ol>
         <li>Use the local console, SSH with a provisioned recovery key, or hardware KVM.</li>
-        <li>Sign in as the local recovery administrator. An Authentik account alone cannot unlock the NAS.</li>
+        <li>Sign in as the local recovery administrator.</li>
         <li>Run <code>sudo nas-secrets activate</code> and enter the KeePassXC database password at its prompt.</li>
         <li>Reload this page after activation reports success.</li>
       </ol>

@@ -32,7 +32,7 @@ Complete the workflow itself through the browser First start wizard; it confirms
 - [Locked-state unlock](../src/locked-unlock.md)
 - [Recovery runbook](recovery.md)
 
-Use the local console, SSH with a provisioned recovery key, or hardware KVM. Locked boot has no browser recovery path.
+A `nas_admin` member can sign in and unlock at `/unlock/`. Otherwise use the local console, SSH with a provisioned recovery key, or hardware KVM. Locked boot has no browser management path.
 
 ```bash
 sudo nas-secrets activate

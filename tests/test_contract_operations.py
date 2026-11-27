@@ -477,3 +477,94 @@ class RuntimeSelectRelinkTests(unittest.TestCase):
             self.assertIn("Refusing to replace unexpected service data", result.stderr)
             self.assertTrue((root / "nas-secrets").is_file())
             self.assertFalse((root / "nas-secrets").is_symlink())
+
+
+class RuntimeSelectAuthentikModeTests(unittest.TestCase):
+    """Run the selector's Authentik tail against temporary paths for both boot modes."""
+
+    def run_selector(self, root: pathlib.Path, *, setup_complete: bool) -> subprocess.CompletedProcess[str]:
+        applications = text("modules/nas/config/application-services.nix")
+        start = applications.index(
+            "        ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g authentik /run/nas-authentik"
+        )
+        tail = applications[start : applications.index("\n      '';", start)]
+        runtime = root / "run"
+        target = root / "control-plane"
+        substitutions = {
+            "${lib.escapeShellArg authentikRuntimeEnvironmentFile}": str(runtime / "environment"),
+            "${lib.escapeShellArg authentikRuntimeApiTokenFile}": str(runtime / "api-token"),
+            "${lib.escapeShellArg authentikRuntimeOutpostTokenFile}": str(runtime / "outpost-token"),
+            "${lib.escapeShellArg authentikUnlockedEnvironmentFile}": str(runtime / "unlocked-environment"),
+            "${lib.escapeShellArg authentikApiTokenFile}": str(root / "keepass-tree/api-token"),
+            "/run/nas-authentik": str(runtime),
+            "/var/lib/nas-setup/state.json": str(root / "state.json"),
+            "${pkgs.coreutils}/bin/chown": "true",
+            "${pkgs.coreutils}/bin/install -d -m 0750 -o root -g authentik": "mkdir -p",
+        }
+        for nix, value in substitutions.items():
+            tail = tail.replace(nix, value)
+        tail = re.sub(r"\$\{pkgs\.[a-z0-9-]+\}/bin/", "", tail)
+        self.assertNotIn("${", tail)
+        if setup_complete:
+            (root / "state.json").write_text("{}", encoding="utf-8")
+        script = (
+            "set -euo pipefail\n"
+            f"target={target}\n"
+            'environment="$target/authentik/environment"\n'
+            'api_token="$target/authentik/api-token"\n'
+            'outpost_token="$target/authentik/outpost-token"\n' + tail + "\n"
+        )
+        return subprocess.run(["bash", "-c", script], text=True, capture_output=True, check=False, timeout=30)
+
+    def fixture(self, root: pathlib.Path, *, outpost: bool) -> pathlib.Path:
+        authentik = root / "control-plane/authentik"
+        authentik.mkdir(parents=True)
+        (authentik / "environment").write_text("AUTHENTIK_SECRET_KEY=" + "a" * 128 + "\n", encoding="utf-8")
+        (authentik / "api-token").write_text("superuser-token", encoding="utf-8")
+        if outpost:
+            (authentik / "outpost-token").write_text("outpost-token", encoding="utf-8")
+        return authentik
+
+    def test_first_start_links_the_persistent_bootstrap_files(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            authentik = self.fixture(root, outpost=False)
+            result = self.run_selector(root, setup_complete=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / "run/environment").resolve(), authentik / "environment")
+            self.assertEqual((root / "run/api-token").resolve(), authentik / "api-token")
+
+    def test_locked_boot_uses_a_fresh_key_and_retires_the_superuser_token(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            authentik = self.fixture(root, outpost=True)
+            (root / "run").mkdir()
+            (root / "run/unlocked-environment").symlink_to(root / "stale-keepass-environment")
+            keys = set()
+            for _boot in range(2):
+                result = self.run_selector(root, setup_complete=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                environment = root / "run/environment"
+                self.assertFalse(environment.is_symlink())
+                self.assertEqual(oct(environment.stat().st_mode & 0o777), "0o640")
+                content = environment.read_text(encoding="utf-8")
+                self.assertRegex(content, r"^AUTHENTIK_SECRET_KEY=[0-9a-f]{128}\n$")
+                self.assertNotIn("BOOTSTRAP", content)
+                keys.add(content)
+            self.assertEqual(len(keys), 2, "each boot must generate its own key")
+            self.assertFalse(
+                (root / "run/unlocked-environment").is_symlink(), "a boot never inherits the KeePass overlay"
+            )
+            self.assertNotIn("a" * 128, keys.pop())
+            self.assertFalse((authentik / "api-token").exists())
+            self.assertEqual((root / "run/outpost-token").resolve(), authentik / "outpost-token")
+            self.assertEqual(os.readlink(root / "run/api-token"), str(root / "keepass-tree/api-token"))
+
+    def test_legacy_locked_boot_keeps_the_disk_token_until_activation_migrates(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            authentik = self.fixture(root, outpost=False)
+            result = self.run_selector(root, setup_complete=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / "run/api-token").resolve(), authentik / "api-token")
+            self.assertFalse((root / "run/outpost-token").exists())

@@ -84,7 +84,9 @@ class OperationJournal:
             if existing.get("schemaVersion") != 1 or existing.get("workflow") != workflow:
                 raise JournalError(f"Another operation requires reconciliation: {path}")
             if existing.get("fingerprint") != fingerprint:
-                raise JournalError(f"A different {workflow} operation is incomplete; reconcile or clear {path}")
+                raise JournalError(
+                    f"A different {workflow} operation is incomplete; reconcile {path} before retrying and do not delete it"
+                )
             if existing.get("status") == "manual-recovery-required":
                 raise JournalError(
                     f"{workflow} requires explicit recovery acknowledgement before it can resume: {path}"
@@ -150,7 +152,9 @@ class OperationJournal:
         if existing.get("schemaVersion") != 1 or existing.get("workflow") != workflow:
             raise JournalError(f"Another operation requires reconciliation: {path}")
         if existing.get("fingerprint") != fingerprint:
-            raise JournalError(f"A different {workflow} operation is incomplete; reconcile or clear {path}")
+            raise JournalError(
+                f"A different {workflow} operation is incomplete; reconcile {path} before retrying and do not delete it"
+            )
         record = existing.get("steps", {}).get(step)
         if (
             existing.get("status") != "manual-recovery-required"
@@ -216,6 +220,8 @@ class OperationJournal:
         self.save()
 
     def complete(self, result: Any = None) -> None:
+        # A finished journal never resumes, so it keeps no password verifier.
+        self.value.pop("passwordVerifier", None)
         self.value["status"] = "complete"
         self.value["completedAt"] = int(time.time())
         self.value["currentStep"] = None
