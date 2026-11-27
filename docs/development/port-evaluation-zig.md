@@ -1,14 +1,14 @@
 # Port evaluation: KeePass secret system in Zig
 
-This records what the Zig port of the KeePass path (`nas-secrets`, `nas-unlock-api`, the KeePass part of setup) bought and cost, for comparison with the parallel Go port. It is evaluation material, not a design authority; [architecture.md](architecture.md) and [invariants.md](invariants.md) describe the current system.
+This evaluates the Zig port of `nas-secrets`, `nas-unlock-api`, and the KeePass setup helper for comparison with the Go port. The current design and requirements are in [architecture.md](architecture.md) and [invariants.md](invariants.md).
 
-Toolchain: Zig 0.17.1 (released 2026-11-02, the current release when the port was written), standard library only.
+The port uses Zig 0.17.1 and its standard library. [Zig release downloads](https://ziglang.org/download/)
 
 ## Type-system wins
 
 | Requirement | Mechanism | Enforced by |
 |---|---|---|
-| A secret cannot be printed or serialised | `Secret.format` and `Secret.jsonStringify` bodies are `@compileError`; the bytes sit behind `*anyopaque`, so `{any}` prints an address | `zig build compile-errors` (`secret_format`, `secret_json`) |
+| Formatted output and JSON reject secrets | `Secret.format` and `Secret.jsonStringify` use `@compileError`. Generic `{any}` formatting can show the opaque pointer address. | `zig build compile-errors` (`secret_format`, `secret_json`) |
 | Secrets never reach argv | `command.argv` inspects every tuple element at comptime and rejects any type that is, points to, or contains a `Secret` (including `StrongKeePassPassword`) | `secret_argv`, `password_argv` |
 | sudo never consumes payload stdin | `Runner.privileged` has no payload parameter and always gives the child /dev/null | `privileged_payload` |
 | Invalid transaction transitions | `Staged`, `Swapped`, `SwapFailed`, `Committed`, `RolledBack`, … are distinct types that expose only their legal methods | `staged_commit`, `committed_rollback` |
@@ -19,16 +19,16 @@ Toolchain: Zig 0.17.1 (released 2026-11-02, the current release when the port wa
 
 Explicit error sets are used throughout. The only `anyerror` is the signature that `std.testing.fuzz` imposes on fuzz callbacks.
 
-## Gaps (honest)
+## Limits
 
-- **No field privacy.** Zig has no private fields, so "only constructible after checks" for `AdminSession`, `UnlockRequest`, `UnitName` and similar types is a convention. `tests/test_secret_security.py` greps for struct-literal construction outside the owning module and for any touch of `Secret.handle`. A determined `@ptrCast` defeats the opaque pointer; the lint catches the obvious forms only.
-- **No affine/linear types.** A copied `Staged` handle can be used twice. The runtime phase guard from the shell library remains in `Context` (tested: "double swap is rejected"). Leaving `main` while holding an uncommitted `Swapped` is not a compile error either; the activation code structures every exit explicitly.
-- **No lifetime checking.** During the port a helper returned a `Payload` whose slice pointed into its own stack frame. Every KeePass call after the first failed, and the compiler said nothing; the black-box tests caught it. The fix stores parts by value with a comptime size bound, but the class of bug remains possible elsewhere.
-- **Secrets also go to files and stdout.** The brief asked for stdin-only flow. Activation must write `EnvironmentFile`s, and `show-zfs-key-stdin` must print the key for `nas-zfs-unlock`. These are separate, enumerable sinks (`PrivateFile` in a verified 0700 directory, `revealToStdout` with a `RevealGrant` enum) rather than a general escape hatch.
-- **No mlock.** Pages are not locked, so a secret can reach swap. Processes are marked non-dumpable (`PR_SET_DUMPABLE=0`) instead.
-- **Coverage.** There is no Zig line-coverage tool in the toolchain. `coverage.py` floors cannot apply, so `tests/test_zig_contracts.py` gates structure instead: every module is in the leak-checked test root, parsers have fuzz targets, and every compile-fail snippet is wired into the build.
-- **Fuzzing in CI** runs only the seed corpus (`zig build test`); continuous fuzzing needs `zig build test --fuzz` on a developer machine.
-- **Behaviour changes, intended:** a timed-out unlock now sends SIGTERM so `nas-secrets` can roll back (Python sent SIGKILL); an existing KDBX is moved aside with `renameat2(RENAME_NOREPLACE)` instead of `mv --no-clobber`; failed rollback never attempts a move onto a live root that could not be removed.
+- **Field access.** Zig exposes struct fields. Constructor-only use of `AdminSession`, `UnlockRequest`, and other validated types relies on module conventions and source checks in `tests/test_secret_security.py`. A pointer cast can bypass the opacity of `Secret`.
+- **Transaction ownership.** Zig permits copying transaction values. The runtime phase guard in `Context` rejects a second swap through a copied handle. Activation exit paths explicitly handle commit and rollback.
+- **Lifetimes.** Black-box tests caught a `Payload` retaining a slice into an expired stack frame. Payload parts now have a comptime size bound and are stored by value.
+- **Secret sinks.** Activation writes systemd environment files through `PrivateFile` in a verified 0700 directory. Existing `show-*` commands use explicit `RevealGrant` values for stdout, including ZFS key handoff.
+- **Process memory.** The binaries disable core dumps with `PR_SET_DUMPABLE=0`. Secret buffers remain eligible for swap.
+- **Coverage.** `tests/test_zig_contracts.py` checks the leak-tested module list, parser fuzz targets, and compile-error wiring. Zig execution is outside the Python branch-coverage report.
+- **Fuzzing.** CI runs the seed corpus. `zig build test --fuzz` starts continuous fuzzing on a developer machine.
+- **Behaviour changes.** A timed-out unlock sends SIGTERM to give `nas-secrets` time to roll back. KDBX move-aside uses the kernel's atomic `renameat2(RENAME_NOREPLACE)`. Rollback preserves its recovery tree if it cannot remove the live root.
 
 ## Version churn cost
 
@@ -49,6 +49,10 @@ Expect a similar sweep on every minor release until 1.0. The black-box Python te
 Production Zig, excluding tests, blank lines and comments: about 3,800 lines. That includes a syscall layer, a minimal HTTP/1 server and a comptime Unicode case-folding table, which Python and bash supplied for free. It replaces 757 lines of shell-in-Nix, 407 lines of shell libraries, 324 code lines of Python (`nas_unlock_api.py`) and about 120 lines of KeePass code in `nas_setup.py`. `secret-tools.nix` is now about 120 lines of configuration rendering.
 
 Release binaries (`-Drelease`, static, stripped, x86_64): `nas-secrets` about 660 KB, `nas-unlock-api` about 460 KB, `nas-keepass-setup` about 475 KB. The `nas-secrets` closure no longer needs bash, python3, jq, openssl, libargon2, apacheHttpd (htpasswd), findutils, grep, sed or util-linux. It still calls keepassxc-cli, coreutils, curl, sudo and systemctl.
+
+The installed `nas-preflight` command also carries the pinned compiler to build
+the black-box fixtures from the checked-out source. Activation and unlock use
+only their compiled executables at runtime.
 
 ## Tests
 

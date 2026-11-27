@@ -228,6 +228,7 @@
             openssh
             python3
             qemu
+            (import ./modules/nas/internal/zig-toolchain.nix { inherit pkgs; })
           ];
           shellHook = ''
             echo "NixOS NAS QEMU tools are available." >&2

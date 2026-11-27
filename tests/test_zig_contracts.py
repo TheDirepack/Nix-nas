@@ -65,6 +65,14 @@ class ZigContractTests(unittest.TestCase):
                     window = source[max(0, index - 400) : index]
                     self.assertIn("build_options.test_harness", window)
 
+    def test_both_preflight_entry_points_provide_the_pinned_compiler(self) -> None:
+        maintenance = (ROOT / "modules/nas/internal/maintenance-tools.nix").read_text(encoding="utf-8")
+        installed_preflight = maintenance.split("nasPreflight = ", 1)[1].split("text = ", 1)[0]
+        self.assertIn("import ./zig-toolchain.nix", installed_preflight)
+        flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
+        qemu_shell = flake.split("devShells.x86_64-linux.qemu-test =", 1)[1]
+        self.assertIn("import ./modules/nas/internal/zig-toolchain.nix", qemu_shell)
+
 
 if __name__ == "__main__":
     unittest.main()
