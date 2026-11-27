@@ -263,10 +263,16 @@ pub fn peerCredentials(fd: fd_t) Error!Credentials {
     return .{ .pid = cred.pid, .uid = cred.uid, .gid = cred.gid };
 }
 
-pub fn setTimeouts(fd: fd_t, seconds: u32) Error!void {
-    const tv: linux.timeval = .{ .sec = @intCast(seconds), .usec = 0 };
+pub fn setReadTimeout(fd: fd_t, milliseconds: u32) Error!void {
+    const tv: linux.timeval = .{ .sec = @intCast(milliseconds / 1000), .usec = @intCast(milliseconds % 1000 * 1000) };
     const bytes: [*]const u8 = @ptrCast(&tv);
     _ = try retry(linux.setsockopt, .{ fd, @as(i32, linux.SOL.SOCKET), @as(u32, linux.SO.RCVTIMEO), bytes, @as(linux.socklen_t, @sizeOf(linux.timeval)) });
+}
+
+pub fn setTimeouts(fd: fd_t, seconds: u32) Error!void {
+    try setReadTimeout(fd, seconds * 1000);
+    const tv: linux.timeval = .{ .sec = @intCast(seconds), .usec = 0 };
+    const bytes: [*]const u8 = @ptrCast(&tv);
     _ = try retry(linux.setsockopt, .{ fd, @as(i32, linux.SOL.SOCKET), @as(u32, linux.SO.SNDTIMEO), bytes, @as(linux.socklen_t, @sizeOf(linux.timeval)) });
 }
 

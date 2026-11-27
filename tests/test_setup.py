@@ -94,13 +94,17 @@ class SetupApplicationRetirementTests(unittest.TestCase):
 class BootstrapAuthentikPasswordTests(unittest.TestCase):
     def test_first_boot_generates_password_outside_the_nix_store(self) -> None:
         application = (ROOT / "modules/nas/config/application-services.nix").read_text()
-        services = (ROOT / "modules/nas/internal/secret-tools.nix").read_text()
+        secrets = (ROOT / "zig/src/nas_secrets.zig").read_text()
+        setup_source = (ROOT / "services/nas_setup.py").read_text()
         self.assertIn("openssl rand -hex 24", application)
         self.assertIn("AUTHENTIK_BOOTSTRAP_PASSWORD=", application)
         self.assertIn('requires = [ "nas-bootstrap-authentik-secrets.service" ]', application)
         self.assertIn("Missing secure first-boot Authentik password", application)
-        self.assertIn('store_value authentik-bootstrap-password "$bootstrap_password"', services)
-        self.assertNotIn("store_value authentik-bootstrap-password ${lib.escapeShellArg bootstrapPassword}", services)
+        self.assertIn('db.store(.@"authentik-bootstrap-password", password)', secrets)
+        self.assertIn(
+            'input_text=f"{keepass_password}\\n{secret_key}\\n{token}\\n{bootstrap_password}\\n"', setup_source
+        )
+        self.assertNotIn("nas-admin-first-boot", secrets)
 
     def test_vm_browser_does_not_reuse_the_linux_bootstrap_password(self) -> None:
         guest = (ROOT / "tests/vm/guest-test.sh").read_text(encoding="utf-8")

@@ -54,12 +54,12 @@ class Fixture:
         self.secrets.write_text(
             "#!/bin/sh\n"
             f'echo "nas-secrets $*" >> "{self.calls}"\n'
-            f"trap 'echo terminated >> \"{self.calls}\"; exit 143' TERM\n"
+            f'trap \'if [ -n "$sleeper" ]; then kill "$sleeper"; wait "$sleeper"; fi; echo terminated >> "{self.calls}"; exit 143\' TERM\n'
             f'IFS= read -r line; printf "%s\\n" "$line" >> "{self.stdin}"\n'
             f'if [ "$line" = "{PASSWORD}" ]; then : > "{self.ready}"; exit 0; fi\n'
             'if [ "$line" = "explode" ]; then echo "Protected service target failed to start" >&2; exit 71; fi\n'
             f'if [ "$line" = "half-unlocked" ]; then : > "{self.ready}"; echo "late failure" >&2; exit 74; fi\n'
-            'if [ "$line" = "slow" ]; then sleep 30 & wait; exit 0; fi\n'
+            'if [ "$line" = "slow" ]; then sleep 30 & sleeper=$!; wait "$sleeper"; exit 0; fi\n'
             'echo "Unable to unlock the KeePassXC database." >&2\n'
             "exit 1\n",
             encoding="utf-8",
@@ -139,6 +139,7 @@ class UnlockApiTests(unittest.TestCase):
         raw: bytes | None = None,
     ) -> tuple[int, dict[str, object], http.client.HTTPResponse]:
         connection = UnixHTTPConnection(self.socket_path)
+        self.addCleanup(connection.close)
         default: dict[str, str | None] = {
             "Host": HOST,
             "Origin": ORIGIN,
@@ -325,6 +326,7 @@ class PeerTests(unittest.TestCase):
             server = start_server(fixture, path, os.geteuid() + 1)
             try:
                 connection = UnixHTTPConnection(path)
+                self.addCleanup(connection.close)
                 with self.assertRaises((http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError)):
                     connection.request("GET", "/unlock/api/status")
                     connection.getresponse()

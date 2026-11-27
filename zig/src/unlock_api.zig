@@ -147,6 +147,13 @@ const Conn = struct {
         if (err == error.throttled) r.message = std.fmt.bufPrint(&msg, "Too many failed unlock attempts; retry in {d} seconds.", .{retry_after}) catch r.message;
         var body: [512]u8 = undefined;
         self.respond(r, http.errorBody(&body, r.message));
+        sys.shutdownWrite(self.fd);
+        // A client may be writing its body in a separate syscall. Give it a
+        // bounded opportunity to finish so closing the socket delivers the rejection.
+        sys.setReadTimeout(self.fd, 100) catch return;
+        var discard: [http.max_body_bytes]u8 = undefined;
+        defer std.crypto.secureZero(u8, &discard);
+        _ = sys.read(self.fd, &discard) catch return;
     }
 
     fn handle(self: Conn) void {
