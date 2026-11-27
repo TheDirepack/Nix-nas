@@ -59,6 +59,10 @@ probes remain unavailable rather than becoming empty successful results.
 
 A new feature should extend an existing authority whenever possible. It should not create a second user database, share database, secret store, feature-state file, or authorization policy simply because that representation is convenient locally.
 
+## KeePass runtime
+
+The Go `nas-unlock-api` checks Unix peer credentials and browser authorization before accepting an unlock body. It feeds one password line into `nas-secrets activate-stdin`. The activation command stages a private runtime tree, swaps it into place, and validates the protected stack before committing. The Python first-start worker calls `nas-keepass-setup` over stdin for KDBX creation and verification, password strength checks, and journal verifier operations.
+
 ## Authentication and authorization
 
 Authentik authenticates users and owns group membership. Caddy removes client-supplied identity headers, performs forward authentication, and applies generated capability checks at the edge. Applications keep their own native authorization where applicable. Browser visibility is convenience only; server-side policy is the security boundary.

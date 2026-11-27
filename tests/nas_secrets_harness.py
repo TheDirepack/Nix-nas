@@ -25,7 +25,7 @@ from tests.go_binaries import binary
 KEEPASS = "fixture keepass passphrase"
 REAL_INSTALL = shutil.which("install") or "/usr/bin/install"
 
-FAKE_KEEPASS = r'''#!/usr/bin/env python3
+FAKE_KEEPASS = r"""#!/usr/bin/env python3
 import json, os, sys
 store_path = os.environ["FAKE_KP_STORE"]
 log = open(os.environ["FAKE_LOG"], "a")
@@ -72,7 +72,7 @@ if sub == "show":
 if sub == "rm":
     entries.pop(key, None); save(); sys.exit(0)
 sys.exit(2)
-'''
+"""
 
 FAKE_SUDO = """#!/usr/bin/env bash
 stdin="$(readlink /proc/self/fd/0)"
@@ -271,6 +271,7 @@ class Appliance:
             "FAKE_LOG": str(self.log_path),
             "FAKE_KP_STORE": str(self.store),
             "FAKE_STATE_DIR": str(self.state),
+            **({"GOCOVERDIR": os.environ["GOCOVERDIR"]} if os.environ.get("GOCOVERDIR") else {}),
             **extra,
         }
 

@@ -195,6 +195,10 @@
             pkgs.actionlint
             pkgs.bats
             pkgs.caddy
+            pkgs.exhaustive
+            pkgs.go
+            pkgs.go-tools
+            pkgs.gosec
             pkgs.nodejs
             pkgs.pkg-config
             pkgs.prettier

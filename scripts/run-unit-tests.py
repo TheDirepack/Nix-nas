@@ -374,6 +374,8 @@ def main() -> int:
                 "discover",
                 "-s",
                 str(TESTS),
+                "-t",
+                str(ROOT),
                 "-p",
                 path.name,
             ]

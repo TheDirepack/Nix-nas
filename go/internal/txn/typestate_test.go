@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -49,11 +48,8 @@ var mustNotCompile = map[string]struct{ body, want string }{
 
 func goTool(t *testing.T) string {
 	t.Helper()
-	if p, err := exec.LookPath("go"); err == nil {
-		return p
-	}
-	p := filepath.Join(runtime.GOROOT(), "bin", "go")
-	if _, err := os.Stat(p); err != nil {
+	p, err := exec.LookPath("go")
+	if err != nil {
 		t.Skip("go toolchain unavailable")
 	}
 	return p

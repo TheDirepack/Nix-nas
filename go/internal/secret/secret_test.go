@@ -148,13 +148,14 @@ func TestReadLineBounds(t *testing.T) {
 		t.Fatal("reader must stop at the newline")
 	}
 	for input, want := range map[string]error{
-		strings.Repeat("p", 5000) + "\n": LineTooLong,
-		"no newline":                     LineMissing,
-		"\n":                             LineEmpty,
-		"a\x00b\n":                       LineMalformed,
-		"\xff\xfe\n":                     LineMalformed,
-		strings.Repeat("é", 4096) + "\n": nil,
-		strings.Repeat("é", 4097) + "\n": LineTooLong,
+		strings.Repeat("p", 5000) + "\n":         LineTooLong,
+		"no newline":                             LineMissing,
+		"\n":                                     LineEmpty,
+		"a\x00b\n":                               LineMalformed,
+		"\xff\xfe\n":                             LineMalformed,
+		strings.Repeat("é", 4096) + "\n":         nil,
+		strings.Repeat("é", 4097) + "\n":         LineTooLong,
+		strings.Repeat("\x80", 4*MaxLineRunes+1): LineTooLong,
 	} {
 		_, err := ReadLine(bufio.NewReader(strings.NewReader(input)), MaxLineRunes)
 		if !errors.Is(err, want) && !(want == nil && err == nil) {

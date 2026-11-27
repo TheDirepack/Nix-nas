@@ -25,7 +25,7 @@ Use the local console, SSH with a provisioned recovery key, or hardware KVM. Sig
 sudo nas-secrets activate
 ```
 
-Enter the KeePass database password only at the local terminal prompt. The command reads it from standard input; it does not store it in a URL, argument, environment variable, Nix store path, browser storage, or disk file.
+Enter the KeePass database password only at the local terminal prompt. The command reads one line of up to 4,096 characters with terminal echo disabled. For browser unlock, the same limit applies and the unlock service passes the password to the activation command over stdin.
 
 ## Activation transaction
 

@@ -3,10 +3,8 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import shlex
 import subprocess
 import sys
-import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -24,17 +22,9 @@ except ImportError:
 else:
     HAS_HYPOTHESIS = True
     import nas_logging
-    from fuzz_strategies import identifier_candidates, secret_key_names
+    from fuzz_strategies import secret_key_names
 
-LIBRARY = ROOT / "scripts/lib/nas-secret-transaction.sh"
-
-
-def shell_safe_component(value: str) -> str:
-    """Keep generated path structure hostile without making execve itself invalid."""
-
-    value = value.replace("/", "_").replace("\\", "_")
-    value = "".join("_" if ord(character) < 32 or ord(character) == 127 else character for character in value)
-    return value or "empty"
+    import tests  # noqa: F401  (builds nas-keepass-setup)
 
 
 if HAS_HYPOTHESIS:
@@ -71,89 +61,43 @@ if HAS_HYPOTHESIS:
             self.assertEqual(decoded["payload"]["request"]["clientSecret"], "[redacted]")
             self.assertEqual(decoded["payload"]["request"]["provider"]["apiKey"], "[redacted]")
 
-        @settings(max_examples=40, deadline=None, suppress_health_check=[HealthCheck.too_slow])
-        @given(identifier_candidates(max_size=24))
-        def test_transaction_path_generation_never_accepts_root_overlap(self, component: str) -> None:
-            with tempfile.TemporaryDirectory() as directory:
-                base = pathlib.Path(directory)
-                valid_root = base / "live"
-                valid_stage = base / "tx" / "new"
-                valid_previous = base / "tx" / "previous"
-                valid_directory = base / "tx"
-                generated_component = shell_safe_component(component)
-                cases: list[tuple[str, str, str, str]] = [
-                    ("relative", str(valid_stage), str(valid_previous), str(valid_directory)),
-                    ("/", str(valid_stage), str(valid_previous), str(valid_directory)),
-                    (str(valid_root), str(valid_root / "new"), str(valid_previous), ""),
-                    (str(valid_root), str(valid_stage), str(valid_stage / "previous"), ""),
-                    (str(valid_root), str(valid_stage), str(valid_previous), str(valid_root / "tx")),
-                    (str(valid_root), str(base / "outside" / "new"), str(valid_previous), str(valid_directory)),
-                    (str(valid_root), str(valid_root / generated_component), str(valid_previous), ""),
-                ]
-                lines = [
-                    "set -Eeuo pipefail",
-                    'export NAS_SECRET_TX_PRIVILEGE=""',
-                    f"source {shlex.quote(str(LIBRARY))}",
-                    "failures=0",
-                ]
-                for root, stage, previous, txdir in cases:
-                    values = (root, stage, previous, "nas-protected-services.target", txdir)
-                    command = "nas_secret_tx_init " + " ".join(shlex.quote(value) for value in values)
-                    lines.append(f"if {command} >/dev/null 2>&1; then failures=$((failures+1)); fi")
-                lines.append('[[ "$failures" -eq 0 ]]')
-                result = subprocess.run(
-                    ["bash", "-c", "\n".join(lines)],
-                    cwd=base,
-                    env=os.environ.copy(),
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                    timeout=20,
-                )
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        @settings(max_examples=150, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+        @given(
+            st.text(alphabet=st.characters(min_codepoint=0x20, blacklist_categories=("Cs", "Cc")), max_size=40),
+            st.one_of(
+                st.none(),
+                st.text(
+                    alphabet=st.characters(min_codepoint=0x20, blacklist_categories=("Cs", "Cc")),
+                    min_size=1,
+                    max_size=40,
+                ),
+            ),
+        )
+        def test_go_strength_floor_matches_the_specification(self, password: str, administrator: str | None) -> None:
+            """Differential: StrongKeePassPassword agrees with the written rule."""
+            if not password:
+                return
+            if "NAS_KEEPASS_SETUP_BIN" not in os.environ:
+                self.skipTest("nas-keepass-setup is unavailable")
+            payload = password + "\n" + ("" if administrator is None else administrator + "\n")
+            result = subprocess.run(
+                [os.environ["NAS_KEEPASS_SETUP_BIN"], "check-strength"],
+                input=payload,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=30,
+            )
+            expected = (
+                len(password) >= 16
+                and len(set(password)) >= 6
+                and (administrator is None or password.casefold() != administrator.casefold())
+            )
+            event("strong" if expected else "weak")
+            self.assertEqual(result.returncode == 0, expected, result.stderr)
+            if len(password) >= 8:
+                self.assertNotIn(password, result.stderr)
 
-        @settings(max_examples=50, deadline=None, suppress_health_check=[HealthCheck.too_slow])
-        @given(identifier_candidates(max_size=48))
-        def test_transaction_target_never_accepts_non_target_or_option_units(self, value: str) -> None:
-            generated = shell_safe_component(value)
-            bad = [
-                "--root=/tmp.target",
-                "-x.target",
-                "bad.service",
-                "bad.socket",
-                "bad target.target",
-                "bad.target\nnext.target",
-                "bad.target\rnext.target",
-                "../bad.target",
-                generated + ".service",
-            ]
-            with tempfile.TemporaryDirectory() as directory:
-                base = pathlib.Path(directory)
-                root, stage, previous = base / "root", base / "stage", base / "previous"
-                script = [
-                    "set -Eeuo pipefail",
-                    'export NAS_SECRET_TX_PRIVILEGE=""',
-                    f"source {shlex.quote(str(LIBRARY))}",
-                    f"root={shlex.quote(str(root))}",
-                    f"stage={shlex.quote(str(stage))}",
-                    f"previous={shlex.quote(str(previous))}",
-                    "failures=0",
-                ]
-                for target in bad:
-                    script.append(
-                        f'if nas_secret_tx_init "$root" "$stage" "$previous" {shlex.quote(target)} >/dev/null 2>&1; then failures=$((failures+1)); fi'
-                    )
-                script.append('[[ "$failures" -eq 0 ]]')
-                result = subprocess.run(
-                    ["bash", "-c", "\n".join(script)],
-                    cwd=base,
-                    env=os.environ.copy(),
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                    timeout=20,
-                )
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 else:
 
     @unittest.skip("Hypothesis is not installed; CI runs this suite in the Nix test environment")

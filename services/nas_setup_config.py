@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import pathlib
+import shutil
 import stat
+import subprocess
 import sys
 from typing import Any, Mapping
 
@@ -233,22 +235,49 @@ def normalize_secret_line(raw: str, label: str) -> str:
 
 KEEPASS_PASSWORD_MIN_LENGTH = 16
 KEEPASS_PASSWORD_MIN_DISTINCT = 6
+KEEPASS_SETUP_TIMEOUT_SECONDS = 120
+
+
+def keepass_setup_binary() -> str:
+    """The Go KeePass setup helper; secrets reach it only on stdin."""
+    configured = os.environ.get("NAS_KEEPASS_SETUP_BIN")
+    found = configured or shutil.which("nas-keepass-setup")
+    if not found:
+        raise SetupError("nas-keepass-setup is unavailable")
+    return found
+
+
+def secret_lines(*values: str) -> str:
+    for value in values:
+        if any(character in value for character in "\n\r\x00"):
+            raise SetupError("Secret input must be a single line")
+    return "".join(f"{value}\n" for value in values)
+
+
+def run_keepass_setup(arguments: list[str], payload: str) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            [keepass_setup_binary(), *arguments],
+            input=payload,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=KEEPASS_SETUP_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SetupError("nas-keepass-setup timed out") from exc
 
 
 def validate_keepass_password_strength(password: str, administrator_password: str | None = None) -> str:
     """Enforce the floor for the only secret protecting the KDBX and ZFS key.
 
-    The KDBX sits on the unencrypted system disk and in Restic, so its password
-    is the sole offline barrier. Keep in sync with the wizard's ConfirmStep.
+    The rule is implemented by nas-keepass-setup (StrongKeePassPassword).
+    Keep in sync with the wizard's ConfirmStep.
     """
-    if len(password) < KEEPASS_PASSWORD_MIN_LENGTH:
-        raise SetupError(f"KeePass database password must contain at least {KEEPASS_PASSWORD_MIN_LENGTH} characters")
-    if len(set(password)) < KEEPASS_PASSWORD_MIN_DISTINCT:
-        raise SetupError(
-            f"KeePass database password must use at least {KEEPASS_PASSWORD_MIN_DISTINCT} different characters"
-        )
-    if administrator_password is not None and password.casefold() == administrator_password.casefold():
-        raise SetupError("KeePass database password must differ from the administrator password")
+    values = [password] if administrator_password is None else [password, administrator_password]
+    completed = run_keepass_setup(["check-strength"], secret_lines(*values))
+    if completed.returncode != 0:
+        raise SetupError(completed.stderr.strip() or "KeePass database password is too weak")
     return password
 
 

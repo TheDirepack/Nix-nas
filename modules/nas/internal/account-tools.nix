@@ -7,6 +7,7 @@ let
     cfg
     copypartyUserConfigDir
     lib
+    nasKeepassSetup
     nasSecrets
     nasUpdate
     nasPreflight
@@ -64,7 +65,6 @@ let
       "nas_setup"
       "nas_setup_first_start"
       "nas_state"
-      "nas_unlock_api"
       "nas_v2_backup"
       "nas_v2_control"
       "nas_v2_editor"
@@ -110,6 +110,7 @@ let
     ];
     text = ''
       export PATH=/run/wrappers/bin:$PATH
+      export NAS_KEEPASS_SETUP_BIN=${nasKeepassSetup}/bin/nas-keepass-setup
       export NAS_KEEPASS_DATABASE=${lib.escapeShellArg cfg.secrets.keepassDatabase}
       export NAS_KEEPASS_KEY_FILE=${lib.escapeShellArg (if cfg.secrets.keepassKeyFile == null then "" else cfg.secrets.keepassKeyFile)}
       export NAS_ZFS_POOL=${lib.escapeShellArg cfg.zfsPool}
@@ -259,6 +260,7 @@ let
       nasPythonApplication nasIdentitySync nasSetup nasUpdate
     ];
     text = ''
+      export NAS_KEEPASS_SETUP_BIN=${nasKeepassSetup}/bin/nas-keepass-setup
       export NAS_ZFS_POOL=${lib.escapeShellArg cfg.zfsPool}
       export NAS_ZFS_DATASET=${lib.escapeShellArg cfg.zfsDataset}
       export NAS_ZFS_ROOT=${lib.escapeShellArg cfg.zfsRoot}

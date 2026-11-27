@@ -79,6 +79,8 @@ case "$section" in
       check_ruff_format || failed=1
     ci_run static-code pyright "Python types" \
       nix develop .#test -c pyright --project pyproject.toml || failed=1
+    ci_run static-code go-static "Go vet, staticcheck, gosec, exhaustive and unit tests" \
+      nix develop .#test -c ./scripts/go-check.sh || failed=1
     ci_run static-code prettier "JavaScript formatting" \
       nix develop .#test -c prettier --check \
       "cockpit/src/**/*.{js,jsx,scss}" "cockpit/e2e/*.mjs" \
@@ -101,7 +103,7 @@ case "$section" in
       return "$rc"
     }
 
-    ci_run static-shell secret-faults "Secret transaction fault injection" \
+    ci_run static-shell bats "Bats shell suites" \
       nix develop .#test -c bats tests/bats || failed=1
     ci_run static-shell shellcheck "ShellCheck" \
       nix develop .#test -c shellcheck -x \
@@ -118,6 +120,8 @@ case "$section" in
     ;;
 
   unit)
+    # KeePass black-box suites must not skip for lack of a Go toolchain.
+    export NAS_REQUIRE_GO_BINARIES=1
     ci_run unit fast-python "Fast Python unit tests" \
       nix develop .#test -c ./scripts/run-unit-tests.py \
       --coverage coverage.json --quiet --jobs 4 --group fast || failed=1
@@ -133,6 +137,8 @@ case "$section" in
         coverage.json
     }
     ci_run unit coverage-floor "Coverage floor" check_coverage_floor || failed=1
+    ci_run unit go-coverage "Go unit and black-box coverage floor" \
+      nix develop .#test -c python3 scripts/go-coverage.py || failed=1
 
     for contract in \
       test_maintainer_core.py \

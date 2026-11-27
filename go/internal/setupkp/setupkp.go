@@ -157,7 +157,7 @@ func (d *Database) opens(ctx context.Context, pw secret.KeePassPassword) error {
 	if err != nil {
 		return err
 	}
-	res, err := d.Runner.Run(ctx, c.WithStdin(secret.Lines(pw)).Stderr(cmdexec.Capture))
+	res, err := d.Runner.Run(ctx, c.WithStdin(secret.Lines(pw)))
 	if err != nil {
 		return err
 	}
@@ -178,12 +178,12 @@ func (d *Database) create(ctx context.Context, pw secret.StrongKeePassPassword) 
 	}
 	payload := secret.Lines(pw, pw)
 	defer payload.Destroy()
-	res, err := d.Runner.Run(ctx, c.WithStdin(payload).Stderr(cmdexec.Capture))
+	res, err := d.Runner.Run(ctx, c.WithStdin(payload))
 	if err != nil {
 		return err
 	}
 	if !res.OK() {
-		return fmt.Errorf("KeePassXC could not create %s: %s", d.Path, res.Stderr)
+		return fmt.Errorf("KeePassXC could not create %s", d.Path)
 	}
 	return nil
 }

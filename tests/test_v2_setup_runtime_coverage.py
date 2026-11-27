@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import getpass
 import io
 import json
+import os
 import pathlib
 import pwd
 import stat
@@ -18,6 +21,7 @@ if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
 import nas_setup as setup  # noqa: E402
+from tests.keepass_setup_fakes import install_fakes, operations  # noqa: E402
 
 
 class SetupRuntimeCoverageTests(unittest.TestCase):
@@ -286,70 +290,56 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             self.assertEqual(setup.read_keepass_password(False), "prompt")
         normalize.assert_called_once()
 
+    def keepass_env(self, root: pathlib.Path, database: pathlib.Path, **extra: object) -> contextlib.ExitStack:
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.dict(os.environ, install_fakes(root)))
+        stack.enter_context(mock.patch.object(setup, "KEEPASS_DATABASE", database))
+        stack.enter_context(mock.patch.object(setup, "local_administrator_username", return_value=getpass.getuser()))
+        stack.enter_context(mock.patch.object(setup, "managed_dataset_encrypted", return_value=False))
+        for name, value in extra.items():
+            stack.enter_context(mock.patch.object(setup, name, value))
+        return stack
+
     def test_verify_or_create_keepass_database_paths(self) -> None:
+        password = "correct horse battery staple"
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
             database = root / "NAS.kdbx"
             database.write_text("x", encoding="utf-8")
-            with (
-                mock.patch.object(setup, "KEEPASS_DATABASE", database),
-                mock.patch.object(setup, "local_administrator_username", return_value="nasadmin"),
-                mock.patch.object(setup, "run_root") as root_run,
-                mock.patch.object(setup, "run_admin") as admin,
-            ):
-                self.assertEqual(setup.verify_or_create_database("pw", False), "existing")
-            self.assertIn("nasadmin", root_run.call_args.args[0])
-            self.assertIn("db-info", admin.call_args.args[0])
-            self.assertNotIn("--pw-stdin", admin.call_args.args[0])
+            with self.keepass_env(root, database):
+                self.assertEqual(setup.verify_or_create_database(password, False), "existing")
+            log = operations(root)
+            self.assertIn(f"-o {getpass.getuser()} -g users {root}", log[1])
+            self.assertIn("db-info", log[-1])
+            self.assertFalse([line for line in log if "--pw-stdin" in line or password in line])
             database.unlink()
-            with mock.patch.object(setup, "KEEPASS_DATABASE", database), mock.patch.object(setup, "run_root"):
-                with self.assertRaisesRegex(setup.SetupError, "does not exist"):
-                    setup.verify_or_create_database("pw", False)
-
-            def create(command: list[str], **kwargs: object) -> setup.Completed:
-                if "db-create" in command:
-                    self.assertEqual(kwargs.get("input_text"), "pw\npw\n")
-                    database.write_text("created", encoding="utf-8")
-                else:
-                    self.assertIn("db-info", command)
-                    self.assertEqual(kwargs.get("input_text"), "pw\n")
-                return setup.Completed((), "", "")
-
-            with (
-                mock.patch.object(setup, "KEEPASS_DATABASE", database),
-                mock.patch.object(setup, "run_root"),
-                mock.patch.object(setup, "run_admin", side_effect=create) as create_admin,
-            ):
-                self.assertEqual(setup.verify_or_create_database("pw", True), "created")
-            self.assertIn("--set-password", create_admin.call_args_list[0].args[0])
-            self.assertIn("db-info", create_admin.call_args_list[1].args[0])
-            self.assertNotIn("--pw-stdin", create_admin.call_args_list[1].args[0])
+            with self.keepass_env(root, database), self.assertRaisesRegex(setup.SetupError, "does not exist"):
+                setup.verify_or_create_database(password, False)
+            with self.keepass_env(root, database):
+                self.assertEqual(setup.verify_or_create_database(password, True), "created")
+            log = operations(root)
+            self.assertIn("--set-password", next(line for line in log if "db-create" in line))
+            self.assertIn("db-info", log[-1])
 
     def test_create_keepass_database_rejects_non_regular_existing_path(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
-            database = pathlib.Path(raw) / "NAS.kdbx"
+            root = pathlib.Path(raw)
+            database = root / "NAS.kdbx"
             database.symlink_to("missing-target")
-            with (
-                mock.patch.object(setup, "KEEPASS_DATABASE", database),
-                mock.patch.object(setup, "local_administrator_username", return_value="nasadmin"),
-                mock.patch.object(setup, "run_root"),
-                mock.patch.object(setup, "run_admin"),
-                self.assertRaisesRegex(setup.SetupError, "not a regular file"),
-            ):
-                setup.verify_or_create_database("pw", True)
+            with self.keepass_env(root, database), self.assertRaisesRegex(setup.SetupError, "not a regular file"):
+                setup.verify_or_create_database("correct horse battery staple", True)
 
     def test_verify_or_create_database_reports_failed_creation_and_key_file(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
-            database = pathlib.Path(raw) / "NAS.kdbx"
+            root = pathlib.Path(raw)
+            database = root / "NAS.kdbx"
             with (
-                mock.patch.object(setup, "KEEPASS_DATABASE", database),
-                mock.patch.object(setup, "KEEPASS_KEY_FILE", "/key"),
-                mock.patch.object(setup, "run_root"),
-                mock.patch.object(setup, "run_admin") as admin,
+                self.keepass_env(root, database, KEEPASS_KEY_FILE="/key"),
+                mock.patch.dict(os.environ, {"FAKE_DB_INFO_FAIL": "1"}),
+                self.assertRaises(setup.SetupError),
             ):
-                with self.assertRaisesRegex(setup.SetupError, "did not create"):
-                    setup.verify_or_create_database("pw", True)
-            self.assertIn("--set-key-file", admin.call_args.args[0])
+                setup.verify_or_create_database("correct horse battery staple", True)
+            self.assertIn("--set-key-file /key", next(line for line in operations(root) if "db-create" in line))
 
     def test_setup_storage_creates_plain_pool_and_dataset(self) -> None:
         calls: list[list[str]] = []

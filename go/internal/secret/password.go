@@ -62,6 +62,9 @@ func ReadLine(r io.ByteReader, maxRunes int) (Secret, error) {
 		if c == 0 {
 			return fail(LineMalformed)
 		}
+		if len(buf) == maxRunes*utf8.UTFMax {
+			return fail(LineTooLong)
+		}
 		if c&0xC0 != 0x80 {
 			runes++
 			if runes > maxRunes {
@@ -115,6 +118,8 @@ func NewKeePassPassword(s Secret) (KeePassPassword, error) {
 	case s.RuneCount() > MaxLineRunes:
 		return KeePassPassword{}, ErrPasswordTooLong
 	case s.indexByte('\n') >= 0 || s.indexByte(0) >= 0:
+		return KeePassPassword{}, LineMalformed
+	case !utf8.Valid(s.bytes()):
 		return KeePassPassword{}, LineMalformed
 	}
 	return KeePassPassword{s: s}, nil

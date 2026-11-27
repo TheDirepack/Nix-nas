@@ -8,750 +8,88 @@ let
     authentikRuntimeOutpostTokenFile
     authentikUnlockedEnvironmentFile
     bootstrapAuthentikDataDir
-    bootstrapPassword
     cfg
     lib
     pkgs
     secretRoot
   ;
+
+  # The KeePass secret system: nas-secrets, nas-unlock-api and
+  # nas-keepass-setup. Regenerate vendorHash with scripts/go-vendor-hash.py
+  # after a go.mod change.
+  nasKeepass = pkgs.buildGoModule {
+    pname = "nas-keepass";
+    version = lib.removeSuffix "\n" (builtins.readFile ../../../VERSION);
+    src = lib.cleanSource ../../../go;
+    vendorHash = "sha256-cO051trct9jCpF7swRL2ed1nyN1DeUwXPfgjZnq1ZBs=";
+    subPackages = [
+      "cmd/nas-keepass-setup"
+      "cmd/nas-secrets"
+      "cmd/nas-unlock-api"
+    ];
+    env.CGO_ENABLED = 0;
+    ldflags = [ "-s" "-w" ];
+    # The compile-fail typestate test needs a writable module tree.
+    checkFlags = [ "-short" ];
+    meta.mainProgram = "nas-secrets";
+  };
+
+  # Non-secret settings only: paths, unit names and optional consumers.
+  nasSecretsConfig = pkgs.writeText "nas-secrets.json" (builtins.toJSON {
+    schemaVersion = 1;
+    database = cfg.secrets.keepassDatabase;
+    keyFile = if cfg.secrets.keepassKeyFile == null then "" else cfg.secrets.keepassKeyFile;
+    group = cfg.secrets.keepassGroup;
+    inherit secretRoot;
+    runtimeRoot = "/run/nas-secret-runtime";
+    lockFile = "/run/lock/nas-secrets.lock";
+    setupState = "/var/lib/nas-setup/state.json";
+    protectedTarget = "nas-protected-services.target";
+    v2SystemdState = "/run/nas-control/systemd-reconciled.json";
+    bootstrapAuthentikDir = bootstrapAuthentikDataDir;
+    inherit authentikRuntimeEnvironmentFile authentikUnlockedEnvironmentFile authentikRuntimeOutpostTokenFile;
+    authentikApiTokenFile = authentikApiTokenFile;
+    authentikRuntimeApiTokenFile = authentikRuntimeApiTokenFile;
+    authentikReadyUrl = "http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}-/health/ready/";
+    bootstrapEmail = cfg.identity.bootstrapEmail;
+    operationRunner = "/run/current-system/sw/bin/nas-operation-run";
+    features = {
+      observability = cfg.observability.enable;
+      grafana = cfg.observability.enable && cfg.observability.grafana.enable;
+      ntfy = cfg.observability.ntfy.enable;
+      nutWeb = cfg.power.ups.enable && cfg.power.ups.web.enable;
+      zfsEncryption = cfg.zfsEncryption.enable;
+      vaultwarden = cfg.vaultwarden.enable;
+    };
+  });
+
   nasSecrets = pkgs.writeShellApplication {
     name = "nas-secrets";
-    excludeShellChecks = [ "SC2329" ];
     runtimeInputs = [
-      pkgs.apacheHttpd
-      pkgs.libargon2
       pkgs.coreutils
-      pkgs.curl
-      pkgs.findutils
-      pkgs.gnugrep
-      pkgs.gnused
       pkgs.keepassxc
-      pkgs.openssl
-      pkgs.python3
       pkgs.systemd
+    ];
+    text = ''
+      export PATH=/run/wrappers/bin:$PATH
+      export NAS_SECRETS_CONFIG=${nasSecretsConfig}
+      exec ${nasKeepass}/bin/nas-secrets "$@"
+    '';
+  };
+
+  nasKeepassSetup = pkgs.writeShellApplication {
+    name = "nas-keepass-setup";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.keepassxc
       pkgs.util-linux
     ];
     text = ''
       export PATH=/run/wrappers/bin:$PATH
-      set -euo pipefail
-      umask 0077
-
-      # Nix substitutes the immutable library store path.
-      # shellcheck disable=SC1091
-      source ${../../../scripts/lib/nas-secret-runtime.sh}
-
-      database=${lib.escapeShellArg cfg.secrets.keepassDatabase}
-      key_file=${lib.escapeShellArg (if cfg.secrets.keepassKeyFile == null then "" else cfg.secrets.keepassKeyFile)}
-      secret_group=${lib.escapeShellArg cfg.secrets.keepassGroup}
-      secret_root=${lib.escapeShellArg secretRoot}
-      keepass_password=""
-      password_from_stdin=false
-
-      cleanup_password() {
-        unset keepass_password
-      }
-      trap cleanup_password EXIT HUP INT TERM
-
-      acquire_lock() {
-        exec 8>/run/lock/nas-secrets.lock
-        flock --nonblock 8 || {
-          echo "Another NAS secret operation is already running." >&2
-          exit 1
-        }
-      }
-
-      require_database() {
-        [[ -f "$database" ]] || {
-          echo "KeePassXC database not found: $database" >&2
-          echo "Create or restore the KDBX database, then configure nas.secrets.keepassDatabase." >&2
-          exit 1
-        }
-        if [[ -n "$key_file" && ! -f "$key_file" ]]; then
-          echo "KeePassXC key file not found: $key_file" >&2
-          exit 1
-        fi
-      }
-
-      prompt_unlock() {
-        require_database
-        if $password_from_stdin; then
-          IFS= read -r -n 4097 keepass_password || {
-            echo "Unable to read the KeePass database password from standard input." >&2
-            exit 1
-          }
-        else
-          IFS= read -r -s -n 4097 -p "KeePass database password: " keepass_password
-          echo >&2
-        fi
-        [[ -n "$keepass_password" ]] || {
-          echo "The KeePass database password cannot be empty." >&2
-          exit 1
-        }
-        (( ''${#keepass_password} <= 4096 )) || {
-          echo "The KeePass database password exceeds 4096 characters." >&2
-          exit 1
-        }
-        # keepassxc >= 2.7 reads a piped database password from stdin without an explicit flag.
-        local args=(db-info --quiet)
-        [[ -n "$key_file" ]] && args+=(--key-file "$key_file")
-        args+=("$database")
-        if ! printf '%s\n' "$keepass_password" | keepassxc-cli "''${args[@]}" >/dev/null 2>&1; then
-          echo "Unable to unlock the KeePassXC database." >&2
-          exit 1
-        fi
-      }
-
-      kp_args() {
-        KP_ARGS=(--quiet)
-        if [[ -n "$key_file" ]]; then
-          KP_ARGS+=(--key-file "$key_file")
-        fi
-      }
-
-      entry_path() {
-        printf '%s/%s' "$secret_group" "$1"
-      }
-
-      ensure_group() {
-        kp_args
-        if printf '%s\n' "$keepass_password" | keepassxc-cli ls "''${KP_ARGS[@]}" "$database" "$secret_group" >/dev/null 2>&1; then
-          return 0
-        fi
-        if ! printf '%s\n' "$keepass_password" | keepassxc-cli mkdir "''${KP_ARGS[@]}" "$database" "$secret_group" >/dev/null 2>&1; then
-          echo "Unable to ensure KeePassXC group: $secret_group" >&2
-          exit 1
-        fi
-      }
-
-      has_secret() {
-        local key="$1" listing
-        kp_args
-        if ! listing="$(printf '%s\n' "$keepass_password" | keepassxc-cli ls "''${KP_ARGS[@]}" --flatten "$database" "$secret_group" 2>/dev/null)"; then
-          echo "Unable to inspect the KeePassXC secret group." >&2
-          exit 1
-        fi
-        grep -Fxq -- "$key" <<<"$listing"
-      }
-
-      store_value() {
-        local key="$1" value="$2" path
-        path="$(entry_path "$key")"
-        kp_args
-        if has_secret "$key"; then
-          printf '%s\n%s\n' "$keepass_password" "$value" | keepassxc-cli edit "''${KP_ARGS[@]}" -p "$database" "$path" >/dev/null
-        else
-          printf '%s\n%s\n' "$keepass_password" "$value" | keepassxc-cli add "''${KP_ARGS[@]}" -p "$database" "$path" >/dev/null
-        fi
-      }
-
-      remove_value() {
-        local key="$1" path
-        if ! has_secret "$key"; then
-          return 0
-        fi
-        path="$(entry_path "$key")"
-        kp_args
-        if ! printf '%s\n' "$keepass_password" | keepassxc-cli rm "''${KP_ARGS[@]}" "$database" "$path" >/dev/null 2>&1; then
-          echo "Unable to remove KeePassXC entry: $path" >&2
-          return 1
-        fi
-      }
-
-      get_secret() {
-        local key="$1" path value
-        path="$(entry_path "$key")"
-        kp_args
-        value="$(printf '%s\n' "$keepass_password" | keepassxc-cli show "''${KP_ARGS[@]}" --show-protected -a Password "$database" "$path")" || {
-          echo "Unable to retrieve KeePassXC entry: $path" >&2
-          exit 1
-        }
-        [[ -n "$value" ]] || {
-          echo "KeePassXC returned an empty password for: $path" >&2
-          exit 1
-        }
-        printf '%s' "$value"
-      }
-
-      get_secret_optional() {
-        has_secret "$1" || return 0
-        get_secret "$1"
-      }
-
-      store_random_if_missing() {
-        local key="$1" label="$2" bytes="$3" value
-        if has_secret "$key"; then
-          printf 'KeePassXC item already exists: %s\n' "$label"
-          return
-        fi
-        value="$(openssl rand -hex "$bytes")"
-        store_value "$key" "$value"
-        unset value
-        printf 'Created KeePassXC item: %s\n' "$label"
-      }
-
-      hash_password() {
-        local password="$1" salt digest
-        salt="$(openssl rand -hex 16)"
-        digest="$(printf '%s' "$password" | argon2 "$salt" -id -e -t 3 -m 16 -p 4)"
-        [[ "$digest" == \$argon2id\$* ]] || {
-          echo "Argon2 did not return an encoded Argon2id digest." >&2
-          exit 1
-        }
-        printf '%s' "$digest"
-      }
-
-      bcrypt_password() {
-        local username="$1" password="$2" line
-        # htpasswd -i reads the password from stdin; never expose secrets in argv.
-        line="$(printf '%s\n' "$password" | htpasswd -nBiC 12 "$username")"
-        printf '%s' "''${line#*:}"
-      }
-
-      command_init() {
-        acquire_lock
-        prompt_unlock
-        ensure_group
-        store_random_if_missing authentik-secret-key "Authentik secret key" 64
-        store_random_if_missing authentik-bootstrap-token "Authentik bootstrap token" 32
-        if ! has_secret authentik-api-token; then
-          store_value authentik-api-token "$(get_secret authentik-bootstrap-token)"
-          echo "Created KeePassXC item: Authentik NAS API token (initially the bootstrap token)"
-        fi
-        if ! has_secret authentik-bootstrap-password; then
-          store_random_if_missing authentik-bootstrap-password "Authentik bootstrap administrator password" 24
-        fi
-        store_random_if_missing state-bundle-signing-key "NAS state bundle HMAC signing key" 32
-        ${lib.optionalString (cfg.observability.enable && cfg.observability.grafana.enable) ''
-        store_random_if_missing grafana-secret-key "Grafana signing and data-source secret key" 32
-        ''}
-        ${lib.optionalString cfg.observability.ntfy.enable ''
-        store_random_if_missing ntfy-admin-password "ntfy administrator password" 24
-        store_random_if_missing ntfy-alert-topic "ntfy private alert topic" 16
-        ''}
-        ${lib.optionalString (cfg.power.ups.enable && cfg.power.ups.web.enable) ''
-        store_random_if_missing nut-webgui-server-key "NUT Web GUI session signing key" 32
-        ''}
-        ${lib.optionalString cfg.zfsEncryption.enable ''
-        store_random_if_missing zfs-dataset-key "ZFS native encryption key" 32
-        ''}
-        ${lib.optionalString cfg.vaultwarden.enable ''
-        store_random_if_missing vaultwarden-oidc-client-secret "Vaultwarden Authentik OIDC client secret" 32
-        store_random_if_missing vaultwarden-admin "Vaultwarden admin token" 32
-        ''}
-        echo
-        echo "Secret initialization complete. Human identity and access policy remain in Authentik."
-        echo "Run: nas-secrets activate"
-      }
-
-      command_adopt_authentik_bootstrap_stdin() {
-        acquire_lock
-        password_from_stdin=true
-        prompt_unlock
-        ensure_group
-        local secret_key token bootstrap_password
-        IFS= read -r secret_key || { echo "Unable to read the Authentik bootstrap secret key." >&2; exit 1; }
-        IFS= read -r token || { echo "Unable to read the Authentik bootstrap token." >&2; exit 1; }
-        IFS= read -r bootstrap_password || { echo "Unable to read the Authentik bootstrap password." >&2; exit 1; }
-        if IFS= read -r _; then
-          echo "Unexpected extra input while adopting Authentik bootstrap authority." >&2
-          exit 1
-        fi
-        require_secret_hex "$secret_key" 128 "Authentik bootstrap secret key"
-        require_secret_hex "$token" 64 "Authentik bootstrap token"
-        require_secret_hex "$bootstrap_password" 48 "Authentik bootstrap password"
-        store_value authentik-secret-key "$secret_key"
-        store_value authentik-bootstrap-token "$token"
-        store_value authentik-api-token "$token"
-        store_value authentik-bootstrap-password "$bootstrap_password"
-        unset secret_key token bootstrap_password
-        echo "Adopted the running first-boot Authentik authority."
-      }
-
-      # Limit transient secret variables to the activation scope.
-      command_activate() (
-        set -Eeuo pipefail
-        local setup_activation="''${1:-false}"
-        acquire_lock
-        prompt_unlock
-
-        local local_stage root_stage previous transaction_dir runtime_base v2_systemd_state
-        local -a v2_start_units=()
-        local bootstrap_token_reused=false
-        local authentik_secret authentik_bootstrap_token authentik_bootstrap_password authentik_outpost_token
-        ${lib.optionalString cfg.vaultwarden.enable ''local vaultwarden_client_secret vaultwarden_admin_token vaultwarden_admin_hash''}
-        ${lib.optionalString cfg.observability.ntfy.enable ''local ntfy_password ntfy_hash ntfy_topic''}
-        local state_bundle_signing_key
-        sudo install -d -m 0711 -o root -g root /run/nas-secret-runtime/staging
-        runtime_base="/run/nas-secret-runtime/staging/$(id -u)"
-        sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" "$runtime_base"
-        if [[ ! -d "$runtime_base" || -L "$runtime_base" || "$(stat -c '%u' "$runtime_base")" != "$(id -u)" || "$((8#$(stat -c '%a' "$runtime_base") & 8#077))" -ne 0 ]]; then
-          echo "Refusing to stage secrets: a private user runtime directory is unavailable: $runtime_base ($(stat -c '%a:%u:%g' "$runtime_base" 2>/dev/null || echo missing))" >&2
-          exit 70
-        fi
-        local_stage="$(mktemp -d "$runtime_base/nas-secrets.XXXXXX")"
-        if [[ "$(stat -c '%a' "$local_stage")" != "700" ]]; then
-          echo "Refusing to stage secrets: temporary directory is not mode 0700." >&2
-          exit 70
-        fi
-        sudo install -d -m 0700 -o root -g root /run/nas-secret-runtime/transactions
-        transaction_dir="$(sudo mktemp -d /run/nas-secret-runtime/transactions/transaction.XXXXXX)"
-        root_stage="$transaction_dir/new"
-        previous="$transaction_dir/previous"
-
-        # Nix substitutes the immutable library store path.
-        # shellcheck disable=SC1091
-        source ${../../../scripts/lib/nas-secret-transaction.sh}
-        nas_secret_tx_init "$secret_root" "$root_stage" "$previous" nas-protected-services.target "$transaction_dir"
-
-        cleanup() {
-          local rc=$?
-          trap - EXIT HUP INT TERM
-          local transaction_cleanup_rc
-          rm -rf "$local_stage"
-          set +e
-          nas_secret_tx_cleanup "$rc"
-          transaction_cleanup_rc=$?
-          set -e
-          cleanup_password
-          if [[ "$transaction_cleanup_rc" -eq 125 ]]; then
-            echo "Secret activation failed and rollback was incomplete." >&2
-            exit 125
-          fi
-          exit "$rc"
-        }
-        trap cleanup EXIT
-        trap 'exit 129' HUP
-        trap 'exit 130' INT
-        trap 'exit 143' TERM
-
-        install -d -m 0700 "$local_stage"/{authentik,vaultwarden,zfs,observability,power,state}
-
-        local boot_authentik_dir=${lib.escapeShellArg bootstrapAuthentikDataDir}
-        local post_setup=false retire_boot_environment=false
-        if [[ "$setup_activation" != true ]] && sudo test -e /var/lib/nas-setup/state.json; then
-          post_setup=true
-        fi
-        # Setup adopted the first-boot key from a plaintext file that may also
-        # be in backups. Replace it in KeePass before that file is retired. A
-        # symlinked runtime environment means this boot still uses that file.
-        if $post_setup && sudo test -e "$boot_authentik_dir/environment" \
-          && ! sudo test -L ${lib.escapeShellArg authentikRuntimeEnvironmentFile}; then
-          local database_owner database_mode
-          database_owner="$(stat -c '%u:%g' "$database")"
-          database_mode="$(stat -c '%a' "$database")"
-          ensure_group
-          store_value authentik-secret-key "$(openssl rand -hex 64)"
-          # KeePassXC saves by replacing the file; a root activation must not
-          # take the database away from its administrator owner.
-          sudo chown -- "$database_owner" "$database"
-          sudo chmod -- "$database_mode" "$database"
-          retire_boot_environment=true
-          echo "Rotated the Authentik secret key held in KeePassXC; the first-boot copy will be removed."
-        fi
-
-        authentik_secret="$(get_secret authentik-secret-key)"
-        authentik_bootstrap_token="$(get_secret_optional authentik-bootstrap-token)"
-        authentik_bootstrap_password="$(get_secret_optional authentik-bootstrap-password)"
-        local authentik_api_token
-        authentik_api_token="$(get_secret authentik-api-token)"
-        authentik_outpost_token="$(get_secret_optional authentik-outpost-token)"
-        require_secret_hex "$authentik_secret" 128 "Authentik secret key"
-        require_secret_atom "$authentik_api_token" "Authentik API token" 20 4096
-        if [[ -n "$authentik_outpost_token" ]]; then
-          require_secret_atom "$authentik_outpost_token" "Authentik outpost token" 20 4096
-        fi
-        if [[ -n "$authentik_bootstrap_token" || -n "$authentik_bootstrap_password" ]]; then
-          require_secret_hex "$authentik_bootstrap_token" 64 "Authentik bootstrap token"
-          require_secret_atom "$authentik_bootstrap_password" "Authentik bootstrap password" 20 4096
-        fi
-        cat > "$local_stage/authentik/environment" <<AUTHENTIK_ENV
-AUTHENTIK_SECRET_KEY=$authentik_secret
-AUTHENTIK_ENV
-        if [[ -n "$authentik_bootstrap_token" ]]; then
-          cat >> "$local_stage/authentik/environment" <<AUTHENTIK_BOOTSTRAP_ENV
-AUTHENTIK_BOOTSTRAP_TOKEN=$authentik_bootstrap_token
-AUTHENTIK_BOOTSTRAP_PASSWORD=$authentik_bootstrap_password
-AUTHENTIK_BOOTSTRAP_EMAIL=${lib.escapeShellArg cfg.identity.bootstrapEmail}
-AUTHENTIK_BOOTSTRAP_ENV
-        fi
-        printf '%s' "$authentik_api_token" > "$local_stage/authentik/api-token"
-        if [[ -n "$authentik_outpost_token" ]]; then
-          printf '%s' "$authentik_outpost_token" > "$local_stage/authentik/outpost-token"
-        fi
-        if [[ -n "$authentik_bootstrap_token" ]]; then
-          printf '%s' "$authentik_bootstrap_token" > "$local_stage/authentik/bootstrap-token"
-        fi
-        state_bundle_signing_key="$(get_secret state-bundle-signing-key)"
-        require_secret_hex "$state_bundle_signing_key" 64 "State bundle signing key"
-        printf '%s' "$state_bundle_signing_key" > "$local_stage/state/bundle-signing-key"
-        if [[ -n "$authentik_bootstrap_token" && "$authentik_api_token" == "$authentik_bootstrap_token" ]]; then
-          bootstrap_token_reused=true
-          cat > "$local_stage/authentik-token-warning" <<'TOKEN_WARNING'
-The Authentik runtime API token is still the bootstrap token. Create a scoped service-account token, store it with `nas-secrets set-authentik-token`, and activate secrets again.
-TOKEN_WARNING
-          echo "WARNING: Authentik runtime API token is still the bootstrap token." >&2
-        fi
-
-        ${lib.optionalString (cfg.observability.enable && cfg.observability.grafana.enable) ''
-        grafana_secret="$(get_secret grafana-secret-key)"
-        require_secret_atom "$grafana_secret" "Grafana secret key" 20 4096
-        printf '%s' "$grafana_secret" > "$local_stage/observability/grafana-secret-key"
-        ''}
-        ${lib.optionalString cfg.observability.ntfy.enable ''
-        ntfy_password="$(get_secret ntfy-admin-password)"
-        ntfy_topic="$(get_secret ntfy-alert-topic)"
-        require_secret_atom "$ntfy_password" "ntfy administrator password" 20 4096
-        require_ntfy_topic "$ntfy_topic"
-        ntfy_hash="$(bcrypt_password admin "$ntfy_password")"
-        cat > "$local_stage/observability/ntfy-environment" <<NTFY_ENV
-NTFY_AUTH_USERS=admin:$ntfy_hash:admin
-NTFY_AUTH_DEFAULT_ACCESS=deny-all
-NTFY_ENABLE_LOGIN=true
-NTFY_ENV
-        printf '%s' "$ntfy_topic" > "$local_stage/observability/ntfy-topic"
-        printf '%s' "$ntfy_password" > "$local_stage/observability/ntfy-admin-password"
-        ''}
-        ${lib.optionalString (cfg.power.ups.enable && cfg.power.ups.web.enable) ''
-        printf '%s' "$(get_secret nut-webgui-server-key)" > "$local_stage/power/nut-webgui-server-key"
-        ''}
-        ${lib.optionalString cfg.zfsEncryption.enable ''
-        printf '%s' "$(get_secret zfs-dataset-key)" > "$local_stage/zfs/dataset-key"
-        ''}
-        ${lib.optionalString cfg.vaultwarden.enable ''
-        vaultwarden_client_secret="$(get_secret vaultwarden-oidc-client-secret)"
-        vaultwarden_admin_token="$(get_secret vaultwarden-admin)"
-        require_secret_atom "$vaultwarden_client_secret" "Vaultwarden OIDC client secret" 8 4096
-        require_secret_atom "$vaultwarden_admin_token" "Vaultwarden administrator token" 8 4096
-        vaultwarden_admin_hash="$(hash_password "$vaultwarden_admin_token")"
-        printf "ADMIN_TOKEN='%s'\nSSO_CLIENT_SECRET='%s'\n" "$vaultwarden_admin_hash" "$vaultwarden_client_secret" > "$local_stage/vaultwarden/environment"
-        ''}
-
-        find "$local_stage" -type f -exec chmod 0600 {} +
-        sudo -v
-        sudo install -d -m 0711 -o root -g root "$root_stage"
-        sudo install -d -m 0750 -o root -g authentik "$root_stage/authentik"
-        sudo install -d -m 0700 -o root -g root "$root_stage/state"
-        ${lib.optionalString cfg.vaultwarden.enable ''sudo install -d -m 0700 -o root -g root "$root_stage/vaultwarden"''}
-        ${lib.optionalString cfg.zfsEncryption.enable ''sudo install -d -m 0700 -o root -g root "$root_stage/zfs"''}
-        ${lib.optionalString (cfg.observability.enable || cfg.observability.ntfy.enable) ''sudo install -d -m 0750 -o root -g nas-observability "$root_stage/observability"''}
-        ${lib.optionalString (cfg.power.ups.enable && cfg.power.ups.web.enable) ''sudo install -d -m 0700 -o root -g root "$root_stage/power"''}
-
-        install_secret "$local_stage/authentik/environment" "$root_stage/authentik/environment" authentik authentik
-        install_secret "$local_stage/authentik/api-token" "$root_stage/authentik/api-token" root root
-        if [[ -n "$authentik_outpost_token" ]]; then
-          install_secret "$local_stage/authentik/outpost-token" "$root_stage/authentik/outpost-token" root root
-        fi
-        if [[ -n "$authentik_bootstrap_token" ]]; then
-          install_secret "$local_stage/authentik/bootstrap-token" "$root_stage/authentik/bootstrap-token" root root
-        fi
-        install_secret "$local_stage/state/bundle-signing-key" "$root_stage/state/bundle-signing-key" root root
-        if $bootstrap_token_reused; then
-          install_secret "$local_stage/authentik-token-warning" "$root_stage/authentik-token-warning" root root
-        fi
-        ${lib.optionalString cfg.vaultwarden.enable ''install_secret "$local_stage/vaultwarden/environment" "$root_stage/vaultwarden/environment" root root''}
-        ${lib.optionalString cfg.zfsEncryption.enable ''install_secret "$local_stage/zfs/dataset-key" "$root_stage/zfs/dataset-key" root root''}
-        ${lib.optionalString (cfg.observability.enable && cfg.observability.grafana.enable) ''install_secret "$local_stage/observability/grafana-secret-key" "$root_stage/observability/grafana-secret-key" grafana grafana''}
-        ${lib.optionalString cfg.observability.ntfy.enable ''
-        install_secret "$local_stage/observability/ntfy-environment" "$root_stage/observability/ntfy-environment" root root
-        install_secret "$local_stage/observability/ntfy-topic" "$root_stage/observability/ntfy-topic" nas-observability nas-observability
-        install_secret "$local_stage/observability/ntfy-admin-password" "$root_stage/observability/ntfy-admin-password" nas-observability nas-observability
-        ''}
-        ${lib.optionalString (cfg.power.ups.enable && cfg.power.ups.web.enable) ''install_secret "$local_stage/power/nut-webgui-server-key" "$root_stage/power/nut-webgui-server-key" root root''}
-        sudo install -m 0400 -o root -g root /dev/null "$root_stage/ready"
-
-        v2_systemd_state=/run/nas-control/systemd-reconciled.json
-        if sudo test -f "$v2_systemd_state"; then
-          if ! sudo ${pkgs.jq}/bin/jq -e '
-            .schemaVersion == 1 and
-            (.startUnits | type == "array") and
-            all(.startUnits[]; type == "string")
-          ' "$v2_systemd_state" >/dev/null; then
-            echo "Refusing to activate secrets: Managed Services V2 runtime state is malformed." >&2
-            exit 70
-          fi
-          mapfile -t v2_start_units < <(sudo ${pkgs.jq}/bin/jq -r '.startUnits[]' "$v2_systemd_state")
-          for gated_unit in "''${v2_start_units[@]}"; do
-            [[ "$gated_unit" =~ ^[A-Za-z0-9_.@:-]+\.(service|socket|timer|path|target|mount)$ ]] || {
-              echo "Refusing to activate secrets: invalid V2 unit name: $gated_unit" >&2
-              exit 70
-            }
-          done
-        fi
-
-        nas_secret_tx_swap
-        if $post_setup; then
-          sudo ln -sfn -- "$secret_root/authentik/environment" ${lib.escapeShellArg authentikUnlockedEnvironmentFile}
-        fi
-
-        sudo systemctl reset-failed \
-          postgresql.service postgresql-setup.service \
-          authentik-migrate.service authentik-worker.service authentik.service caddy.service
-        if [[ "$setup_activation" == true ]]; then
-          if ! sudo systemctl start postgresql.service \
-            || ! sudo systemctl start authentik-migrate.service \
-            || ! sudo systemctl start --job-mode=ignore-dependencies authentik.service \
-            || ! sudo systemctl start --job-mode=ignore-dependencies authentik-worker.service \
-            || ! sudo systemctl start --job-mode=ignore-dependencies caddy.service; then
-            echo "Setup identity services failed to start; inspect systemctl --failed." >&2
-            exit 71
-          fi
-        elif ! sudo systemctl try-restart authentik-worker.service authentik.service; then
-          echo "Authentik failed to restart with the KeePassXC environment; inspect systemctl --failed." >&2
-          exit 71
-        elif ! sudo systemctl start nas-protected-services.target; then
-          echo "Protected service target failed to start; inspect systemctl --failed." >&2
-          exit 71
-        else
-          # Target activation does not pull V2-owned units. Restore only units
-          # selected by the current V2 projection after their secret gates hold.
-          for gated_unit in "''${v2_start_units[@]}"; do
-            sudo systemctl start "$gated_unit" || exit 71
-          done
-        fi
-
-        for unit in authentik.service authentik-worker.service caddy.service; do
-          if sudo systemctl is-failed --quiet "$unit"; then
-            echo "Protected service entered the failed state: $unit" >&2
-            exit 72
-          fi
-        done
-
-        if timeout 90s curl --fail --silent --show-error \
-          --connect-timeout 1 --max-time 2 \
-          --retry 90 --retry-delay 1 --retry-connrefused --retry-all-errors \
-          http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}-/health/ready/ >/dev/null; then
-          :
-        else
-          readiness_status=$?
-          if sudo systemctl is-failed --quiet authentik.service; then
-            echo "Authentik failed while waiting for API readiness." >&2
-            exit 72
-          fi
-          if [[ "$readiness_status" -eq 124 ]]; then
-            echo "Authentik remained active but did not become API-ready within 90 seconds." >&2
-          else
-            echo "Authentik readiness probe failed with curl/timeout status $readiness_status." >&2
-          fi
-          exit 73
-        fi
-
-        for unit in authentik.service authentik-worker.service caddy.service; do
-          if ! sudo systemctl is-active --quiet "$unit"; then
-            echo "Protected service is not active after readiness validation: $unit" >&2
-            exit 74
-          fi
-        done
-
-        if [[ "$setup_activation" != true ]]; then
-          # Restarting Authentik stops its required outpost; the boot target
-          # does not pull that unit back in during runtime activation.
-          if ! sudo systemctl start nas-authentik-proxy-outpost.service; then
-            echo "Authentik proxy outpost failed to restart after activation." >&2
-            exit 71
-          fi
-        fi
-
-        nas_secret_tx_commit
-
-        if $post_setup; then
-          # Locked boots need only the least-privilege outpost token on disk;
-          # the superuser API token now resolves through the KeePass tree.
-          if [[ -n "$authentik_outpost_token" ]] \
-            && sudo install -m 0400 -o root -g root "$secret_root/authentik/outpost-token" "$boot_authentik_dir/outpost-token"; then
-            sudo rm -f -- "$boot_authentik_dir/api-token"
-            sudo ln -sfn -- "$boot_authentik_dir/outpost-token" ${lib.escapeShellArg authentikRuntimeOutpostTokenFile}
-            sudo ln -sfn -- ${lib.escapeShellArg authentikApiTokenFile} ${lib.escapeShellArg authentikRuntimeApiTokenFile}
-          else
-            echo "WARNING: the boot-side Authentik outpost token was not refreshed; browser unlock may be unavailable after reboot." >&2
-          fi
-          if $retire_boot_environment; then
-            sudo rm -f -- "$boot_authentik_dir/environment"
-          fi
-        fi
-        echo "Runtime service secrets activated. Authentik remains the identity source of truth."
-      )
-
-      command_status() {
-        [[ -f "$secret_root/ready" ]] && echo "Runtime secrets: active" || echo "Runtime secrets: inactive"
-        [[ -f "$database" ]] && echo "KeePassXC database: configured" || echo "KeePassXC database: missing"
-        systemctl is-active authentik.service 2>/dev/null || true
-        systemctl is-active nas-v2-timer-identity-sync-0.timer 2>/dev/null || true
-        if [[ -f "$secret_root/authentik-token-warning" ]]; then
-          echo "Authentik API token: WARNING — bootstrap token still in use"
-        else
-          echo "Authentik API token: scoped-token warning not present"
-        fi
-      }
-
-      command_stop() {
-        acquire_lock
-        # Path-triggered Caddy selection must see the locked state before
-        # stopping units can publish changes that trigger reconciliation.
-        sudo rm -f "$secret_root/ready"
-        sudo systemctl stop nas-protected-services.target
-        sudo rm -rf "$secret_root"
-        echo "Protected services stopped and runtime secrets removed. KeePassXC was not modified."
-      }
-
-      command_check_authentik_token() {
-        acquire_lock
-        prompt_unlock
-        local bootstrap api
-        api="$(get_secret authentik-api-token)"
-        if ! has_secret authentik-bootstrap-token; then
-          echo "Authentik bootstrap token is retired; runtime API token is separate."
-          return 0
-        fi
-        bootstrap="$(get_secret authentik-bootstrap-token)"
-        if [[ "$bootstrap" == "$api" ]]; then
-          echo "WARNING: Authentik runtime API token is still the bootstrap token." >&2
-          return 1
-        fi
-        echo "Authentik runtime API token differs from the bootstrap token."
-      }
-
-      command_set_authentik_token() {
-        acquire_lock
-        prompt_unlock
-        ensure_group
-        local token
-        read -r -s -p "Authentik API token: " token
-        echo
-        [[ "$token" =~ ^[A-Za-z0-9._~-]{20,}$ ]] || {
-          echo "Authentik API token format is invalid." >&2
-          exit 1
-        }
-        store_value authentik-api-token "$token"
-        unset token
-        echo "Authentik API token stored. Run nas-secrets activate to stage it."
-      }
-
-      command_set_authentik_token_stdin() {
-        acquire_lock
-        password_from_stdin=true
-        prompt_unlock
-        ensure_group
-        local token
-        IFS= read -r token || { echo "Unable to read the Authentik API token from standard input." >&2; exit 1; }
-        if IFS= read -r _; then
-          echo "Unexpected extra input while setting the Authentik API token." >&2
-          exit 1
-        fi
-        [[ "$token" =~ ^[A-Za-z0-9._~-]{20,}$ ]] || {
-          echo "Authentik API token format is invalid." >&2
-          exit 1
-        }
-        store_value authentik-api-token "$token"
-        unset token
-        echo "Authentik API token stored."
-      }
-
-      command_set_authentik_runtime_stdin() {
-        acquire_lock
-        password_from_stdin=true
-        prompt_unlock
-        ensure_group
-        local token outpost_token
-        IFS= read -r token || { echo "Unable to read the Authentik API token from standard input." >&2; exit 1; }
-        IFS= read -r outpost_token || { echo "Unable to read the Authentik outpost token from standard input." >&2; exit 1; }
-        if IFS= read -r _; then
-          echo "Unexpected extra input while setting the Authentik runtime tokens." >&2
-          exit 1
-        fi
-        [[ "$token" =~ ^[A-Za-z0-9._~-]{20,}$ ]] || { echo "Authentik API token format is invalid." >&2; exit 1; }
-        [[ "$outpost_token" =~ ^[A-Za-z0-9._~-]{20,}$ ]] || { echo "Authentik outpost token format is invalid." >&2; exit 1; }
-        store_value authentik-outpost-token "$outpost_token"
-        store_value authentik-api-token "$token"
-        unset token outpost_token
-        echo "Authentik runtime tokens stored."
-      }
-
-      command_retire_authentik_bootstrap_stdin() {
-        acquire_lock
-        password_from_stdin=true
-        prompt_unlock
-        remove_value authentik-bootstrap-token
-        remove_value authentik-bootstrap-password
-        echo "Authentik bootstrap credentials removed. Run nas-secrets activate to remove runtime artifacts."
-      }
-
-      command_show_ntfy_password() {
-        prompt_unlock
-        get_secret ntfy-admin-password
-        echo
-      }
-
-      command_show_zfs_key() {
-        prompt_unlock
-        get_secret zfs-dataset-key
-        echo >&2
-      }
-
-      command_show_zfs_key_stdin() {
-        password_from_stdin=true
-        prompt_unlock
-        if IFS= read -r _; then
-          echo "Unexpected extra input while showing the ZFS dataset key." >&2
-          exit 1
-        fi
-        get_secret zfs-dataset-key
-      }
-
-      command_show_authentik_bootstrap() {
-        prompt_unlock
-        printf 'Username: akadmin\nPassword: %s\n' "$(get_secret authentik-bootstrap-password)"
-      }
-
-      enter_operation_coordinator() {
-        case "''${1:-}" in
-          init|adopt-authentik-bootstrap-stdin|activate|activate-stdin|activate-setup-stdin|stop|set-authentik-token|set-authentik-token-stdin|set-authentik-runtime-stdin|retire-authentik-bootstrap-stdin)
-            local runner="''${NAS_OPERATION_RUNNER:-/run/current-system/sw/bin/nas-operation-run}"
-            [[ -x "$runner" ]] || {
-              echo "NAS operation coordinator is unavailable: $runner" >&2
-              exit 1
-            }
-            if [[ -n "''${NAS_OPERATION_COORDINATION_TOKEN:-}" ]]; then
-              "$runner" --validate-current --class secrets --class runtime || exit $?
-              return 0
-            fi
-            exec "$runner" --action "nas-secrets:''${1}" --class secrets --class runtime -- "$0" "$@"
-            ;;
-        esac
-      }
-
-      enter_operation_coordinator "$@"
-
-      case "''${1:-}" in
-        init) command_init ;;
-        adopt-authentik-bootstrap-stdin) command_adopt_authentik_bootstrap_stdin ;;
-        activate) command_activate ;;
-        activate-stdin)
-          password_from_stdin=true
-          command_activate
-          ;;
-        activate-setup-stdin)
-          password_from_stdin=true
-          command_activate true
-          ;;
-        status) command_status ;;
-        stop) command_stop ;;
-        set-authentik-token) command_set_authentik_token ;;
-        set-authentik-token-stdin) command_set_authentik_token_stdin ;;
-        set-authentik-runtime-stdin) command_set_authentik_runtime_stdin ;;
-        retire-authentik-bootstrap-stdin) command_retire_authentik_bootstrap_stdin ;;
-        check-authentik-token) command_check_authentik_token ;;
-        show-ntfy-password) command_show_ntfy_password ;;
-        show-zfs-key) command_show_zfs_key ;;
-        show-zfs-key-stdin) command_show_zfs_key_stdin ;;
-        show-authentik-bootstrap) command_show_authentik_bootstrap ;;
-        *)
-          echo "Usage: nas-secrets {init|adopt-authentik-bootstrap-stdin|activate|activate-stdin|status|stop|set-authentik-token|set-authentik-token-stdin|set-authentik-runtime-stdin|retire-authentik-bootstrap-stdin|check-authentik-token|show-ntfy-password|show-zfs-key|show-zfs-key-stdin|show-authentik-bootstrap}" >&2
-          exit 2
-          ;;
-      esac
+      exec ${nasKeepass}/bin/nas-keepass-setup "$@"
     '';
   };
 in
 {
-  inherit nasSecrets;
+  inherit nasKeepass nasKeepassSetup nasSecrets nasSecretsConfig;
 }

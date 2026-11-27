@@ -186,7 +186,7 @@ func (s *Session) Store(ctx context.Context, e Entry, value secret.Holder) error
 	}
 	payload := secret.Lines(s.pw, value)
 	defer payload.Destroy()
-	c := s.cli(sub, cmdexec.Word("-p"), s.db.Path, s.path(e)).WithStdin(payload).Stderr(cmdexec.Inherit)
+	c := s.cli(sub, cmdexec.Word("-p"), s.db.Path, s.path(e)).WithStdin(payload)
 	res, err := s.db.Runner.Run(ctx, c)
 	if err != nil {
 		return err
@@ -214,7 +214,7 @@ func (s *Session) Remove(ctx context.Context, e Entry) error {
 // Get returns the entry's protected password; empty values are errors.
 func (s *Session) Get(ctx context.Context, e Entry) (secret.Secret, error) {
 	c := s.cli("show", cmdexec.Word("--show-protected"), cmdexec.Word("-a"), cmdexec.Word("Password"), s.db.Path, s.path(e)).
-		WithStdin(secret.Lines(s.pw)).Stderr(cmdexec.Inherit)
+		WithStdin(secret.Lines(s.pw))
 	value, res, err := s.db.Runner.RunSecret(ctx, c)
 	if err != nil || !res.OK() {
 		value.Destroy()

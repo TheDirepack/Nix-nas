@@ -181,6 +181,9 @@ func stream(o Output, inherit *os.File, buf *bytes.Buffer) io.Writer {
 }
 
 func (r *OS) run(ctx context.Context, argv []string, stdin *secret.Payload, stdout, stderr Output, secretOut bool) (secret.Secret, Result, error) {
+	if stdin != nil {
+		defer stdin.Destroy()
+	}
 	path, err := exec.LookPath(argv[0])
 	if err != nil {
 		return secret.Secret{}, Result{Code: 127}, fmt.Errorf("%w %s: %w", ErrStart, argv[0], err)
@@ -190,6 +193,7 @@ func (r *OS) run(ctx context.Context, argv []string, stdin *secret.Payload, stdo
 	var outBuf, errBuf bytes.Buffer
 	if secretOut {
 		stdout = Capture
+		defer func() { clear(outBuf.Bytes()) }()
 	}
 	cmd.Stdout = stream(stdout, os.Stdout, &outBuf)
 	cmd.Stderr = stream(stderr, os.Stderr, &errBuf)
@@ -197,12 +201,14 @@ func (r *OS) run(ctx context.Context, argv []string, stdin *secret.Payload, stdo
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = Grace
 	var pipe *secret.StdinPipe
+	var readEnd *os.File
 	if stdin != nil {
 		w, rd, perr := secret.NewStdinPipe()
 		if perr != nil {
 			return secret.Secret{}, Result{Code: 127}, perr
 		}
 		pipe = w
+		readEnd = rd
 		cmd.Stdin = rd
 		defer func() { _ = rd.Close() }()
 	}
@@ -212,11 +218,20 @@ func (r *OS) run(ctx context.Context, argv []string, stdin *secret.Payload, stdo
 		}
 		return secret.Secret{}, Result{Code: 127}, fmt.Errorf("%w %s: %w", ErrStart, argv[0], err)
 	}
+	var fed chan struct{}
 	if pipe != nil {
-		// EPIPE from a child that exits early is judged by its exit status.
-		_ = stdin.Feed(pipe)
+		_ = readEnd.Close()
+		fed = make(chan struct{})
+		go func() {
+			defer close(fed)
+			_ = stdin.Feed(pipe)
+		}()
 	}
 	werr := cmd.Wait()
+	if fed != nil {
+		_ = pipe.Close()
+		<-fed
+	}
 	res := Result{Stderr: errBuf.Bytes()}
 	if !secretOut {
 		res.Stdout = outBuf.Bytes()

@@ -55,8 +55,16 @@ def binary(name: str, *, blackbox: bool = False) -> pathlib.Path:
         command = [go, "build", "-trimpath", "-o", str(output)]
         if blackbox:
             command += ["-tags", "nasblackbox"]
+        if os.environ.get("GOCOVERDIR"):
+            # scripts/go-coverage.py merges these with the unit profiles.
+            command += ["-cover", "-coverpkg=./..."]
         command.append(f"./cmd/{name}")
-        env = {**os.environ, "CGO_ENABLED": "0", "GOFLAGS": os.environ.get("GOFLAGS", "-mod=mod")}
+        env = {
+            **os.environ,
+            "CGO_ENABLED": "0",
+            "GOTOOLCHAIN": "local",
+            "GOFLAGS": os.environ.get("GOFLAGS", "-mod=mod"),
+        }
         result = subprocess.run(command, cwd=MODULE, env=env, capture_output=True, text=True, check=False, timeout=600)
         if result.returncode != 0:
             raise AssertionError(f"go build {name} failed:\n{result.stderr}")

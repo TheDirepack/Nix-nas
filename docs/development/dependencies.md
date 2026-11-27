@@ -282,3 +282,7 @@ Keep the revision immutable so CI exercises the same old-to-new transition.
 The shared test declaration lives in `tests/vm/package-upgrade-baseline.sh`.
 Install and initialize that baseline before promoting to the reviewed lock;
 downgrading an already-migrated native database is not an upgrade rehearsal.
+
+## KeePass Go module
+
+The development toolchain is Go 1.27. The appliance's locked nixpkgs input currently provides Go 1.26, so the module retains Go 1.26 language compatibility for `buildGoModule`. Refresh the fixed output hash with `scripts/go-vendor-hash.py` after updating `go.mod` or `go.sum`. The Go libraries are pinned in those files. The KDBX format and command behavior remain owned by the packaged KeePassXC CLI.

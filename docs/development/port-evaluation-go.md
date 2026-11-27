@@ -1,0 +1,7 @@
+# KeePass port evaluation
+
+Go's private fields and constructors separate validated passwords, Unix socket paths, and authorized browser sessions from raw input. Secret types redact their formatting and serialization and expose dedicated sinks for child stdin and private runtime files. The command builder rejects a secret as an argv element and provides a separate sudo path without payload stdin. The staged transaction has no commit method. A successful swap yields the handle that can run readiness checks and commit or roll back. Compile-fail tests cover these constraints, and the exhaustive analyzer checks outcome switches.
+
+Go permits zero values and copied handles. Runtime guards still enforce transaction consumption and protect against reuse of a pre-transition handle. Clearing owned buffers reduces the lifetime of secret data. Copies inside the Go runtime, kernel, JSON parsing, Python setup, and KeePassXC have their own lifetimes. Filesystem races, service state, socket peer identity, and rollback across process boundaries still require behavior tests.
+
+The production Go sources total about 5,400 lines, with about 1,400 additional lines of Go tests. The stripped Linux amd64 builds measured with Go 1.27.4, `CGO_ENABLED=0`, `-trimpath`, and `-ldflags='-s -w'` were 3,846,304 bytes for `nas-keepass-setup`, 7,762,080 bytes for `nas-secrets`, and 7,409,824 bytes for `nas-unlock-api`. These measurements cover standalone Go executables. The Nix wrappers and dependency closures are additional.

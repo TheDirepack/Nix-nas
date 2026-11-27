@@ -68,7 +68,9 @@ class RuntimeActivationTests(Base):
         self.assertLess(rotate, log(f"chown -- {os.getuid()}:{os.getgid()} {self.app.database}"))
         self.assertLess(rotate, log(f"chmod -- 0640 {self.app.database}"))
         swap = log(f"mv -T -- {self.app.runtime}/transactions")
-        link = log(f"ln -sfn -- {self.app.secret_root}/authentik/environment {self.app.authentik_run}/unlocked-environment")
+        link = log(
+            f"ln -sfn -- {self.app.secret_root}/authentik/environment {self.app.authentik_run}/unlocked-environment"
+        )
         restart = log("systemctl try-restart authentik-worker.service authentik.service")
         target = log("systemctl start nas-protected-services.target")
         outpost = log("systemctl start nas-authentik-proxy-outpost.service")
@@ -150,6 +152,33 @@ class RuntimeActivationTests(Base):
         failed_start = self.app.index("systemctl start nas-protected-services.target")
         restore = self.app.index("mv -T --", start=failed_start)
         self.assertLess(restore, self.app.index("systemctl start nas-protected-services.target", start=restore))
+        self.assertEqual(list((self.app.runtime / "transactions").iterdir()), [])
+
+    def test_termination_after_swap_restores_the_prior_tree(self) -> None:
+        self.app.seed_live_tree()
+        self.app.activate_target()
+        self.app.ready_server.httpd.ready = False  # type: ignore[attr-defined]
+        process = subprocess.Popen(
+            [str(binary("nas-secrets")), "activate-stdin"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=self.app.env(),
+            text=True,
+        )
+        assert process.stdin is not None
+        process.stdin.write(KEEPASS + "\n")
+        process.stdin.close()
+        deadline = time.monotonic() + 30
+        while not any("is-failed --quiet caddy.service" in line for line in self.app.log()):
+            self.assertLess(time.monotonic(), deadline, "activation never reached the readiness wait")
+            time.sleep(0.05)
+        self.assertFalse((self.app.secret_root / "old-marker").exists(), "the new tree is live while waiting")
+        process.terminate()
+        _, stderr = process.communicate(timeout=60)
+        self.assertEqual(process.returncode, 143, stderr)
+        self.assertTrue((self.app.secret_root / "old-marker").exists())
+        self.assertTrue((self.app.state / "target-active").exists(), "the prior consumers are restarted")
         self.assertEqual(list((self.app.runtime / "transactions").iterdir()), [])
 
     def test_readiness_and_unit_state_failures_have_distinct_statuses(self) -> None:
@@ -248,7 +277,9 @@ class OptionalConsumerTests(Base):
         ntfy = (self.app.secret_root / "observability/ntfy-environment").read_text(encoding="utf-8")
         self.assertRegex(ntfy, r"^NTFY_AUTH_USERS=admin:\$2a\$12\$[./A-Za-z0-9]{53}:admin\n")
         vault = (self.app.secret_root / "vaultwarden/environment").read_text(encoding="utf-8")
-        self.assertRegex(vault, r"^ADMIN_TOKEN='\$argon2id\$v=19\$m=65536,t=3,p=4\$[^']+'\nSSO_CLIENT_SECRET='client-secret-01'\n$")
+        self.assertRegex(
+            vault, r"^ADMIN_TOKEN='\$argon2id\$v=19\$m=65536,t=3,p=4\$[^']+'\nSSO_CLIENT_SECRET='client-secret-01'\n$"
+        )
         self.assertEqual((self.app.secret_root / "power/nut-webgui-server-key").read_text(), "nut-key")
         for key, value in (("ntfy-alert-topic", "topic/../../admin"), ("vaultwarden-admin", "bad'quote-value")):
             with self.subTest(key=key):

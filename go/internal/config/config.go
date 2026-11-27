@@ -55,7 +55,9 @@ type Features struct {
 // Email is a bootstrap address that renders safely inside single quotes.
 type Email struct{ s string }
 
-var emailPattern = regexp.MustCompile(`^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$`)
+// emailPattern is the Nix option's shape minus quotes and backslashes, so
+// the value renders safely inside single quotes.
+var emailPattern = regexp.MustCompile(`^[^\s@'"\\\x00-\x1f\x7f]+@[^\s@'"\\\x00-\x1f\x7f]+$`)
 
 func (e Email) String() string { return e.s }
 

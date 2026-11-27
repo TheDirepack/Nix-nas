@@ -83,10 +83,16 @@ offline error format.
 - `cockpit/src/app.scss`: NAS-specific layout only; PatternFly owns component styling.
 - `cockpit/build.js`: Starter Kit style esbuild/Sass source-to-package build and source-hash stale-output check.
 - `cockpit/dist/`: generated React/PatternFly package payload installed by Nix; never edit it directly.
-- `web/unlock/` and `services/nas_unlock_api.py`: the `nas_admin`-gated browser unlock page and its root Unix-socket backend, which feeds `nas-secrets activate-stdin`.
+- `web/unlock/`, `go/cmd/nas-unlock-api/` and `go/internal/unlockapi/`: the `nas_admin`-gated browser unlock page and its root Unix-socket backend, which feeds `nas-secrets activate-stdin`.
 - `web/locked/`: the static notice Caddy serves when the locked sign-in layer is unavailable.
 
 Pure Cockpit API and view-model behavior has direct Node coverage. JSX component composition is checked structurally and through the built browser package in CI.
+
+## KeePass control plane
+
+- `go/cmd/nas-secrets/`, `go/internal/nassecrets/` and `go/internal/txn/` own secret activation, protected-stack restart, and rollback.
+- `go/cmd/nas-keepass-setup/` and `go/internal/setupkp/` own KDBX verification and creation. The Go secret package owns strength checks and scrypt verification, including the legacy migration check called by the Python setup worker.
+- `modules/nas/internal/secret-tools.nix` packages the three commands and generates the activation configuration from Nix options.
 
 ## Validation
 

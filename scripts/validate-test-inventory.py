@@ -20,6 +20,9 @@ INVENTORIES = (
 # installed-executable inventory.
 NON_RUNTIME_REPOSITORY_EXECUTABLES = {
     "scripts/evaluate-reference-configurations.sh",
+    "scripts/go-check.sh",
+    "scripts/go-coverage.py",
+    "scripts/go-vendor-hash.py",
     "scripts/lib/manifest.py",
     "scripts/lib/nas-vm-cleanup.sh",
     "scripts/lib/nas-vm-js-deps.sh",
@@ -124,6 +127,16 @@ def nix_commands() -> dict[str, set[str]]:
     return commands
 
 
+def go_commands() -> dict[str, set[str]]:
+    commands: dict[str, set[str]] = {}
+    for command in sorted(path for path in (ROOT / "go" / "cmd").iterdir() if path.is_dir()):
+        sources = {
+            path.relative_to(ROOT).as_posix() for path in command.glob("*.go") if not path.name.endswith("_test.go")
+        }
+        commands[command.name] = sources
+    return commands
+
+
 def repository_executables() -> dict[str, set[str]]:
     commands: dict[str, set[str]] = {}
     roots = (ROOT / "scripts",)
@@ -152,10 +165,10 @@ def main() -> int:
     assert isinstance(entries, dict)
     assert isinstance(python_modules, dict)
     discovered: dict[str, set[str]] = {}
-    for source in (pyproject_commands(), nix_commands(), repository_executables()):
+    for source in (pyproject_commands(), nix_commands(), go_commands(), repository_executables()):
         for name, paths in source.items():
             discovered.setdefault(name, set()).update(paths)
-    installed_commands = set(pyproject_commands()) | set(nix_commands())
+    installed_commands = set(pyproject_commands()) | set(nix_commands()) | set(go_commands())
     source_commands = set(repository_executables())
     missing = sorted(set(discovered) - set(entries))
     stale = sorted(set(entries) - set(discovered))
