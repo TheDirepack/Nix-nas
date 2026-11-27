@@ -1,4 +1,9 @@
-"""Browser unlock API: authorization, input contract, throttling, and rollback recovery."""
+"""Browser unlock API black-box tests against the Go nas-unlock-api binary.
+
+Authorization, the body contract, throttling and rollback recovery are
+exercised over the real Unix socket. Unit-level throttle, origin and body
+parsing tests live in go/internal/unlockapi.
+"""
 
 from __future__ import annotations
 
@@ -7,20 +12,17 @@ import json
 import os
 import pathlib
 import socket
-import sys
+import subprocess
 import tempfile
-import threading
+import time
 import unittest
-from unittest import mock
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "services"))
-
-import nas_unlock_api as unlock  # noqa: E402
+from tests.go_binaries import binary
 
 PASSWORD = "correct horse battery staple"
 HOST = "nas.local:8443"
 ORIGIN = "https://nas.local:8443"
+MAX_BODY_BYTES = 8192
 
 
 class UnixHTTPConnection(http.client.HTTPConnection):
@@ -50,6 +52,7 @@ class Fixture:
             f'IFS= read -r line; printf "%s\\n" "$line" >> "{self.stdin}"\n'
             f'if [ "$line" = "{PASSWORD}" ]; then : > "{self.ready}"; exit 0; fi\n'
             'if [ "$line" = "explode" ]; then echo "Protected service target failed to start" >&2; exit 71; fi\n'
+            'if [ "$line" = "slow down" ]; then trap \'echo rolled-back >&2; exit 143\' TERM; sleep 30 >/dev/null 2>&1 & wait; fi\n'
             'echo "Unable to unlock the KeePassXC database." >&2\n'
             "exit 1\n",
             encoding="utf-8",
@@ -59,40 +62,66 @@ class Fixture:
         for tool in (self.secrets, self.systemctl):
             tool.chmod(0o755)
 
+    def env(self) -> dict[str, str]:
+        return {
+            **os.environ,
+            "NAS_SECRET_READY": str(self.ready),
+            "NAS_SETUP_STATE": str(self.state),
+            "NAS_SECRETS_BIN": str(self.secrets),
+            "NAS_SYSTEMCTL": str(self.systemctl),
+            "NAS_CADDY_GROUP": "",
+        }
+
     def log(self) -> list[str]:
         return self.calls.read_text(encoding="utf-8").splitlines() if self.calls.exists() else []
 
 
+def start_server(
+    test: unittest.TestCase, fixture: Fixture, socket_path: pathlib.Path, *, uid: int, extra: list[str] | None = None
+) -> subprocess.Popen[bytes]:
+    process = subprocess.Popen(
+        [
+            str(binary("nas-unlock-api", blackbox=True)),
+            "--socket-path",
+            str(socket_path),
+            "--test-allow-peer-uid",
+            str(uid),
+            *(extra or []),
+        ],
+        env=fixture.env(),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+
+    def stop() -> None:
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        if process.stderr is not None:
+            process.stderr.close()
+
+    test.addCleanup(stop)
+    deadline = time.monotonic() + 10
+    while not socket_path.exists():
+        if process.poll() is not None or time.monotonic() > deadline:
+            raise AssertionError("nas-unlock-api did not start")
+        time.sleep(0.02)
+    return process
+
+
 class UnlockApiTests(unittest.TestCase):
+    extra: list[str] | None = None
+
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.fixture = Fixture(pathlib.Path(temporary.name))
-        for name, value in (
-            ("SECRET_READY", self.fixture.ready),
-            ("SETUP_STATE", self.fixture.state),
-            ("NAS_SECRETS_BIN", str(self.fixture.secrets)),
-            ("SYSTEMCTL_BIN", str(self.fixture.systemctl)),
-        ):
-            patcher = mock.patch.object(unlock, name, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        syslog_patch = mock.patch.object(unlock.syslog, "syslog")
-        syslog_patch.start()
-        self.addCleanup(syslog_patch.stop)
-        self.socket_path = str(self.fixture.root / "unlock.sock")
-        self.start_server({os.geteuid()})
-
-    def start_server(self, allowed: set[int]) -> None:
-        self.server = unlock.bind(pathlib.Path(self.socket_path), allowed)
-        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        thread.start()
-
-        def stop() -> None:
-            self.server.shutdown()
-            self.server.server_close()
-
-        self.addCleanup(stop)
+        self.socket_path = self.fixture.root / "unlock.sock"
+        self.process = start_server(self, self.fixture, self.socket_path, uid=os.geteuid(), extra=self.extra)
 
     def request(
         self,
@@ -103,7 +132,7 @@ class UnlockApiTests(unittest.TestCase):
         headers: dict[str, str | None] | None = None,
         raw: bytes | None = None,
     ) -> tuple[int, dict[str, object], http.client.HTTPResponse]:
-        connection = UnixHTTPConnection(self.socket_path)
+        connection = UnixHTTPConnection(str(self.socket_path))
         default: dict[str, str | None] = {
             "Host": HOST,
             "Origin": ORIGIN,
@@ -122,9 +151,10 @@ class UnlockApiTests(unittest.TestCase):
         return response.status, json.loads(data or b"{}"), response
 
     def test_status_reports_locked_state(self) -> None:
-        status, body, _ = self.request("GET", "/unlock/api/status")
+        status, body, response = self.request("GET", "/unlock/api/status")
         self.assertEqual(status, 200)
         self.assertEqual(body, {"busy": False, "locked": True, "retryAfterSeconds": 0, "setupComplete": True})
+        self.assertEqual(response.getheader("Cache-Control"), "no-store")
 
     def test_correct_password_unlocks_and_travels_only_on_stdin(self) -> None:
         status, body, _ = self.request("POST", "/unlock/api/activate", {"password": PASSWORD})
@@ -147,6 +177,7 @@ class UnlockApiTests(unittest.TestCase):
         status, body, _ = self.request("POST", "/unlock/api/activate", {"password": "explode"})
         self.assertEqual(status, 500)
         self.assertIn("rolled back", str(body["error"]))
+        self.assertIn("status 71", str(body["error"]))
         self.assertNotIn("Protected service target", str(body["error"]))
 
     def test_failures_back_off(self) -> None:
@@ -156,6 +187,8 @@ class UnlockApiTests(unittest.TestCase):
         self.assertGreater(int(response.getheader("Retry-After") or 0), 0)
         self.assertFalse(self.fixture.ready.exists())
         self.assertEqual(self.fixture.log().count("nas-secrets activate-stdin"), 1)
+        status, body, _ = self.request("GET", "/unlock/api/status")
+        self.assertGreater(int(str(body["retryAfterSeconds"])), 0)
 
     def test_requires_nas_admin_group(self) -> None:
         for groups in ("users", "nas_administrators", "", None):
@@ -164,6 +197,8 @@ class UnlockApiTests(unittest.TestCase):
                     "POST", "/unlock/api/activate", {"password": PASSWORD}, headers={"Remote-Groups": groups}
                 )
                 self.assertEqual(status, 403)
+        status, _, _ = self.request("POST", "/unlock/api/activate", {"password": PASSWORD}, headers={"Remote-User": ""})
+        self.assertEqual(status, 403)
         self.assertEqual(self.fixture.log(), [])
 
     def test_requires_same_origin(self) -> None:
@@ -183,6 +218,8 @@ class UnlockApiTests(unittest.TestCase):
             ({}, json.dumps({"password": ""}).encode(), 400),
             ({}, json.dumps({"password": "a\nb"}).encode(), 400),
             ({}, json.dumps({"password": "x" * 5000}).encode(), 400),
+            ({}, json.dumps({"password": 7}).encode(), 400),
+            ({}, json.dumps(["password"]).encode(), 400),
         ]
         for headers, raw, expected in cases:
             with self.subTest(expected=expected, raw=raw[:30]):
@@ -190,11 +227,34 @@ class UnlockApiTests(unittest.TestCase):
                 self.assertEqual(status, expected)
         self.assertEqual(self.fixture.log(), [])
 
+    def test_missing_content_length_and_chunked_bodies_are_refused(self) -> None:
+        connection = UnixHTTPConnection(str(self.socket_path))
+        connection.putrequest("POST", "/unlock/api/activate", skip_host=True)
+        for name, value in (
+            ("Host", HOST),
+            ("Origin", ORIGIN),
+            ("Remote-User", "alice"),
+            ("Remote-Groups", "nas_admin"),
+            ("Content-Type", "application/json"),
+        ):
+            connection.putheader(name, value)
+        connection.endheaders()
+        self.assertEqual(connection.getresponse().status, 411)
+        connection.close()
+        status, _, _ = self.request(
+            "POST",
+            "/unlock/api/activate",
+            headers={"Transfer-Encoding": "chunked"},
+            raw=b"",
+        )
+        self.assertIn(status, (400, 411))
+        self.assertEqual(self.fixture.log(), [])
+
     def test_oversized_body_is_refused_without_being_read(self) -> None:
         # The server answers before draining the body, so the client may see
         # the 413 or a reset while it is still sending.
         try:
-            status, _, _ = self.request("POST", "/unlock/api/activate", raw=b"x" * (unlock.MAX_BODY_BYTES + 1))
+            status, _, _ = self.request("POST", "/unlock/api/activate", raw=b"x" * (MAX_BODY_BYTES + 1))
         except (BrokenPipeError, ConnectionResetError):
             status = 413
         self.assertEqual(status, 413)
@@ -210,117 +270,83 @@ class UnlockApiTests(unittest.TestCase):
         self.assertEqual((status, body), (200, {"locked": False, "unlocked": True}))
         self.assertEqual(self.fixture.log(), [])
 
+    def test_failure_after_unlock_skips_locked_identity_restore(self) -> None:
+        self.fixture.ready.write_text("", encoding="utf-8")
+        status, _, _ = self.request("POST", "/unlock/api/activate", {"password": "explode"})
+        self.assertEqual(status, 200, "an unlocked appliance answers idempotently without activation")
+        self.assertEqual(self.fixture.log(), [])
+
     def test_unknown_paths_are_not_found(self) -> None:
         self.assertEqual(self.request("GET", "/unlock/api/other")[0], 404)
         self.assertEqual(self.request("POST", "/unlock/api/status", {"password": PASSWORD})[0], 404)
+        self.assertEqual(self.request("GET", "/unlock/api/activate")[0], 404)
+
+    def test_socket_mode_is_group_shared(self) -> None:
+        self.assertEqual(self.socket_path.stat().st_mode & 0o777, 0o660)
+
+
+class ActivationTimeoutTests(UnlockApiTests):
+    extra = ["--test-activation-timeout", "1s"]
+
+    def test_activation_timeout_is_reported_and_rollback_is_signalled(self) -> None:
+        started = time.monotonic()
+        status, body, _ = self.request("POST", "/unlock/api/activate", {"password": "slow down"})
+        self.assertEqual(status, 504, body)
+        self.assertLess(time.monotonic() - started, 9, "SIGTERM must reach nas-secrets so it can roll back")
+        self.assertIn(
+            "systemctl start authentik-worker.service authentik.service nas-authentik-proxy-outpost.service",
+            self.fixture.log(),
+        )
 
 
 class PeerTests(unittest.TestCase):
     def test_unlisted_peer_is_disconnected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
-            path = pathlib.Path(raw) / "unlock.sock"
-            server = unlock.bind(path, {os.geteuid() + 1})
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            try:
-                connection = UnixHTTPConnection(str(path))
-                with self.assertRaises((http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError)):
-                    connection.request("GET", "/unlock/api/status")
-                    connection.getresponse()
-            finally:
-                server.shutdown()
-                server.server_close()
+            fixture = Fixture(pathlib.Path(raw))
+            path = fixture.root / "unlock.sock"
+            start_server(self, fixture, path, uid=os.geteuid() + 1)
+            connection = UnixHTTPConnection(str(path))
+            with self.assertRaises((http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError)):
+                connection.request("GET", "/unlock/api/status")
+                connection.getresponse()
 
 
-class ThrottleTests(unittest.TestCase):
-    def test_backoff_doubles_and_resets(self) -> None:
-        now = [100.0]
-        throttle = unlock.UnlockThrottle(clock=lambda: now[0])
-        throttle.acquire()
-        with self.assertRaises(unlock.UnlockError) as busy:
-            throttle.acquire()
-        self.assertEqual(busy.exception.status, 409)
-        throttle.release(succeeded=False)
-        self.assertEqual(throttle.retry_after(), unlock.FAILURE_BACKOFF_BASE_SECONDS)
-        now[0] += unlock.FAILURE_BACKOFF_BASE_SECONDS
-        throttle.acquire()
-        throttle.release(succeeded=False)
-        self.assertEqual(throttle.retry_after(), 2 * unlock.FAILURE_BACKOFF_BASE_SECONDS)
-        now[0] += 10_000
-        for _ in range(20):
-            throttle.acquire()
-            throttle.release(succeeded=False)
-            now[0] += unlock.FAILURE_BACKOFF_MAX_SECONDS
-        self.assertLessEqual(throttle.retry_after(), unlock.FAILURE_BACKOFF_MAX_SECONDS)
-        throttle.acquire()
-        throttle.release(succeeded=True)
-        self.assertEqual(throttle.retry_after(), 0)
-
-    def test_group_header_parsing(self) -> None:
-        self.assertTrue(unlock.groups_include_admin("users|nas_admin"))
-        self.assertTrue(unlock.groups_include_admin("nas_admin, users"))
-        self.assertFalse(unlock.groups_include_admin("nas_admins|users"))
-        self.assertFalse(unlock.groups_include_admin(""))
-
-
-class HelperTests(unittest.TestCase):
-    def test_activation_timeout_is_reported(self) -> None:
-        with mock.patch.object(unlock.subprocess, "run", side_effect=unlock.subprocess.TimeoutExpired("x", 1)):
-            with mock.patch.object(unlock.syslog, "syslog"):
-                with self.assertRaises(unlock.UnlockError) as raised:
-                    unlock.activate(PASSWORD)
-        self.assertEqual(raised.exception.status, 504)
-
-    def test_restore_is_skipped_once_unlocked(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            ready = pathlib.Path(raw) / "ready"
-            ready.write_text("", encoding="utf-8")
-            with mock.patch.object(unlock, "SECRET_READY", ready), mock.patch.object(unlock.subprocess, "run") as run:
-                unlock.restore_locked_identity()
-            run.assert_not_called()
-
-    def test_caddy_uids_fall_back_to_root(self) -> None:
-        with mock.patch.dict(os.environ, {"NAS_CADDY_USER": "nas-unlock-test-missing-user"}):
-            self.assertEqual(unlock.caddy_uids(), {0})
-        with mock.patch.dict(os.environ, {"NAS_CADDY_USER": "root"}):
-            self.assertEqual(unlock.caddy_uids(), {0})
-
-    def test_serve_rejects_relative_socket_path(self) -> None:
+class StartupTests(unittest.TestCase):
+    def test_serve_rejects_relative_or_dot_dot_socket_path(self) -> None:
         for path in ("relative.sock", "/run/../tmp/unlock.sock"):
-            with self.subTest(path=path), mock.patch("sys.stderr"):
-                self.assertEqual(unlock.serve(pathlib.Path(path)), 1)
+            with self.subTest(path=path):
+                result = subprocess.run(
+                    [str(binary("nas-unlock-api", blackbox=True)), "--socket-path", path],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("absolute socket path", result.stderr)
 
-    def test_serve_sets_socket_mode_and_closes(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            path = pathlib.Path(raw) / "unlock.sock"
-            seen: list[int] = []
+    @unittest.skipIf(os.geteuid() == 0, "the root check needs an unprivileged caller")
+    def test_production_build_requires_root(self) -> None:
+        result = subprocess.run(
+            [str(binary("nas-unlock-api")), "--socket-path", "/run/nas-unlock/unlock.sock"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("must run as root", result.stderr)
 
-            def stop(server: unlock.UnlockServer) -> None:
-                seen.append(path.stat().st_mode & 0o777)
-                raise KeyboardInterrupt
-
-            with (
-                mock.patch.dict(os.environ, {"NAS_CADDY_GROUP": ""}),
-                mock.patch.object(unlock.UnlockServer, "serve_forever", stop),
-                mock.patch.object(unlock.syslog, "syslog"),
-            ):
-                self.assertEqual(unlock.serve(path), 0)
-            self.assertEqual(seen, [0o660])
-
-    def test_main_requires_root(self) -> None:
-        with (
-            mock.patch.object(unlock.os, "geteuid", return_value=1000),
-            mock.patch.object(unlock.syslog, "openlog"),
-            mock.patch("sys.stderr"),
-        ):
-            self.assertEqual(unlock.main(["--socket-path", "/run/nas-unlock/unlock.sock"]), 1)
-        with (
-            mock.patch.object(unlock.os, "geteuid", return_value=0),
-            mock.patch.object(unlock.syslog, "openlog"),
-            mock.patch.object(unlock, "serve", return_value=0) as serve,
-        ):
-            self.assertEqual(unlock.main(["--socket-path", "/run/nas-unlock/unlock.sock"]), 0)
-        serve.assert_called_once_with(pathlib.Path("/run/nas-unlock/unlock.sock"))
+    def test_production_build_has_no_test_flags(self) -> None:
+        result = subprocess.run(
+            [str(binary("nas-unlock-api")), "--test-allow-peer-uid", "0", "--socket-path", "/x"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("flag provided but not defined", result.stderr)
 
 
 if __name__ == "__main__":
