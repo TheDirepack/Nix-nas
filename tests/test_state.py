@@ -27,6 +27,249 @@ SPEC.loader.exec_module(state)
 
 
 class StateBundleTests(unittest.TestCase):
+    def seed_recovery(self, status="manual-recovery-required"):
+        state.secure_rollback_root()
+        rollback = state.DEFAULT_ROLLBACK_ROOT / "rollback-needed.tar.gz"
+        rollback.write_bytes(b"recovery evidence")
+        os.utime(rollback, (1, 1))
+        record = {
+            "schemaVersion": 1,
+            "workflow": "state-restore",
+            "status": status,
+            "restoreId": "a" * 24,
+            "rollbackBundle": str(rollback),
+            "unitSnapshot": {"app.service": True},
+            "primaryError": "original failure",
+        }
+        state.atomic_write_json(state.RESTORE_JOURNAL, record)
+        return rollback, state.RESTORE_JOURNAL.read_bytes()
+
+    def test_rejected_restore_preserves_unresolved_evidence(self):
+        root = pathlib.Path(self.temporary.name)
+        public = root / "public"
+        public.write_text("saved")
+        registry = self.registry(public, root / "secret", root / "missing")
+        bundle = root / "bundle.tar.gz"
+        with mock.patch.dict(os.environ, self.environment(registry)):
+            state.export_bundle(bundle, include_sensitive=False)
+            for phase in (
+                "manual-recovery-required",
+                "preparing",
+                "capturing-rollback",
+                "rollback-captured",
+                "quiescing",
+                "quiesced",
+                "state-applied",
+                "rolling-back",
+                "unknown-future-phase",
+            ):
+                for candidate, host in (
+                    (bundle, socket.gethostname()),
+                    (bundle, "wrong-host"),
+                    (root / "missing.tar.gz", socket.gethostname()),
+                ):
+                    with self.subTest(phase=phase, candidate=candidate, host=host):
+                        rollback, evidence = self.seed_recovery(phase)
+                        with self.assertRaises(state.StateError):
+                            state.restore_bundle(
+                                candidate, confirm_host=host, allow_partial=False, include_sensitive=False
+                            )
+                        self.assertEqual(state.RESTORE_JOURNAL.read_bytes(), evidence)
+                        self.assertTrue(rollback.exists())
+
+    def test_pruning_pins_unresolved_recovery_even_beyond_age_and_count(self):
+        for phase in (
+            "manual-recovery-required",
+            "preparing",
+            "capturing-rollback",
+            "rollback-captured",
+            "quiescing",
+            "quiesced",
+            "state-applied",
+            "rolling-back",
+            "unknown-future-phase",
+        ):
+            with self.subTest(phase=phase):
+                rollback, evidence = self.seed_recovery(phase)
+                expendable = state.DEFAULT_ROLLBACK_ROOT / "rollback-expendable.tar.gz"
+                expendable.write_bytes(b"old")
+                with mock.patch.object(state, "ROLLBACK_RETAIN_COUNT", 0):
+                    state.prune_rollbacks()
+                self.assertTrue(rollback.exists())
+                self.assertFalse(expendable.exists())
+                self.assertEqual(state.RESTORE_JOURNAL.read_bytes(), evidence)
+
+    def test_corrupt_or_unrecognized_schema_blocks_restore_and_pruning(self):
+        for value in (b"{broken", b"[]", b'{"schemaVersion":2}', b'{"status":"unknown"}'):
+            rollback, _ = self.seed_recovery()
+            state.RESTORE_JOURNAL.write_bytes(value)
+            with mock.patch.object(state, "ROLLBACK_RETAIN_COUNT", 0):
+                with self.assertRaises(state.StateError):
+                    state.prune_rollbacks()
+            with mock.patch.object(state, "require_root"):
+                with self.assertRaises(state.StateError):
+                    state.restore_bundle(
+                        pathlib.Path("missing"),
+                        confirm_host=socket.gethostname(),
+                        allow_partial=False,
+                        include_sensitive=False,
+                    )
+            self.assertTrue(rollback.exists())
+            self.assertEqual(state.RESTORE_JOURNAL.read_bytes(), value)
+
+    def test_acknowledgement_archives_evidence_and_allows_new_restore(self):
+        rollback, evidence = self.seed_recovery()
+        with mock.patch.object(state, "require_root"):
+            for restore_id, host in (("wrong", socket.gethostname()), ("a" * 24, "wrong")):
+                with self.assertRaises(state.StateError):
+                    state.acknowledge_restore_recovery(restore_id, confirm_host=host)
+                self.assertEqual(state.RESTORE_JOURNAL.read_bytes(), evidence)
+            result = state.acknowledge_restore_recovery("a" * 24, confirm_host=socket.gethostname())
+        self.assertEqual(json.loads(pathlib.Path(result["evidence"]).read_text()), json.loads(evidence))
+        state.restore_journal_update("preparing", restoreId="b" * 24, rollbackBundle=None)
+        record = json.loads(state.RESTORE_JOURNAL.read_text())
+        self.assertNotIn("primaryError", record)
+        self.assertNotIn("unitSnapshot", record)
+        with mock.patch.object(state, "ROLLBACK_RETAIN_COUNT", 0):
+            state.prune_rollbacks()
+        self.assertFalse(rollback.exists())
+
+    def test_interruption_persists_rollback_and_unit_snapshot_before_actions(self):
+        root = pathlib.Path(self.temporary.name)
+        public = root / "public"
+        public.write_text("saved")
+        bundle = root / "bundle.tar.gz"
+        with mock.patch.dict(os.environ, self.environment(self.registry(public, root / "secret", root / "missing"))):
+            state.export_bundle(bundle, include_sensitive=False)
+            public.write_text("current")
+            for action, phase in (("export_bundle", "capturing-rollback"), ("stop_active_units", "quiescing")):
+                with self.subTest(action=action):
+                    state.RESTORE_JOURNAL.unlink(missing_ok=True)
+                    with (
+                        mock.patch.object(state, "capture_unit_state", return_value={"app.service": True}),
+                        mock.patch.object(state, action, side_effect=KeyboardInterrupt),
+                    ):
+                        with self.assertRaises(KeyboardInterrupt):
+                            state.restore_bundle(
+                                bundle, confirm_host=socket.gethostname(), allow_partial=True, include_sensitive=False
+                            )
+                    journal = json.loads(state.RESTORE_JOURNAL.read_text())
+                    self.assertEqual(journal["status"], phase)
+                    self.assertEqual(journal["unitSnapshot"], {"app.service": True})
+                    self.assertIsNotNone(journal["rollbackBundle"])
+                    if action == "stop_active_units":
+                        rollback = pathlib.Path(journal["rollbackBundle"])
+                        with mock.patch.object(state, "ROLLBACK_RETAIN_COUNT", 0):
+                            state.prune_rollbacks()
+                        self.assertTrue(rollback.exists())
+
+    def test_failed_acknowledgement_archive_does_not_release_recovery(self):
+        _, evidence = self.seed_recovery()
+        with (
+            mock.patch.object(state, "require_root"),
+            mock.patch.object(state, "atomic_write_json", side_effect=OSError("disk full")),
+        ):
+            with self.assertRaises(OSError):
+                state.acknowledge_restore_recovery("a" * 24, confirm_host=socket.gethostname())
+        self.assertEqual(state.RESTORE_JOURNAL.read_bytes(), evidence)
+
+    def test_archive_directory_is_durable_before_acknowledgement(self):
+        _, evidence = self.seed_recovery()
+        archive = state.RESTORE_JOURNAL.parent / "restore-recovery" / f"{'a' * 24}.json"
+        events = []
+        update = state.restore_journal_update
+
+        def sync_parent(path):
+            self.assertEqual(path, state.RESTORE_JOURNAL.parent)
+            self.assertEqual(json.loads(archive.read_text()), json.loads(evidence))
+            self.assertEqual(state.RESTORE_JOURNAL.read_bytes(), evidence)
+            events.append("archive-parent-synced")
+
+        def acknowledge(status, **fields):
+            self.assertEqual(events, ["archive-parent-synced"])
+            events.append(status)
+            update(status, **fields)
+
+        with (
+            mock.patch.object(state, "require_root"),
+            mock.patch.object(state, "fsync_directory", side_effect=sync_parent, create=True),
+            mock.patch.object(state, "restore_journal_update", side_effect=acknowledge),
+        ):
+            state.acknowledge_restore_recovery("a" * 24, confirm_host=socket.gethostname())
+        self.assertEqual(events, ["archive-parent-synced", "recovery-acknowledged"])
+
+    def test_failed_or_interrupted_archive_directory_sync_keeps_recovery_block_and_pin(self):
+        for error in (OSError("directory sync failed"), KeyboardInterrupt()):
+            with self.subTest(error=type(error).__name__):
+                rollback, evidence = self.seed_recovery()
+                with (
+                    mock.patch.object(state, "require_root"),
+                    mock.patch.object(state, "fsync_directory", side_effect=error, create=True),
+                ):
+                    with self.assertRaises(type(error)):
+                        state.acknowledge_restore_recovery("a" * 24, confirm_host=socket.gethostname())
+                self.assertEqual(state.RESTORE_JOURNAL.read_bytes(), evidence)
+                with self.assertRaises(state.StateError):
+                    state.require_resolved_restore()
+                with mock.patch.object(state, "ROLLBACK_RETAIN_COUNT", 0):
+                    state.prune_rollbacks()
+                self.assertTrue(rollback.exists())
+
+    def test_nested_update_restore_keeps_existing_coordination_contract(self):
+        args = state.parser().parse_args(
+            [
+                "restore",
+                "/tmp/update.tar.gz",
+                "--apply",
+                "--confirm-host",
+                "host",
+                "--allow-partial",
+                "--include-sensitive",
+                "--restore-absence",
+            ]
+        )
+        with (
+            mock.patch.object(state, "parser") as parser,
+            mock.patch.object(state, "validate_coordination_token", return_value=None) as validate,
+            mock.patch.object(state, "acquire_operation") as acquire,
+            mock.patch.object(state, "restore_bundle", return_value={"ok": True}) as restore,
+            mock.patch.dict(os.environ, {state.COORDINATION_TOKEN_ENV: "a" * 32}),
+            mock.patch("builtins.print"),
+        ):
+            parser.return_value.parse_args.return_value = args
+            state.main()
+        validate.assert_called_once_with("a" * 32, ("appliance",))
+        acquire.assert_not_called()
+        restore.assert_called_once_with(
+            pathlib.Path("/tmp/update.tar.gz"),
+            confirm_host="host",
+            allow_partial=True,
+            include_sensitive=True,
+            restore_absence=True,
+            allow_network_disconnect=False,
+        )
+
+    def test_recovery_and_pruning_cli_hold_appliance_lock(self):
+        for argv in (
+            ["acknowledge-recovery", "--restore-id", "a" * 24, "--confirm-host", socket.gethostname()],
+            ["prune-rollbacks"],
+        ):
+            with self.subTest(argv=argv):
+                self.seed_recovery()
+                args = state.parser().parse_args(argv)
+                with (
+                    mock.patch.object(state, "parser") as parser,
+                    mock.patch.object(state, "require_root"),
+                    mock.patch.object(state, "acquire_operation", return_value=contextlib.nullcontext()) as acquire,
+                    mock.patch("builtins.print"),
+                ):
+                    parser.return_value.parse_args.return_value = args
+                    state.main()
+                acquire.assert_called_once_with(
+                    "state-recovery-acknowledge" if argv[0] == "acknowledge-recovery" else "state-prune-rollbacks",
+                    ("appliance",),
+                )
+
     def test_external_network_edit_after_policy_check_does_not_affect_application_restore(self):
         root = pathlib.Path(self.temporary.name)
         profile, app = root / "profile", root / "app"
@@ -992,6 +1235,190 @@ class StateBundleTests(unittest.TestCase):
         self.assertIn("one.service recovery failed", str(raised.exception))
         self.assertIn("two.service recovery failed", str(raised.exception))
         self.assertEqual(calls[-2:], [("start", "one.service"), ("start", "two.service")])
+
+    def test_unit_recovery_aggregates_failures_and_recovers_later_units(self) -> None:
+        snapshot = {
+            "start-one.service": True,
+            "stop-one.service": False,
+            "start-two.service": True,
+            "stop-two.service": False,
+            "later-start.service": True,
+            "later-stop.service": False,
+            "already-active.service": True,
+            "already-inactive.service": False,
+        }
+        active = {unit: not desired for unit, desired in snapshot.items()}
+        active["already-active.service"] = True
+        active["already-inactive.service"] = False
+        failures = set(list(snapshot)[:4])
+        calls = []
+
+        def systemctl(*args, **kwargs):
+            calls.append(args)
+            unit = args[-1]
+            if args[0] == "is-active":
+                return self.completed(0 if active[unit] else 3)
+            if unit in failures:
+                raise state.StateError("injected failure")
+            active[unit] = args[0] == "start"
+            return self.completed()
+
+        with mock.patch.object(state, "run_systemctl", side_effect=systemctl):
+            with self.assertRaises(state.StateError) as raised:
+                state.restore_unit_state(snapshot)
+            for unit in failures:
+                action = "start" if snapshot[unit] else "stop"
+                self.assertIn(f"{action} {unit}", str(raised.exception))
+            self.assertEqual([c[-1] for c in calls if c[0] == "is-active"], list(snapshot))
+            self.assertTrue(active["later-start.service"])
+            self.assertFalse(active["later-stop.service"])
+            self.assertNotIn(("start", "already-active.service"), calls)
+            self.assertNotIn(("stop", "already-inactive.service"), calls)
+            failures.clear()
+            state.restore_unit_state(snapshot)
+        self.assertEqual(active, snapshot)
+
+    def test_unit_recovery_reports_observation_and_action_failures_in_snapshot_order(self) -> None:
+        snapshot = {
+            "observe-active.service": True,
+            "start.service": True,
+            "observe-inactive.service": False,
+            "stop.service": False,
+            "later-active.service": True,
+            "later-inactive.service": False,
+        }
+        active = {unit: not desired for unit, desired in snapshot.items()}
+        failures = {
+            ("is-active", "observe-active.service"): OSError("query unavailable"),
+            ("start", "start.service"): state.StateError("start rejected"),
+            ("is-active", "observe-inactive.service"): state.StateError("query timed out"),
+            ("stop", "stop.service"): state.StateError("stop rejected"),
+        }
+        calls = []
+
+        def systemctl(*args, **kwargs):
+            calls.append(args)
+            action, unit = args[0], args[-1]
+            if (action, unit) in failures:
+                raise failures[action, unit]
+            if action == "is-active":
+                return self.completed(0 if active[unit] else 3)
+            active[unit] = action == "start"
+            return self.completed()
+
+        with mock.patch.object(state, "run_systemctl", side_effect=systemctl):
+            with self.assertRaises(state.StateError) as raised:
+                state.restore_unit_state(snapshot)
+            self.assertEqual([call[-1] for call in calls if call[0] == "is-active"], list(snapshot))
+            self.assertNotIn(("start", "observe-active.service"), calls)
+            self.assertNotIn(("stop", "observe-inactive.service"), calls)
+            self.assertTrue(active["later-active.service"])
+            self.assertFalse(active["later-inactive.service"])
+            self.assertEqual(
+                str(raised.exception),
+                "Service state recovery failed: "
+                "is-active observe-active.service: query unavailable; "
+                "start start.service: start rejected; "
+                "is-active observe-inactive.service: query timed out; "
+                "stop stop.service: stop rejected",
+            )
+            failures.clear()
+            state.restore_unit_state(snapshot)
+        self.assertEqual(active, snapshot)
+
+    def test_export_cleanup_retains_primary_error_and_attempts_every_unit(self) -> None:
+        for primary in (None, state.StateError("database preparation failed")):
+            with self.subTest(primary=primary):
+                calls = []
+
+                def systemctl(*args, **kwargs):
+                    calls.append(args)
+                    if args[0] == "is-active":
+                        return self.completed(3)
+                    if args[0] == "start":
+                        raise state.StateError("restart failed")
+                    return self.completed()
+
+                with (
+                    mock.patch.dict(os.environ, self.environment("[]")),
+                    mock.patch.object(state, "require_root"),
+                    mock.patch.object(state, "authorities", return_value=()),
+                    mock.patch.object(state, "export_quiesce_units", return_value=("one.service", "two.service")),
+                    mock.patch.object(
+                        state, "capture_unit_state", return_value={"one.service": True, "two.service": True}
+                    ),
+                    mock.patch.object(state, "prepare_database_export", side_effect=primary),
+                    mock.patch.object(state, "run_systemctl", side_effect=systemctl),
+                ):
+                    with self.assertRaises(state.StateError) as raised:
+                        state.export_bundle(
+                            pathlib.Path(self.temporary.name) / "bundle.tar.gz", include_sensitive=True, quiesce=True
+                        )
+                for unit in ("one.service", "two.service"):
+                    self.assertIn(("start", unit), calls)
+                    self.assertIn(unit, str(raised.exception))
+                if primary:
+                    self.assertIn(str(primary), str(raised.exception))
+                    self.assertIs(raised.exception.__cause__, primary)
+                else:
+                    self.assertTrue((pathlib.Path(self.temporary.name) / "bundle.tar.gz").is_file())
+
+    def test_restore_recovery_failures_retain_primary_context(self) -> None:
+        root = pathlib.Path(self.temporary.name)
+        public = root / "public"
+        public.write_text("saved")
+        registry = json.dumps(json.loads(self.registry(public, root / "secret", root / "missing"))[:1])
+        bundle = root / "bundle.tar.gz"
+        snapshot = {"one.service": True, "two.service": True, "later.service": True}
+        with mock.patch.dict(os.environ, self.environment(registry)):
+            state.export_bundle(bundle, include_sensitive=False)
+            public.write_text("current")
+            for phase in ("preparation", "rollback"):
+                with (
+                    self.subTest(phase=phase),
+                    tempfile.TemporaryDirectory() as phase_temp,
+                    mock.patch.object(state, "RESTORE_JOURNAL", pathlib.Path(phase_temp) / "restore-operation.json"),
+                ):
+                    primary = state.StateError(f"{phase} primary failure")
+                    calls = []
+
+                    def systemctl(*args, **kwargs):
+                        calls.append(args)
+                        if args[0] == "is-active":
+                            return self.completed(3)
+                        if args[0] == "start" and args[1] != "later.service":
+                            raise state.StateError("restart failed")
+                        return self.completed()
+
+                    with (
+                        mock.patch.object(state, "capture_unit_state", return_value=snapshot),
+                        mock.patch.object(state, "stop_active_units"),
+                        mock.patch.object(state, "run_systemctl", side_effect=systemctl),
+                        mock.patch.object(
+                            state,
+                            "export_bundle",
+                            wraps=state.export_bundle,
+                            side_effect=primary if phase == "preparation" else None,
+                        ),
+                        mock.patch.object(state, "apply_extracted", side_effect=[primary, None]),
+                    ):
+                        with self.assertRaises(state.StateError) as raised:
+                            state.restore_bundle(
+                                bundle, confirm_host=socket.gethostname(), allow_partial=False, include_sensitive=False
+                            )
+                    self.assertIn(str(primary), str(raised.exception))
+                    self.assertIs(raised.exception.__cause__, primary)
+                    for unit in snapshot:
+                        self.assertIn(("start", unit), calls)
+                    journal = json.loads(state.RESTORE_JOURNAL.read_text())
+                    self.assertEqual(journal["status"], "manual-recovery-required")
+                    self.assertEqual(journal["primaryError"], str(primary))
+                    self.assertLess(
+                        journal["rollbackError"].index("one.service"), journal["rollbackError"].index("two.service")
+                    )
+                    if phase == "rollback":
+                        self.assertEqual(journal["unitSnapshot"], snapshot)
+                        self.assertTrue(pathlib.Path(journal["rollbackBundle"]).is_file())
 
     def test_restore_units_honors_generated_profile_list(self) -> None:
         with mock.patch.dict(

@@ -98,7 +98,11 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
         }
         with (
             mock.patch.object(sync, "ensure_groups"),
-            mock.patch.object(sync, "authentik_list", side_effect=[groups, users]),
+            mock.patch.object(
+                sync,
+                "authentik_list",
+                side_effect=lambda _token, path: groups if path == "core/groups/?include_users=true" else users,
+            ),
             mock.patch.object(sync, "authentik_request", side_effect=request),
         ):
             result = sync.apply_account_plan("token", plan)
@@ -140,7 +144,11 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
         }
         with (
             mock.patch.object(sync, "ensure_groups"),
-            mock.patch.object(sync, "authentik_list", side_effect=[groups, users]),
+            mock.patch.object(
+                sync,
+                "authentik_list",
+                side_effect=lambda _token, path: groups if path == "core/groups/?include_users=true" else users,
+            ),
             mock.patch.object(
                 sync, "authentik_request", side_effect=lambda _token, path, **kwargs: calls.append((path, kwargs)) or {}
             ),
@@ -187,7 +195,11 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
         }
         with (
             mock.patch.object(sync, "ensure_groups"),
-            mock.patch.object(sync, "authentik_list", side_effect=[groups, users]),
+            mock.patch.object(
+                sync,
+                "authentik_list",
+                side_effect=lambda _token, path: groups if path == "core/groups/?include_users=true" else users,
+            ),
             mock.patch.object(
                 sync, "authentik_request", side_effect=lambda _token, path, **kwargs: calls.append((path, kwargs)) or {}
             ),

@@ -44,6 +44,15 @@ KeePassXC, Authentik, CopyParty, or ZFS.
 
 ## First-boot Authentik access
 
+The setup wizard and its submission and resume APIs require an authenticated
+member of `nas_admin`, including when a failed Managed Services reconciliation
+returns the appliance to its bootstrap routes. Job polling and the completed-job
+reboot action use the wizard's temporary capability so setup can finish while
+Authentik's bootstrap identity is being replaced.
+
+Group names are case sensitive. The bootstrap console accepts the same
+`application.cockpit.admin` or `nas_admin` grants as the Managed Services console.
+
 The first-boot Authentik setup identity is `akadmin`. Its **Authentik password is
 randomly generated on first boot**, independently of the Linux bootstrap login.
 It is kept in a private, root-owned boot-side environment file rather than in the
@@ -237,6 +246,11 @@ exist when the job runs; remove that field after bootstrap when a rerun should
 preserve the current Authentik password.
 
 ## Browser bootstrap and locked boot
+
+Open the wizard directly on the appliance's HTTPS origin. Browser submissions
+from another origin are rejected, including a sibling application hostname.
+Authorized nonbrowser recovery clients can continue sending requests without an
+`Origin` header; they still require the normal authenticated or capability path.
 
 Before setup completes, the Authentik gate protects every management route.
 The setup wizard is reachable only after signing in with the bootstrap
