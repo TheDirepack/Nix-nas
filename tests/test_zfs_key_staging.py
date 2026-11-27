@@ -90,16 +90,8 @@ sudo() {
 """
             (work / "reader").write_text(self.reader_script(work, key))
             (work / "reader").chmod(0o700)
-            # Provide keepassxc-cli as a real executable on PATH, matching how
-            # the production reader resolves it.
-            stub_bin = work / "bin"
-            stub_bin.mkdir()
-            keepass = stub_bin / "keepassxc-cli"
-            keepass.write_text("#!/bin/sh\ncat >/dev/null\nexit 0\n", encoding="utf-8")
-            keepass.chmod(0o755)
             env = {
                 **os.environ,
-                "PATH": f"{stub_bin}{os.pathsep}{os.environ.get('PATH', '')}",
                 "TEST_KEY": key,
                 "TEST_FINGERPRINT": fingerprint,
                 "FAIL_INSTALL": "1" if fail_install else "0",

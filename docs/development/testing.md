@@ -150,6 +150,15 @@ Behavioral adversarial tests additionally send SQL-, shell-, traversal-, CRLF-, 
 
 CI records branch coverage over the control-plane services and applies both an aggregate floor and service-specific floors with `scripts/check-coverage.py`. Every service module has an explicit floor, including alert routing, diagnostics, structured logging, state migration, and operation locking. Floors are regression guards rather than quality scores: raising them should follow added behavioral coverage, not exclusion of difficult branches.
 
+The KeePass black-box tests build production and test-harness Zig binaries with
+the pinned compiler from the `test` shell. The Zig checks run the unit tests
+and fuzz seed corpus with the leak-checking allocator, and verify that the
+secret-handling misuse examples fail to compile.
+
+```bash
+zig build --build-file zig/build.zig test compile-errors
+```
+
 `tests/test_e2e_v2_lifecycle.py` is a deterministic compiler/plan smoke test across runtime declarations; it does not apply or launch all native adapters. Focused specification/editor tests cover normalization and round trips. The guest suite additionally loads offline OCI images and tests live create/update/removal, SQLite durability, credential binding, isolation and quiesced ZFS snapshot recovery. It also rejects a running candidate that fails HTTP readiness, checking the candidate's startup witness, readiness timeout and restored desired bytes/live state.
 
 A separate `vm-oci-persist` fixture remains installed for secret lock/unlock, reboot and Nix generation/package transitions. Its verifier observes revision, image, HTTP, exact dataset mount, content/ownership and actual CPU/memory/PID limits without restarting the workload. The native test removes it after qualification; the installer retains it for final browser qualification, which removes it in its disposable overlay after the browser suite. The installed Chromium project alone mutates its metadata through the Services form/YAML editor, including stale-save and invalid-input rejection; the other browser projects share the appliance and keep their existing rendering/authentication responsibilities. See the [testing work list](testing-worklist.md) for remaining gaps.

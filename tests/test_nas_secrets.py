@@ -184,7 +184,7 @@ class Appliance:
         self.work = work
         self.fsroot = work / "fs"
         self.bin = work / "bin"
-        self.bin.mkdir()
+        self.bin.mkdir(parents=True)
         self.argv_log = work / "argv.log"
         for name, body in (
             ("keepassxc-cli", FAKE_KEEPASS),
