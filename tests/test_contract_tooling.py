@@ -566,7 +566,7 @@ class ContractTests(unittest.TestCase):
         expected_wrappers = {
             "modules/nas/internal/account-tools.nix": 1,
             "modules/nas/internal/maintenance-tools.nix": 1,
-            "modules/nas/internal/secret-tools.nix": 1,
+            "modules/nas/internal/secret-tools.nix": 2,
             "modules/nas/internal/zfs-tools.nix": 3,
         }
         for filename, count in expected_wrappers.items():

@@ -67,6 +67,17 @@ nix develop .#test -c actionlint .github/workflows/ci.yml
 The `qemu-test` development shell includes the host-side QEMU, SSH, archive,
 Git, Python, and core utility commands required by the wrapper.
 
+## KeePass Go checks
+
+Use Go 1.27 to run `./scripts/go-check.sh` for formatting, vet, Staticcheck, gosec, exhaustive switches, and unit tests. Run `python3 scripts/go-coverage.py` to merge Go unit coverage with the Python black-box suites against instrumented Go binaries. The unlock tests build a separate `nasblackbox` variant for explicit unprivileged peer fixtures and exercise the production binary's startup policy separately.
+
+Run native Go fuzz searches from `go/`, one target at a time. For example:
+
+```bash
+go test ./internal/secret -run '^$' -fuzz '^FuzzReadLine$' -fuzztime 30s
+go test ./internal/unlockapi -run '^$' -fuzz '^FuzzParseUnlockBody$' -fuzztime 30s
+```
+
 ## 2. Smart fuzzing and generated properties
 
 The project does not maintain a project-local RNG mutator. **Hypothesis** is the canonical engine for Python structured input and stateful testing: it owns generation, edge-case search, shrinking, reproduction, and rule-based operation sequences. Project code defines strategies and invariants rather than manually generating thousands of arbitrary strings.

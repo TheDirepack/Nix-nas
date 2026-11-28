@@ -203,6 +203,8 @@ class SetupRebootE2eContracts(unittest.TestCase):
             ("Cockpit proxied", override("/console/", ("200", "", "cockpit"))),
             ("admin interface served", override("/identity/if/admin/", ("200", "", "admin"))),
             ("unlock page without sign-in", override("/unlock/", ("200", "", '<form id="unlock-form">'))),
+            ("unlock form in an error response", override("/unlock/", ("503", "", '<form id="unlock-form">'))),
+            ("sign-in redirect has no destination", override("/unlock/", ("302", "", ""))),
             ("unexpected gateway response", override("/unlock/", ("503", "", "unexpected response"))),
             ("unlock API without sign-in", override("/unlock/api/activate", ("200", "", '{"unlocked": true}'))),
             ("Authentik down", override("/identity/-/health/live/", ("503", "", "notice"))),

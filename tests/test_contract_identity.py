@@ -4,7 +4,7 @@ import ast
 import textwrap
 import unittest
 
-from repo_test_utils import ROOT, text
+from repo_test_utils import ROOT, keepass_sources, text
 
 
 class ContractTests(unittest.TestCase):
@@ -25,22 +25,21 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(found_authentik, "no active source file references Authentik")
 
     def test_keepass_password_is_interactive_or_cockpit_stdin_and_never_persisted(self) -> None:
-        secrets = text("modules/nas/internal/secret-tools.nix")
+        secrets = keepass_sources()
         unlock = text("cockpit/src/api.js")
         self.assertIn("keepassxc-cli", secrets)
         self.assertNotIn("--pw-stdin", secrets)
-        self.assertIn("printf '%s\\n' \"$keepass_password\" | keepassxc-cli", secrets)
-        self.assertRegex(secrets, r"read\s+-r\s+-s")
-        self.assertIn("activate-stdin)", secrets)
-        self.assertIn("activate-setup-stdin)", secrets)
-        self.assertIn("systemctl start --job-mode=ignore-dependencies authentik.service", secrets)
-        self.assertIn("systemctl start --job-mode=ignore-dependencies caddy.service", secrets)
+        self.assertIn("WithStdin(secret.Lines(", secrets)
+        self.assertIn("quiet.Lflag &^= unix.ECHO", secrets)
+        self.assertIn('"activate-stdin":', secrets)
+        self.assertIn('"activate-setup-stdin":', secrets)
+        self.assertIn('ignore := []string{"--job-mode=ignore-dependencies"}', secrets)
         self.assertIn('superuser: "require"', unlock)
         self.assertIn("process.input", unlock)
         self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", secrets)
 
     def test_authentik_token_authorities_are_separate(self) -> None:
-        secrets = text("modules/nas/internal/secret-tools.nix")
+        secrets = keepass_sources()
         identity = text("services/nas_identity_sync.py") + text("services/nas_identity_model.py")
         self.assertIn("authentik-bootstrap-token", secrets)
         self.assertIn("authentik-api-token", secrets)
@@ -48,16 +47,12 @@ class ContractTests(unittest.TestCase):
         self.assertIn("set-authentik-runtime-stdin", secrets)
         self.assertIn("authentik_token(bootstrap=True)", identity)
 
-    def test_secret_reactivation_restores_proxy_outpost_after_authentik(self) -> None:
-        secrets = text("modules/nas/internal/secret-tools.nix")
-        activation = secrets.split("command_activate() (", 1)[1].split("command_status() {", 1)[0]
-        self.assertLess(
-            activation.index("http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}-/health/ready/"),
-            activation.index("sudo systemctl start nas-authentik-proxy-outpost.service"),
-        )
-        self.assertLess(
-            activation.index("sudo systemctl start nas-authentik-proxy-outpost.service"),
-            activation.index("nas_secret_tx_commit"),
+    def test_secret_reactivation_probes_the_configured_authentik_path(self) -> None:
+        # Ordering (readiness, then the proxy outpost, then commit) is
+        # exercised by tests/test_nas_secrets_blackbox.py.
+        self.assertIn(
+            'authentikReadyUrl = "http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}-/health/ready/";',
+            text("modules/nas/internal/secret-tools.nix"),
         )
 
     def test_copyparty_is_the_only_share_authority(self) -> None:

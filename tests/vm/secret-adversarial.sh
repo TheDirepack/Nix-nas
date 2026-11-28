@@ -102,8 +102,8 @@ exercise_rejected_vault_value() {
 
 # keepassxc-cli's password-edit mode is line-oriented, so this installed test uses
 # hostile one-line values that can really be written through the CLI. Newline/CR and
-# other control-character cases are exercised directly against the rendered validator
-# functions in tests/test_secret_security.py.
+# other control-character cases are exercised against the Go validators in
+# go/internal/secret/secret_test.go.
 exercise_rejected_vault_value \
   authentik-secret-key \
   'not-128-hex' \

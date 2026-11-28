@@ -2,6 +2,8 @@
 
 These modules back installed appliance commands and finite reconciliation helpers. Managed Services V2 is compiler-driven: request authorization belongs to Caddy + Authentik and service lifecycle is projected into native systemd/Podman/libvirt mechanisms rather than owned by a resident controller. There is no supported V1 feature-state or managed-service compatibility layer.
 
+The Go KeePass commands under `go/cmd/` own secret activation and the locked-boot unlock socket. The Python setup worker invokes `nas-keepass-setup` over stdin for KeePass-specific operations.
+
 | Module | Responsibility |
 |---|---|
 | `nas_common.py` | Side-effect-free shared parsing and V2 application-capability helpers |
@@ -10,7 +12,6 @@ These modules back installed appliance commands and finite reconciliation helper
 | `nas_identity_sync.py` | Authentik API operations and reserved Syncthing reconciliation |
 | `nas_identity_model.py` | Pure identity/application-capability/account-plan models |
 | `nas_cockpit_api.py` | Fixed privileged Cockpit action allow-list |
-| `nas_unlock_api.py` | Authentik-gated locked-boot unlock socket that feeds `nas-secrets activate-stdin` |
 | `nas_operation_lock.py` | Cross-process conflict reservations |
 | `nas_operation_journal.py` | Resumable workflow journal/manual-recovery boundary |
 | `nas_state.py` | Signed state export, validation, diff, and restore |

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import getpass
 import io
 import json
 import os
@@ -20,6 +21,7 @@ if str(SERVICES) not in sys.path:
 
 import nas_setup as setup  # noqa: E402
 import nas_setup_config as setup_config  # noqa: E402
+from tests.keepass_setup_fakes import install_fakes, operations  # noqa: E402
 
 
 class SetupApplicationRetirementTests(unittest.TestCase):
@@ -94,8 +96,9 @@ class BootstrapAuthentikPasswordTests(unittest.TestCase):
         self.assertIn("AUTHENTIK_BOOTSTRAP_PASSWORD=", application)
         self.assertIn('requires = [ "nas-bootstrap-authentik-secrets.service" ]', application)
         self.assertIn("Missing secure first-boot Authentik password", application)
-        self.assertIn('store_value authentik-bootstrap-password "$bootstrap_password"', services)
-        self.assertNotIn("store_value authentik-bootstrap-password ${lib.escapeShellArg bootstrapPassword}", services)
+        adoption = (ROOT / "go/internal/nassecrets/commands.go").read_text()
+        self.assertIn("{keepass.AuthentikBootstrapPassword, password}", adoption)
+        self.assertNotIn("bootstrapPassword", services)
 
     def test_vm_browser_does_not_reuse_the_linux_bootstrap_password(self) -> None:
         guest = (ROOT / "tests/vm/guest-test.sh").read_text(encoding="utf-8")
@@ -1232,91 +1235,92 @@ class ConfiguredAdministratorTests(unittest.TestCase):
 
     def test_existing_keepass_database_is_moved_aside_never_deleted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            database = pathlib.Path(tmp) / "secrets" / "NAS.kdbx"
+            root = pathlib.Path(tmp)
+            database = root / "secrets" / "NAS.kdbx"
             database.parent.mkdir()
             database.write_text("fixture", encoding="utf-8")
-
-            def root(command, **_kwargs):
-                if command[:3] == ["mv", "--no-clobber", "--"]:
-                    pathlib.Path(command[3]).rename(command[4])
-                return setup.Completed(tuple(command), "", "")
-
-            def admin(command, **_kwargs):
-                if "db-create" in command:
-                    database.write_text("fresh", encoding="utf-8")
-                return setup.Completed(tuple(command), "", "")
-
             with (
+                mock.patch.dict(os.environ, install_fakes(root)),
                 mock.patch.object(setup, "KEEPASS_DATABASE", database),
+                mock.patch.object(setup, "local_administrator_username", return_value=getpass.getuser()),
                 mock.patch.object(setup, "managed_dataset_encrypted", return_value=False),
-                mock.patch.object(setup, "run_root", side_effect=root) as run_root,
-                mock.patch.object(setup, "run_admin", side_effect=admin) as run_admin,
             ):
-                self.assertEqual(setup.verify_or_create_database("password", True), "created")
+                self.assertEqual(
+                    setup.verify_or_create_database(STRONG_KEEPASS, True, "administrator-password"), "created"
+                )
             preserved = list(database.parent.glob("NAS.kdbx.replaced-*"))
             self.assertEqual(len(preserved), 1)
             self.assertEqual(preserved[0].read_text(encoding="utf-8"), "fixture")
             self.assertEqual(database.read_text(encoding="utf-8"), "fresh")
-        commands = [call.args[0] for call in run_root.call_args_list]
-        self.assertEqual(commands[0][0], "install")
-        self.assertFalse([command for command in commands if command[0] == "rm"])
-        create = run_admin.call_args_list[0].args[0]
-        self.assertIn("db-create", create)
-        self.assertEqual(create[create.index("--decryption-time") + 1], setup.KEEPASS_DECRYPTION_TIME_MS)
-        self.assertIn("db-info", run_admin.call_args_list[1].args[0])
+            log = operations(root)
+        self.assertFalse([line for line in log if " rm " in f" {line} "])
+        self.assertFalse([line for line in log if " mv " in f" {line} "])
+        create = next(line for line in log if "db-create" in line)
+        self.assertIn("--set-password --decryption-time 1000", create)
+        self.assertIn("db-info", log[-1])
+        for line in log:
+            self.assertNotIn(STRONG_KEEPASS, line)
+            if line.startswith("sudo"):
+                self.assertIn("stdin=/dev/null", line)
+
+    def test_new_database_requires_the_strength_floor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            database = root / "NAS.kdbx"
+            with (
+                mock.patch.dict(os.environ, install_fakes(root)),
+                mock.patch.object(setup, "KEEPASS_DATABASE", database),
+                mock.patch.object(setup, "local_administrator_username", return_value=getpass.getuser()),
+                mock.patch.object(setup, "managed_dataset_encrypted", return_value=False),
+            ):
+                for weak, admin in (("short", None), (STRONG_KEEPASS.upper(), STRONG_KEEPASS)):
+                    with self.subTest(weak=weak), self.assertRaises(setup.SetupError):
+                        setup.verify_or_create_database(weak, True, admin)
+            self.assertFalse(database.exists())
+            self.assertFalse([line for line in operations(root) if "db-create" in line])
+
+
+STRONG_KEEPASS = "correct horse battery staple"
 
 
 class KeePassAuthorityGuardTests(unittest.TestCase):
     """A cleared or cancelled journal must never orphan an encrypted dataset's key."""
 
-    def run_create(
-        self, database: pathlib.Path, *, opens: bool
-    ) -> tuple[str | Exception, list[list[str]], list[list[str]]]:
-        roots: list[list[str]] = []
-        admins: list[list[str]] = []
-
-        def root(command, **_kwargs):
-            roots.append(list(command))
-            return setup.Completed(tuple(command), "", "")
-
-        def admin(command, **_kwargs):
-            admins.append(list(command))
-            if "db-info" in command and not opens:
-                raise setup.SetupError("keepassxc-cli failed")
-            return setup.Completed(tuple(command), "", "")
-
+    def run_create(self, database: pathlib.Path, *, opens: bool) -> tuple[str | Exception, list[str]]:
+        root = database.parent
+        environment = install_fakes(root)
+        if not opens:
+            environment["FAKE_DB_INFO_FAIL"] = "1"
         with (
+            mock.patch.dict(os.environ, environment),
             mock.patch.object(setup, "KEEPASS_DATABASE", database),
+            mock.patch.object(setup, "local_administrator_username", return_value=getpass.getuser()),
             mock.patch.object(setup, "managed_dataset_encrypted", return_value=True),
-            mock.patch.object(setup, "run_root", side_effect=root),
-            mock.patch.object(setup, "run_admin", side_effect=admin),
         ):
             try:
-                result: str | Exception = setup.verify_or_create_database("retyped-password", True)
+                result: str | Exception = setup.verify_or_create_database(STRONG_KEEPASS, True)
             except setup.SetupError as exc:
                 result = exc
-        return result, roots, admins
+        return result, operations(root)
 
     def test_retry_after_journal_clear_keeps_the_database_holding_the_dataset_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             database = pathlib.Path(tmp) / "NAS.kdbx"
             database.write_text("holds zfs-dataset-key", encoding="utf-8")
-            result, roots, admins = self.run_create(database, opens=True)
+            result, log = self.run_create(database, opens=True)
             self.assertEqual(result, "existing")
             self.assertEqual(database.read_text(encoding="utf-8"), "holds zfs-dataset-key")
-        self.assertFalse([command for command in roots if command[0] in {"rm", "mv"}])
-        self.assertFalse([command for command in admins if "db-create" in command])
+        self.assertFalse([line for line in log if " rm " in line or " mv " in line or "db-create" in line])
 
     def test_wrong_password_for_the_encrypted_dataset_database_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             database = pathlib.Path(tmp) / "NAS.kdbx"
             database.write_text("holds zfs-dataset-key", encoding="utf-8")
-            result, roots, admins = self.run_create(database, opens=False)
+            result, log = self.run_create(database, opens=False)
             self.assertIsInstance(result, setup.SetupError)
             self.assertIn("never replaces", str(result))
             self.assertEqual(database.read_text(encoding="utf-8"), "holds zfs-dataset-key")
-        self.assertFalse([command for command in roots if command[0] in {"rm", "mv"}])
-        self.assertFalse([command for command in admins if "db-create" in command])
+        self.assertFalse([line for line in log if " rm " in line or " mv " in line or "db-create" in line])
 
     def test_dataset_encryption_probe_fails_closed(self) -> None:
         with mock.patch.object(setup, "dataset_exists", return_value=False):

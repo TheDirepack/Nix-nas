@@ -377,6 +377,8 @@ def main() -> int:
                 "-p",
                 path.name,
             ]
+            if (TESTS / "__init__.py").is_file():
+                unittest_command.extend(("-t", str(ROOT)))
             if not args.quiet:
                 unittest_command.append("-v")
             command = command_for(unittest_command)

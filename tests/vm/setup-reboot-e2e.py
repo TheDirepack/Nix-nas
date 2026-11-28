@@ -294,7 +294,7 @@ def wait_locked_sign_in(timeout_seconds: int = 120) -> None:
         code, location, body = locked_request("/unlock/")
         if "unlock-form" in body:
             break
-        if code in {"302", "303", "307"}:
+        if code in {"302", "303", "307"} and location:
             return
         # The outpost can be active before Caddy's forward-auth request succeeds.
         if code != "503" or 'id="nas-locked"' not in body or time.monotonic() >= deadline:

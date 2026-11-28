@@ -42,6 +42,9 @@ An Authentik administrator is not automatically a Linux/PAM administrator. Brows
 - Secret stdin is one bounded nonempty line.
 - Password files are absolute, private, regular, non-symlink files and are opened once.
 - Long setup operations use pre-authorized, noninteractive sudo; payload stdin must never be consumed by sudo.
+- Root activation opens transaction parents without following symlinks and swaps entries with `renameat2(RENAME_NOREPLACE)`. If rollback cannot remove the live tree, it preserves recovery material and exits 125.
+- Setup moves a KDBX aside with `RENAME_NOREPLACE`. A destination collision aborts setup. On `EINVAL` or `ENOSYS`, the serialized setup worker reports the fallback and creates a non-replacing hard link before unlinking the old name. An interrupted fallback can leave both names in place.
+- The Go KeePass commands disable process dumps and set the soft and hard core limits to zero before reading secret input.
 
 ## Storage
 

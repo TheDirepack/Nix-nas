@@ -22,7 +22,11 @@ class MaintainerScriptMixin:
             cls.clean_root,
             ignore=shutil.ignore_patterns(
                 ".git",
+                ".agents",
+                ".codex",
+                ".aws",
                 ".fuzz-crashes",
+                ".hypothesis",
                 ".pytest_cache",
                 ".ruff_cache",
                 ".mypy_cache",
@@ -34,6 +38,7 @@ class MaintainerScriptMixin:
                 "node_modules",
                 "playwright-report",
                 "test-results",
+                "tmp",
             ),
         )
 

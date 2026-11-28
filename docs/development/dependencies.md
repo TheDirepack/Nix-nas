@@ -301,3 +301,9 @@ Keep the revision immutable so CI exercises the same old-to-new transition.
 The shared test declaration lives in `tests/vm/package-upgrade-baseline.sh`.
 Install and initialize that baseline before promoting to the reviewed lock;
 downgrading an already-migrated native database is not an upgrade rehearsal.
+
+## KeePass Go module
+
+The KeePass package builds with the upstream Go 1.27 source pinned in `go/toolchain.nix`. It bootstraps from the Go compiler in the locked nixpkgs input. The module retains Go 1.26 language compatibility for the analyzers in the pinned test shell. Refresh the fixed output hash with `scripts/go-vendor-hash.py` after updating `go.mod` or `go.sum`. The Go libraries are pinned in those files. The KDBX format and command behavior remain owned by the packaged KeePassXC CLI.
+
+The unprivileged `nas-secrets` console path uses GNU Coreutils `mv -T --no-copy --update=none-fail` under sudo. Both options are required so a swap refuses an occupied destination or a move that would copy between filesystems.

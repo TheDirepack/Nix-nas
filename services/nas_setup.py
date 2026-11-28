@@ -22,7 +22,6 @@ import argparse
 import contextlib
 import getpass
 import hashlib
-import hmac
 import json
 import os
 import pathlib
@@ -58,6 +57,8 @@ from nas_setup_config import (
     normalize_secret_line,
     read_password_file,
     read_secret_stdin,
+    run_keepass_setup,
+    secret_lines,
     validate_keepass_password_strength,
 )
 from nas_syncthing_devices import DeviceError, validate_username
@@ -78,7 +79,6 @@ BOOTSTRAP_RUNTIME_ROOT = pathlib.Path(os.environ.get("NAS_BOOTSTRAP_RUNTIME_ROOT
 BOOTSTRAP_AUTHENTIK_ENVIRONMENT = BOOTSTRAP_RUNTIME_ROOT / "authentik/environment"
 BOOTSTRAP_AUTHENTIK_TOKEN = BOOTSTRAP_RUNTIME_ROOT / "authentik/api-token"
 BOOTSTRAP_AUTHENTIK_OUTPOST_TOKEN = BOOTSTRAP_RUNTIME_ROOT / "authentik/outpost-token"
-KEEPASS_DECRYPTION_TIME_MS = "1000"
 PASSWORD_VERIFIER_ALGORITHM = "scrypt-n32768-r8-p1"
 SETUP_BLUEPRINT_PATH = BOOTSTRAP_RUNTIME_ROOT / "authentik/blueprints/nas-setup.yaml"
 KEEPASS_DATABASE = pathlib.Path(
@@ -837,76 +837,35 @@ def managed_dataset_encrypted() -> bool:
     return completed.returncode != 0 or completed.stdout.strip() != "off"
 
 
-def verify_or_create_database(password: str, create: bool) -> str:
-    key_args = ["--key-file", KEEPASS_KEY_FILE] if KEEPASS_KEY_FILE else []
-    run_root(
-        [
-            "install",
-            "-d",
-            "-m",
-            "0700",
-            "-o",
-            local_administrator_username(),
-            "-g",
-            "users",
-            str(KEEPASS_DATABASE.parent),
-        ]
-    )
-    try:
-        existing_mode = KEEPASS_DATABASE.lstat().st_mode
-    except FileNotFoundError:
-        existing_mode = None
-    if existing_mode is not None and (stat.S_ISLNK(existing_mode) or not stat.S_ISREG(existing_mode)):
-        raise SetupError(f"KeePass database path is not a regular file: {KEEPASS_DATABASE}")
-    if existing_mode is not None and not create:
-        run_admin(
-            ["keepassxc-cli", "db-info", "--quiet", *key_args, str(KEEPASS_DATABASE)],
-            input_text=password + "\n",
-        )
-        return "existing"
-    if existing_mode is not None:
-        if managed_dataset_encrypted():
-            # The encrypted dataset's only key lives in this database; a fresh
-            # database would silently orphan the data.
-            try:
-                run_admin(
-                    ["keepassxc-cli", "db-info", "--quiet", *key_args, str(KEEPASS_DATABASE)],
-                    input_text=password + "\n",
-                )
-            except SetupError as exc:
-                raise SetupError(
-                    f"The managed ZFS dataset is already encrypted with a key held in {KEEPASS_DATABASE}. "
-                    "Setup never replaces that database; retry with its password."
-                ) from exc
-            return "existing"
-        preserved = KEEPASS_DATABASE.with_name(
-            f"{KEEPASS_DATABASE.name}.replaced-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
-        )
-        run_root(["mv", "--no-clobber", "--", str(KEEPASS_DATABASE), str(preserved)])
-        if KEEPASS_DATABASE.exists() or KEEPASS_DATABASE.is_symlink():
-            raise SetupError(f"Unable to move the existing KeePassXC database aside to {preserved}")
-        progress(f"kept the previous KeePassXC database as {preserved}")
-    if not create:
-        raise SetupError(f"KeePass database does not exist: {KEEPASS_DATABASE}")
-    create_args = [
-        "keepassxc-cli",
-        "db-create",
-        "--quiet",
-        "--set-password",
-        "--decryption-time",
-        KEEPASS_DECRYPTION_TIME_MS,
+def verify_or_create_database(password: str, create: bool, administrator_password: str | None = None) -> str:
+    """Open or create the KDBX through nas-keepass-setup.
+
+    The helper never deletes an existing database: it refuses to replace one
+    while the managed dataset may hold its key, and otherwise moves it aside.
+    """
+    arguments = [
+        "database",
+        "--mode",
+        "create" if create else "verify",
+        "--database",
+        str(KEEPASS_DATABASE),
+        "--owner",
+        local_administrator_username(),
     ]
     if KEEPASS_KEY_FILE:
-        create_args.extend(["--set-key-file", KEEPASS_KEY_FILE])
-    create_args.append(str(KEEPASS_DATABASE))
-    run_admin(create_args, input_text=f"{password}\n{password}\n")
-    if not KEEPASS_DATABASE.exists():
-        raise SetupError(f"KeePassXC did not create {KEEPASS_DATABASE}")
-    run_admin(
-        ["keepassxc-cli", "db-info", "--quiet", *key_args, str(KEEPASS_DATABASE)],
-        input_text=password + "\n",
-    )
-    return "created"
+        arguments += ["--key-file", KEEPASS_KEY_FILE]
+    if create:
+        arguments += ["--managed-dataset", "encrypted" if managed_dataset_encrypted() else "unencrypted"]
+    values = [password] if administrator_password is None else [password, administrator_password]
+    completed = run_keepass_setup(arguments, secret_lines(*values))
+    if completed.returncode != 0:
+        raise SetupError(completed.stderr.strip() or "KeePass database verification failed")
+    result = json.loads(completed.stdout)
+    if result.get("preserved"):
+        progress(f"kept the previous KeePassXC database as {result['preserved']}")
+    if result.get("result") not in {"created", "existing"}:
+        raise SetupError("nas-keepass-setup returned an unexpected result")
+    return str(result["result"])
 
 
 def setup_storage(
@@ -1120,48 +1079,49 @@ def _password_inputs(account_plan: Mapping[str, Any]) -> list[tuple[str, str]]:
     return sorted(inputs)
 
 
+def _verifier_payload(account_plan: Mapping[str, Any], keepass_password: str) -> list[str]:
+    inputs = _password_inputs(account_plan)
+    lines = [keepass_password, str(len(inputs))]
+    for username, password in inputs:
+        lines.extend((username, password))
+    return lines
+
+
 def legacy_password_input_authenticators(account_plan: Mapping[str, Any], keepass_password: str) -> dict[str, str]:
     """Recompute the unsalted v2 authenticators only to recognize older journals.
 
     They were a SHA-256-speed oracle for the KeePass password, so new journals
     never store them; see password_verifier.
     """
-    key = hashlib.sha256(b"nixos-nas/setup-password-fingerprint/v2\0" + keepass_password.encode("utf-8")).digest()
-    return {
-        username: hmac.new(key, username.encode("utf-8") + b"\0" + password.encode("utf-8"), hashlib.sha256).hexdigest()
-        for username, password in _password_inputs(account_plan)
-    }
-
-
-def _password_verifier_digest(account_plan: Mapping[str, Any], keepass_password: str, salt: bytes) -> str:
-    material = json.dumps(
-        {"keepass": keepass_password, "accounts": _password_inputs(account_plan)},
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    # Memory-hard and salted per journal, so a backed-up journal costs an
-    # attacker at least as much per guess as the KDBX key derivation.
-    return hashlib.scrypt(material, salt=salt, n=2**15, r=8, p=1, maxmem=64 * 1024 * 1024, dklen=32).hex()
+    completed = run_keepass_setup(
+        ["verifier", "legacy"], secret_lines(*_verifier_payload(account_plan, keepass_password))
+    )
+    if completed.returncode != 0:
+        raise SetupError(completed.stderr.strip() or "Unable to recompute legacy password authenticators")
+    return dict(json.loads(completed.stdout))
 
 
 def password_verifier(account_plan: Mapping[str, Any], keepass_password: str) -> dict[str, str]:
-    salt = secrets.token_bytes(16)
-    return {
-        "algorithm": PASSWORD_VERIFIER_ALGORITHM,
-        "salt": salt.hex(),
-        "digest": _password_verifier_digest(account_plan, keepass_password, salt),
-    }
+    """Salted scrypt journal verifier (nas-keepass-setup verifier create)."""
+    completed = run_keepass_setup(
+        ["verifier", "create"], secret_lines(*_verifier_payload(account_plan, keepass_password))
+    )
+    if completed.returncode != 0:
+        raise SetupError(completed.stderr.strip() or "Unable to derive the password verifier")
+    value = json.loads(completed.stdout)
+    if not isinstance(value, dict) or value.get("algorithm") != PASSWORD_VERIFIER_ALGORITHM:
+        raise SetupError("nas-keepass-setup returned an invalid verifier")
+    return {key: str(value[key]) for key in ("algorithm", "salt", "digest")}
 
 
 def password_verifier_matches(verifier: Any, account_plan: Mapping[str, Any], keepass_password: str) -> bool:
-    if not isinstance(verifier, Mapping) or verifier.get("algorithm") != PASSWORD_VERIFIER_ALGORITHM:
+    if not isinstance(verifier, Mapping):
         return False
-    salt = verifier.get("salt")
-    digest = verifier.get("digest")
-    if not isinstance(salt, str) or not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{32}", salt) is None:
-        return False
-    expected = _password_verifier_digest(account_plan, keepass_password, bytes.fromhex(salt))
-    return secrets.compare_digest(expected, digest)
+    payload = _verifier_payload(account_plan, keepass_password)
+    completed = run_keepass_setup(["verifier", "verify"], secret_lines(json.dumps(dict(verifier)), *payload))
+    if completed.returncode in (0, 3):
+        return completed.returncode == 0
+    raise SetupError(completed.stderr.strip() or "Unable to check the password verifier")
 
 
 def canonical_setup_plan(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -1757,7 +1717,7 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
             database_result = run_setup_stage(
                 journal,
                 "keepass-database",
-                lambda: verify_or_create_database(password, args.create_database),
+                lambda: verify_or_create_database(password, args.create_database, administrator_password),
                 postcondition=keepass_database_ready,
             )
             progress("initializing machine and service secrets")

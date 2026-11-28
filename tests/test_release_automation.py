@@ -347,7 +347,6 @@ class ReleaseAutomationTests(unittest.TestCase):
         for relative in (
             "modules/nas/config/systemd-services.nix",
             "modules/nas/config/application-services.nix",
-            "modules/nas/internal/secret-tools.nix",
         ):
             self.assertIn("bootstrapPassword", (ROOT / relative).read_text(encoding="utf-8"))
 

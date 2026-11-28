@@ -20,13 +20,14 @@ class BacklogCompletionTests(unittest.TestCase):
 
     def test_secret_transaction_and_fault_injection_are_wired(self) -> None:
         secret_tools = (ROOT / "modules/nas/internal/secret-tools.nix").read_text()
-        bats = (ROOT / "tests/bats/nas-secret-transaction.bats").read_text()
-        self.assertIn("nas-secret-transaction.sh", secret_tools)
-        self.assertIn("termination after swap restores the prior tree", bats)
-        secret_tools = (ROOT / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
-        self.assertIn("trap cleanup EXIT", secret_tools)
-        self.assertIn("trap 'exit 143' TERM", secret_tools)
-        self.assertNotIn("trap cleanup EXIT HUP INT TERM", secret_tools)
+        self.assertIn('"cmd/nas-secrets"', secret_tools)
+        transaction_tests = (ROOT / "go/internal/txn/txn_test.go").read_text()
+        self.assertIn("failMove", transaction_tests)
+        self.assertIn("failRm", transaction_tests)
+        blackbox = (ROOT / "tests/test_nas_secrets_blackbox.py").read_text()
+        self.assertIn("test_termination_after_swap_restores_the_prior_tree", blackbox)
+        main = (ROOT / "go/cmd/nas-secrets/main.go").read_text()
+        self.assertIn("syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM", main)
 
     def test_browser_matrix_covers_all_capabilities_and_baseline_user(self) -> None:
         browser = (ROOT / "tests/browser/authz.py").read_text()

@@ -181,7 +181,8 @@ class Alpha18HardeningContracts(unittest.TestCase):
     def test_ai_only_runtime_helpers_remain_removed(self) -> None:
         self.assertEqual(list((ROOT / "services").glob("nas_ai_*.py")), [])
         self.assertFalse((ROOT / "services/nas_coding_agent.py").exists())
-        self.assertNotIn("require_huggingface_token", text("scripts/lib/nas-secret-runtime.sh"))
+        go_sources = "".join(path.read_text(encoding="utf-8") for path in (ROOT / "go").rglob("*.go"))
+        self.assertNotIn("huggingface", go_sources.lower())
 
     def test_cockpit_search_keywords_exclude_removed_ai_application(self) -> None:
         manifests = ["cockpit/src/manifest.json"]

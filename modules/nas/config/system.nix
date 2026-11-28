@@ -13,6 +13,8 @@ let
     nasCockpitApi
     nasDoctor
     nasIdentitySync
+    nasKeepass
+    nasKeepassSetup
     nasPythonApplication
     nasPreflight
     nasSecrets
@@ -110,7 +112,9 @@ in
     environment.systemPackages = with pkgs; [
       copyparty
       (lib.lowPrio nasPythonApplication)
+      (lib.lowPrio nasKeepass)
       keepassxc
+      nasKeepassSetup
       nasSecrets
       nasSetup
       nasState

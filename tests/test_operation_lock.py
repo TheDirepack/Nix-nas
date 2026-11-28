@@ -6,6 +6,7 @@ import contextlib
 import os
 import pathlib
 import select
+import signal
 import subprocess
 import sys
 import tempfile
@@ -124,6 +125,41 @@ class OperationLockTests(unittest.TestCase):
                 result = locks.main(["--action", "nested", "--class", "state", "--", "/bin/false"])
                 self.assertEqual(result, 7)
                 run.assert_called_once()
+
+    def test_cli_retains_lock_until_terminated_child_exits(self) -> None:
+        for before_launch in (True, False):
+            with (
+                self.subTest(before_launch=before_launch),
+                mock.patch.object(locks.signal, "signal", return_value=signal.SIG_DFL) as install_handler,
+                mock.patch.object(locks.subprocess, "Popen") as popen,
+            ):
+                child = popen.return_value
+
+                def deliver_term() -> None:
+                    handler = install_handler.call_args_list[0].args[1]
+                    handler(signal.SIGTERM, None)
+
+                def launch(*_args: object, **_kwargs: object) -> mock.MagicMock:
+                    if before_launch:
+                        deliver_term()
+                        child.terminate.assert_not_called()
+                    return child
+
+                def wait() -> int:
+                    self.assertEqual(locks.operation_state()["busyClasses"], ["runtime"])
+                    if not before_launch:
+                        deliver_term()
+                    child.terminate.assert_called_once_with()
+                    return 143
+
+                popen.side_effect = launch
+                child.wait.side_effect = wait
+                result = locks.main(
+                    ["--action", "unlock", "--class", "runtime", "--forward-termination", "--", "/bin/false"]
+                )
+                self.assertEqual(result, 143)
+                install_handler.assert_called_with(signal.SIGTERM, signal.SIG_DFL)
+                self.assertEqual((self.root / locks.LOCK_PATH_NAME).read_text(encoding="utf-8"), "")
 
     def test_cli_contender_fails_without_executing_command(self) -> None:
         with locks.acquire_operation("backup", ("storage",)):

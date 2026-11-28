@@ -4,11 +4,15 @@ import hashlib
 import os
 import pathlib
 import pty
+import shlex
 import subprocess
 import tempfile
 import threading
 import time
 import unittest
+
+from tests.go_binaries import binary
+from tests.nas_secrets_harness import Appliance, entries
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -16,55 +20,20 @@ PROMPT = b"KeePass database password: "
 PASSWORD = b"fixture-password"
 
 
-def extract_shell_function(source: str, name: str) -> str:
-    """Extract one nas-secrets shell function from the Nix string literal."""
-    lines = source.splitlines()
-    marker = f"      {name}() {{"
-    try:
-        start = lines.index(marker)
-    except ValueError as exc:
-        raise AssertionError(f"{name} is missing from secret-tools.nix") from exc
-    for end in range(start + 1, len(lines)):
-        if lines[end] == "      }":
-            block = lines[start : end + 1]
-            return "\n".join(line[6:] if line.startswith("      ") else line for line in block)
-    raise AssertionError(f"{name} is not terminated in secret-tools.nix")
-
-
 class ZfsKeyStagingTests(unittest.TestCase):
-    def reader_script(self) -> str:
-        """Build the nas-secrets reader from the real prompt and key commands.
+    def reader_script(self, key: str) -> str:
+        """Wrap the real Go nas-secrets as the key reader.
 
-        Only the KeePassXC database access is stubbed. The prompt, its terminal
-        handling, the key emission, and the newline that follows a password
-        entry are the production code paths, so prompt output that reaches
-        stdout makes the captured key unusable and fails these tests.
+        Only the KeePassXC database is a fake (a JSON store holding ``key``).
+        The prompt, its terminal handling and the key emission are the
+        production binary, so prompt output that reaches stdout makes the
+        captured key unusable and fails these tests.
         """
-        source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text()
-        functions = "\n\n".join(
-            extract_shell_function(source, name)
-            for name in (
-                "prompt_unlock",
-                "command_show_zfs_key",
-                "command_show_zfs_key_stdin",
-            )
-        ).replace("''${", "${")
-        return (
-            "#!/usr/bin/env bash\n"
-            "set -euo pipefail\n"
-            'database="$PWD/fixture.kdbx"\n'
-            'key_file=""\n'
-            "password_from_stdin=false\n"
-            'keepass_password=""\n'
-            "require_database() { :; }\n"
-            "get_secret() { printf '%s' \"$TEST_KEY\"; }\n"
-            f"{functions}\n"
-            'case "${1:-}" in\n'
-            "  show-zfs-key) command_show_zfs_key ;;\n"
-            "  show-zfs-key-stdin) command_show_zfs_key_stdin ;;\n"
-            '  *) echo "unexpected reader action: ${1:-}" >&2; exit 2 ;;\n'
-            "esac\n"
-        )
+        app = Appliance(store=entries(**{"zfs-dataset-key": key}))
+        self.addCleanup(app.close)
+        app.write_store(app.entries(), password=PASSWORD.decode())
+        exports = "".join(f"export {name}={shlex.quote(value)}\n" for name, value in app.env().items())
+        return f'#!/bin/sh\n{exports}exec {shlex.quote(str(binary("nas-secrets")))} "$@"\n'
 
     def run_key_path(self, *, export: bool, fail_install: bool = False, tty: bool = False):
         source = (ROOT / "modules/nas/internal/zfs-tools.nix").read_text()
@@ -113,7 +82,7 @@ sudo() {
   esac
 }
 """
-            (work / "reader").write_text(self.reader_script())
+            (work / "reader").write_text(self.reader_script(key))
             (work / "reader").chmod(0o700)
             # Provide keepassxc-cli as a real executable on PATH, matching how
             # the production reader resolves it.
@@ -257,7 +226,7 @@ sudo() {
         with tempfile.TemporaryDirectory() as raw:
             work = pathlib.Path(raw)
             key = "cd" * 32
-            (work / "reader").write_text(self.reader_script())
+            (work / "reader").write_text(self.reader_script(key))
             (work / "reader").chmod(0o700)
             stub_bin = work / "bin"
             stub_bin.mkdir()
@@ -271,7 +240,7 @@ sudo() {
                 "TEST_FINGERPRINT": "unused",
             }
             result, password_sent, captured = self._run_on_terminal(
-                ["bash", str(work / "reader"), "show-zfs-key"],
+                [str(work / "reader"), "show-zfs-key"],
                 work,
                 env,
                 timeout=20,
