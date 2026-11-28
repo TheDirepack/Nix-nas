@@ -157,7 +157,7 @@ class SetupRebootE2eContracts(unittest.TestCase):
         ):
             runner.activate_after_reboot()
 
-    def locked_surface(self, responses):
+    def locked_surface(self, responses, *, times=(0,)):
         runner = self.runner()
         requests = []
 
@@ -174,6 +174,8 @@ class SetupRebootE2eContracts(unittest.TestCase):
         with (
             mock.patch.object(runner, "run", side_effect=run),
             mock.patch.object(runner, "wait_active"),
+            mock.patch.object(runner.time, "monotonic", side_effect=times),
+            mock.patch.object(runner.time, "sleep"),
             mock.patch.object(runner.pathlib.Path, "exists", exists),
             mock.patch.object(runner.pathlib.Path, "is_file", exists),
         ):
@@ -190,6 +192,24 @@ class SetupRebootE2eContracts(unittest.TestCase):
             return "204", "", ""
         return "303", "https://nas-test.local/unlock/", ""
 
+    def test_locked_boot_waits_for_the_outpost_sign_in_redirect(self) -> None:
+        unlock = iter((("503", "", "This NAS is locked"), self.healthy_locked("GET", "/unlock/")))
+
+        def responses(method, path):
+            return next(unlock) if path == "/unlock/" else self.healthy_locked(method, path)
+
+        _runner, requests = self.locked_surface(responses, times=(0, 1))
+        self.assertEqual(sum(command[-1].endswith("/unlock/") for command in requests), 2)
+
+    def test_locked_boot_fails_if_the_outpost_never_becomes_ready(self) -> None:
+        def responses(method, path):
+            if path == "/unlock/":
+                return "503", "", "This NAS is locked"
+            return self.healthy_locked(method, path)
+
+        with self.assertRaisesRegex(RuntimeError, "HTTP 503"):
+            self.locked_surface(responses, times=(0, 1, 180))
+
     def test_locked_boot_serves_only_sign_in_and_the_gated_unlock_page(self) -> None:
         _runner, requests = self.locked_surface(self.healthy_locked)
         paths = [command[-1].removeprefix("https://nas-test.local") for command in requests]
@@ -203,6 +223,8 @@ class SetupRebootE2eContracts(unittest.TestCase):
             ("Cockpit proxied", override("/console/", ("200", "", "cockpit"))),
             ("admin interface served", override("/identity/if/admin/", ("200", "", "admin"))),
             ("unlock page without sign-in", override("/unlock/", ("200", "", '<form id="unlock-form">'))),
+            ("unlock form in an error response", override("/unlock/", ("503", "", '<form id="unlock-form">'))),
+            ("sign-in redirect has no destination", override("/unlock/", ("302", "", ""))),
             ("unlock API without sign-in", override("/unlock/api/activate", ("200", "", '{"unlocked": true}'))),
             ("Authentik down", override("/identity/-/health/live/", ("503", "", "notice"))),
             ("setup API reachable", override("/setup/api/reboot", ("200", "", '{"rebooting": true}'))),

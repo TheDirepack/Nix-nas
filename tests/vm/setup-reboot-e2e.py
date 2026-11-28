@@ -296,9 +296,15 @@ def verify_locked_browser_surface() -> None:
         code, location, _body = locked_request(path)
         if code != "303" or not location.endswith("/unlock/"):
             raise CheckError(f"locked route {path} did not redirect to /unlock/ (HTTP {code} {location})")
-    code, location, body = locked_request("/unlock/")
-    if code not in {"302", "303", "307"} or "unlock-form" in body:
-        raise CheckError(f"unauthenticated /unlock/ was not sent to Authentik sign-in (HTTP {code} {location})")
+    # The outpost's systemd unit is active before its forward-auth listener is ready.
+    deadline = time.monotonic() + 180
+    while True:
+        code, location, body = locked_request("/unlock/")
+        if code in {"302", "303", "307"} and location and "unlock-form" not in body:
+            break
+        if code != "503" or "unlock-form" in body or time.monotonic() >= deadline:
+            raise CheckError(f"unauthenticated /unlock/ was not sent to Authentik sign-in (HTTP {code} {location})")
+        time.sleep(2)
     code, _location, body = locked_request(
         "/unlock/api/activate",
         "--request",
