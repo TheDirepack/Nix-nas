@@ -38,9 +38,12 @@ mode. Caddy's authentication and authorization checks protect access to it.
   setup wizard form the browser setup path. The `akadmin` password is randomly
   generated on first boot and obtained through the recovery plane. Setup
   verifies the chosen administrator before retiring bootstrap authority.
-- After setup, locked boot serves only the static unlock notice. It exposes no
-  browser management or unlock endpoint; recovery requires console, authorized
-  SSH, or hardware KVM.
+- After setup, locked boot serves Authentik sign-in (running on a per-boot key)
+  and a `nas_admin`-gated `/unlock/` page whose backend feeds
+  `nas-secrets activate-stdin`. It exposes no browser management endpoint;
+  unlock restarts Authentik with its KeePass environment, which invalidates
+  pre-unlock sessions. Recovery when that layer fails requires console,
+  authorized SSH, or hardware KVM.
 
 Implementation authority lives in `application-services.nix`,
 `caddy-bootstrap.nix`, `caddy-helpers.nix`, the V2 cockpit seed, and

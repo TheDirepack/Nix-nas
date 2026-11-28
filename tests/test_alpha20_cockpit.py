@@ -164,7 +164,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
         operations = text("cockpit/src/pages/operations-page.jsx")
         setup_page = text("cockpit/src/pages/setup-page.jsx")
         self.assertIn("process.input", api)
-        self.assertIn('["nas-secrets", "activate-stdin"]', api)
+        self.assertNotIn("nas-secrets", api, "Cockpit never collects the KeePass password")
         self.assertIn("Confirm maintenance action", operations)
         self.assertIn('href="/setup/"', setup_page)
         self.assertNotIn("startFirstRun", setup_page)

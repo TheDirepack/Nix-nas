@@ -67,7 +67,16 @@ Capability definitions come from V2 `application.<service>.<capability>` objects
 
 ## Locked boot and secrets
 
-The machine can boot before KeePassXC is unlocked. Local console, SSH with a provisioned recovery key, or hardware KVM form the recovery plane; browser management is unavailable while locked. Before setup completes, Caddy serves the Authentik-gated first-start wizard. After setup, a locked boot serves one static unlock notice on every path; it proxies nothing and provides no browser login or recovery operation. `nas-secrets` reads the KDBX password from standard input, stages only required runtime material under `/run/nas-secrets`, validates storage/secrets, and then starts the protected target.
+The machine can boot before KeePassXC is unlocked. Local console, SSH with a provisioned recovery key, or hardware KVM form the recovery plane; browser management is unavailable while locked. Before setup completes, Caddy serves the Authentik-gated first-start wizard.
+
+After setup, a locked boot runs Authentik in two stages:
+
+1. **Locked.** `nas-bootstrap-runtime-select` writes a fresh `AUTHENTIK_SECRET_KEY` to `/run/nas-authentik/environment`. The proxy outpost starts from the boot-side outpost token. Caddy serves only Authentik sign-in plus `/unlock/` (a static page) and `/unlock/api/*` (`nas-unlock-api`), and both require forward-auth and `nas_admin`.
+2. **Unlocked.** `nas-unlock-api` passes the password to `nas-secrets activate-stdin`. Activation stages the KeePass tree, links `/run/nas-authentik/unlocked-environment` to its Authentik environment (read after the boot file), then `try-restart`s Authentik so that the KeePass key takes effect. The link is created only after setup; during first start the regenerated boot environment stays authoritative. It starts the protected target. The Caddy selector then loads the managed configuration. Pre-unlock sessions stop validating when the key changes.
+
+A rolled-back activation stops the protected target, and with it Authentik. `nas-unlock-api` then restarts the locked identity units so that browser unlock stays available.
+
+`nas-secrets` reads the KDBX password from standard input, stages only required runtime material under `/run/nas-secrets`, validates storage/secrets, and then starts the protected target.
 
 No long-running service should need broad read access to the whole secret tree when an exact credential or read-only path is sufficient.
 

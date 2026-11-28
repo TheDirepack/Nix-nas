@@ -1,4 +1,4 @@
-"""Locked-boot browser surface: Caddy selection and the static unlock notice."""
+"""Locked-boot browser surface: Caddy selection, the gated unlock page, and the fallback notice."""
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BOOTSTRAP_NIX = ROOT / "modules/nas/config/caddy-bootstrap.nix"
 NOTICE = ROOT / "web/locked/index.html"
+UNLOCK_PAGE = ROOT / "web/unlock/index.html"
+UNLOCK_SCRIPT = ROOT / "web/unlock/unlock.js"
 
 
 def nix_string(source: str, start_marker: str) -> str:
@@ -145,7 +147,7 @@ class LockedSelectionTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         return SelectorHarness(pathlib.Path(temporary.name), **kwargs)
 
-    def test_completed_setup_without_secrets_loads_only_the_locked_notice(self) -> None:
+    def test_completed_setup_without_secrets_loads_the_locked_configuration(self) -> None:
         harness = self.harness()
         completed = harness.run(setup_complete=True, unlocked=False)
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -205,7 +207,7 @@ class NoticeParser(html.parser.HTMLParser):
 
 
 class LockedNoticeContentTests(unittest.TestCase):
-    def test_notice_is_static_guidance_without_management_actions(self) -> None:
+    def test_fallback_notice_is_static_guidance_without_management_actions(self) -> None:
         parser = NoticeParser()
         parser.feed(NOTICE.read_text(encoding="utf-8"))
         for tag in ("script", "form", "input", "button", "iframe", "a", "link", "img"):
@@ -217,21 +219,75 @@ class LockedNoticeContentTests(unittest.TestCase):
         self.assertIn("local recovery administrator", text)
         self.assertIn("SSH with a provisioned recovery key", text)
 
-    def test_locked_configuration_proxies_nothing(self) -> None:
-        locked = nix_string(BOOTSTRAP_NIX.read_text(encoding="utf-8"), 'writeText "locked-caddyfile"')
-        self.assertNotIn("reverse_proxy", locked)
-        self.assertNotIn("caddyForwardAuth", locked)
-        self.assertNotIn("redir", locked)
-        self.assertEqual(locked.count("handle"), 1, "one catch-all handle serves every path")
-        self.assertIn("root * ${lockedNotice}/share/nas-locked", locked)
-        self.assertIn("rewrite * /index.html", locked)
-        self.assertIn("status 503", locked)
-        # The rewrite makes /index.html/ share the file's base name; a canonical
-        # redirect would replace the notice with a 308.
-        self.assertIn("disable_canonical_uris", locked)
-        self.assertIn("form-action 'none'", locked)
+    def test_unlock_page_posts_only_the_password_to_its_own_api(self) -> None:
+        parser = NoticeParser()
+        parser.feed(UNLOCK_PAGE.read_text(encoding="utf-8"))
+        self.assertFalse([name for name, _value in parser.attributes if name.startswith("on")])
+        self.assertIn(("src", "unlock.js"), parser.attributes)
+        self.assertIn(("type", "password"), parser.attributes)
+        self.assertNotIn("style", parser.tags, "the unlock page CSP forbids inline styles")
+        script = UNLOCK_SCRIPT.read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r'fetch\("([^"]+)"', script), ["/unlock/api/status", "/unlock/api/activate"])
+        self.assertIn("JSON.stringify({password})", script)
+        self.assertIn('input.value = "";', script)
+        for forbidden in ("localStorage", "sessionStorage", "innerHTML", "eval(", "document.cookie"):
+            self.assertNotIn(forbidden, script)
+
+    def locked(self) -> str:
+        return nix_string(BOOTSTRAP_NIX.read_text(encoding="utf-8"), 'writeText "locked-caddyfile"')
+
+    def test_locked_configuration_proxies_only_sign_in_and_the_gated_unlock_api(self) -> None:
+        locked = self.locked()
+        self.assertEqual(
+            sorted(set(re.findall(r"reverse_proxy (\$\{[^}]+\}|\S+)", locked.replace("127.0.0.1:", "")))),
+            ["${toString authentikOutpostPort}", "${toString authentikPort}", "unix//run/nas-unlock/unlock.sock"],
+        )
+        for absent in ("/console", "/setup", "nas-setup-api", "nas-cockpit-sso", "caddy_config", "/shares"):
+            self.assertNotIn(absent, locked)
+        self.assertIn("redir * /unlock/ 303", locked)
         self.assertIn('Cache-Control "no-store"', locked)
         self.assertIn("${caddySiteHeaders}", locked)
+
+    def test_unlock_routes_require_forward_auth_and_nas_admin(self) -> None:
+        locked = self.locked()
+        for route in ("handle /unlock/api/* {", "handle /unlock/* {"):
+            block = locked[locked.index(route) :]
+            block = block[: block.index("\n  }\n")]
+            with self.subTest(route=route):
+                auth = block.index("${caddyForwardAuth}")
+                gate = block.index("not header_regexp Remote-Groups ${adminGroupPattern}")
+                self.assertLess(auth, gate)
+                self.assertIn("respond @missingUnlock", block)
+                served = block.index("reverse_proxy") if "reverse_proxy" in block else block.index("file_server")
+                self.assertLess(gate, served)
+        source = BOOTSTRAP_NIX.read_text(encoding="utf-8")
+        self.assertIn('adminGroupPattern = "(^|[|,][[:space:]]*)nas_admin([[:space:]]*[|,]|$)";', source)
+
+    def test_authentik_interfaces_are_withheld_until_unlock(self) -> None:
+        locked = self.locked()
+        interfaces = locked.index("handle @authentikInterfaces {")
+        self.assertLess(interfaces, locked.index("handle @authentikUi {"), "the interface redirect must win")
+        self.assertIn("if/admin*", locked)
+        self.assertIn("if/user*", locked)
+
+    def test_upstream_failures_fall_back_to_the_static_notice(self) -> None:
+        locked = self.locked()
+        errors = locked[locked.index("handle_errors 502 503 504 {") :]
+        self.assertIn("root * ${lockedNotice}/share/nas-locked", errors)
+        self.assertIn("rewrite * /index.html", errors)
+        self.assertIn("status 503", errors)
+        self.assertIn("disable_canonical_uris", errors)
+        self.assertIn("form-action 'none'", errors)
+
+    def test_unlock_page_csp_forbids_inline_and_foreign_code(self) -> None:
+        locked = self.locked()
+        csp = re.search(r'handle /unlock/\* \{.*?Content-Security-Policy "([^"]+)"', locked, re.S)
+        assert csp is not None
+        policy = csp.group(1)
+        self.assertIn("default-src 'none'", policy)
+        self.assertIn("script-src 'self'", policy)
+        self.assertIn("frame-ancestors 'none'", policy)
+        self.assertNotIn("unsafe", policy)
 
 
 if __name__ == "__main__":

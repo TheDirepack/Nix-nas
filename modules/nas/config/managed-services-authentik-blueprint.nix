@@ -108,7 +108,7 @@ in
       };
       serviceConfig = {
         ExecStart = lib.mkOverride 900 reconcileScript;
-        EnvironmentFile = [ authentikEnvironment ];
+        EnvironmentFile = [ authentikEnvironment "-${nasInternal.authentikUnlockedEnvironmentFile}" ];
         ReadWritePaths = [ blueprintDir "/var/lib/nas-control" "/run/nas-control" ];
         RestrictAddressFamilies = lib.mkOverride 900 [ "AF_UNIX" ];
       };

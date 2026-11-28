@@ -17,7 +17,13 @@ Runtime-managed upstream state is authoritative in appliance-managed mode. `nas-
 
 ## Locked boot
 
-Local console, SSH, or hardware KVM and a local PAM administrator are the recovery plane. Authentik, CopyParty, and protected services remain stopped until secret activation and storage validation succeed. After setup, Caddy serves only the static unlock notice while locked; no browser management or unlock endpoint is exposed. An Authentik administrator is not automatically a Linux/PAM administrator.
+Local console, SSH, or hardware KVM and a local PAM administrator are the recovery plane. CopyParty, Cockpit, and protected services remain stopped until secret activation and storage validation succeed.
+
+After setup, a locked boot runs Authentik in a reduced mode as the first layer in front of unlock. Its secret key is generated per boot under `/run/nas-authentik` and never written to disk. Its only boot-side credential is the least-privilege embedded-outpost token. Caddy serves only Authentik sign-in and the `/unlock/` page and API; both sit behind forward-auth and an explicit `nas_admin` check. The Authentik user and admin interfaces redirect to `/unlock/`, and no other route is proxied.
+
+`nas-unlock-api` accepts one bounded password over JSON, requires a same-origin request, serializes attempts, backs off after failures, and passes the password to `nas-secrets activate-stdin` on stdin. Activation layers the KeePass environment over the boot key and restarts Authentik, which ends every pre-unlock session. If Authentik or the outpost is unavailable, Caddy falls back to the static notice that points to the recovery console.
+
+An Authentik administrator is not automatically a Linux/PAM administrator. Browser unlock lets `nas_admin` members supply the KeePass password; it grants no PAM or shell authority.
 
 ## Authorization
 
@@ -29,7 +35,10 @@ Local console, SSH, or hardware KVM and a local PAM administrator are the recove
 
 ## Secrets and privileged input
 
-- Secrets must not appear in Nix store paths, command arguments, URLs, persistent JSON, browser storage, or environment variables.
+- Secrets must not appear in Nix store paths, command arguments, URLs, persistent JSON, browser storage, or environment variables. Upstream services that read secrets only from `EnvironmentFile=` (Authentik, Vaultwarden, ntfy) are the exception; their files are rendered under `/run` from KeePass, or per boot for the locked Authentik key.
+- After setup, the only Authentik credential on the system partition is the embedded-outpost token. The superuser API token and the Authentik secret key resolve through the KeePass tree; activation retires the first-boot plaintext copies.
+- The KeePass database password is at least 16 characters, uses at least 6 distinct characters, and differs from the administrator password. Setup never deletes an existing KDBX: it moves it aside, and refuses outright when the managed dataset is already encrypted.
+- Resumable setup journals bind passwords only through a per-journal salted scrypt verifier, which completion removes.
 - Secret stdin is one bounded nonempty line.
 - Password files are absolute, private, regular, non-symlink files and are opened once.
 - Long setup operations use pre-authorized, noninteractive sudo; payload stdin must never be consumed by sudo.

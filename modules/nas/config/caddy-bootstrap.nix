@@ -42,17 +42,73 @@ let
   lockedNotice = pkgs.runCommand "nas-locked-notice" { } ''
     install -D -m 0444 ${../../../web/locked/index.html} "$out/share/nas-locked/index.html"
   '';
-  # Completed setup with inactive secrets. The recovery plane owns unlock, so
-  # this configuration proxies nothing: every path gets the same static notice.
+  unlockPage = pkgs.runCommand "nas-unlock-page" { } ''
+    for file in index.html unlock.css unlock.js; do
+      install -D -m 0444 ${../../../web/unlock}/"$file" "$out/share/nas-unlock/$file"
+    done
+  '';
+  adminGroupPattern = "(^|[|,][[:space:]]*)nas_admin([[:space:]]*[|,]|$)";
+  # Completed setup with inactive secrets. Authentik runs on a boot-scoped key
+  # so a nas_admin can sign in and submit the KeePass password to
+  # nas-unlock-api. Nothing else is proxied; the user and admin interfaces are
+  # withheld until KeePass is active. If Authentik or the outpost is down, the
+  # static notice points to the recovery console.
   lockedCaddyfile = pkgs.writeText "locked-caddyfile" ''
 ${caddyGlobalOptions}
 https://${lanHost} {
 ${caddySiteHeaders}
-  header {
-    Cache-Control "no-store"
-    Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+  header Cache-Control "no-store"
+
+  handle ${authentikPathNoSlash} {
+    redir * ${cfg.identity.authentikPath}
+  }
+  @authentikInterfaces path ${cfg.identity.authentikPath}if/admin* ${cfg.identity.authentikPath}if/user*
+  handle @authentikInterfaces {
+    redir * /unlock/ 303
+  }
+  @authentikUi path ${cfg.identity.authentikPath}*
+  handle @authentikUi {
+    reverse_proxy 127.0.0.1:${toString authentikPort}
+  }
+  @authentikFlows path /flows/*
+  handle @authentikFlows {
+    uri replace /flows ${cfg.identity.authentikPath}flows
+    reverse_proxy 127.0.0.1:${toString authentikPort}
+  }
+  @authentikOutpost path /outpost.goauthentik.io/*
+  handle @authentikOutpost {
+    reverse_proxy 127.0.0.1:${toString authentikOutpostPort} {
+      header_up Host {http.request.host}
+      header_up X-Forwarded-Proto https
+    }
+  }
+  handle /unlock {
+    redir /unlock/ 308
+  }
+  handle /unlock/api/* {
+    route {
+      ${caddyForwardAuth}
+      @missingUnlockApiAdmin not header_regexp Remote-Groups ${adminGroupPattern}
+      respond @missingUnlockApiAdmin 403
+      reverse_proxy unix//run/nas-unlock/unlock.sock
+    }
+  }
+  handle /unlock/* {
+    route {
+      ${caddyForwardAuth}
+      @missingUnlockPageAdmin not header_regexp Remote-Groups ${adminGroupPattern}
+      respond @missingUnlockPageAdmin 403
+      header Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+      uri strip_prefix /unlock
+      root * ${unlockPage}/share/nas-unlock
+      file_server
+    }
   }
   handle {
+    redir * /unlock/ 303
+  }
+  handle_errors 502 503 504 {
+    header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     root * ${lockedNotice}/share/nas-locked
     rewrite * /index.html
     file_server {
@@ -256,8 +312,8 @@ EOCF
       return "$status"
     }
 
-    # After setup, a locked appliance exposes only the static notice; the
-    # bootstrap routes (setup API, Cockpit, Authentik) belong to first start.
+    # After setup, a locked appliance exposes only Authentik sign-in and the
+    # gated /unlock page; the setup API and Cockpit belong to other modes.
     if [[ -f /var/lib/nas-setup/state.json && ! -f ${secretRoot}/ready ]]; then
       reload_selected select_locked
       exit 0

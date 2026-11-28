@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import * as apiModule from "../../cockpit/src/api.js";
 import {
-  activateSecrets,
   api,
   apiInput,
   managedServicesDocument,
@@ -217,46 +217,6 @@ test("JSON transport still rejects an unavailable Cockpit process API before spa
   assert.throws(() => api(["overview"], null), /Cockpit process API is unavailable/);
 });
 
-test("unlock sends the password only over stdin", () => {
-  const calls = [];
-  const process = {
-    input(value) {
-      calls.push(["input", value]);
-    },
-  };
-  const spawn = (command, options) => {
-    calls.push(["spawn", command, options]);
-    return process;
-  };
-  assert.equal(activateSecrets("correct horse", spawn), process);
-  assert.deepEqual(calls, [
-    ["spawn", ["nas-secrets", "activate-stdin"], {superuser: "require", err: "message"}],
-    ["input", "correct horse\n"],
-  ]);
-});
-
-test("secret transports reject empty and multiline passwords before spawning", () => {
-  const fail = () => assert.fail("spawn should not run");
-  assert.throws(() => activateSecrets("", fail), /Enter/);
-  assert.throws(() => activateSecrets("bad\nvalue", fail), /single line/);
-});
-
-test("secret transports preserve hostile single-line values only on stdin", async () => {
-  const inputs = [];
-  const spawn = (command) => {
-    const process = Promise.resolve('{"ok":true}');
-    process.input = (value) => inputs.push({command, value});
-    return process;
-  };
-  const password = "'\"\\$`;&|<> password";
-  activateSecrets(password, spawn);
-  assert.deepEqual(
-    inputs.map(({command}) => command),
-    [["nas-secrets", "activate-stdin"]],
-  );
-  assert.equal(inputs[0].value, `${password}\n`);
-  assert.equal(
-    inputs.some(({command}) => [].concat(command).some((arg) => arg.includes(password))),
-    false,
-  );
+test("Cockpit exposes no KeePassXC password transport", () => {
+  assert.equal("activateSecrets" in apiModule, false);
 });

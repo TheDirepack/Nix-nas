@@ -18,6 +18,7 @@ nas-managed-session = "nas_v2_session:main"
 nas-operation-run = "nas_operation_lock:main"
 nas-setup = "nas_setup:main"
 nas-state = "nas_state:main"
+nas-unlock-api = "nas_unlock_api:main"
 nas-v2 = "nas_v2_cli:main"
 
 [tool.setuptools.dynamic]
@@ -41,6 +42,7 @@ py-modules = [
   "nas_setup_first_start",
   "nas_state",
   "nas_syncthing_devices",
+  "nas_unlock_api",
   "nas_guarded_apply",
   "nas_v2_accelerator",
   "nas_v2_activation",

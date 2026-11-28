@@ -224,9 +224,12 @@ class FirstStartRequestContractTests(unittest.TestCase):
             "password": "long-enough-password",
         }
         self.assertEqual(
-            parse_first_start_secrets(json.dumps({"keepass": "valid-secret", "administrator": admin})),
-            ("valid-secret", admin),
+            parse_first_start_secrets(json.dumps({"keepass": "valid keepass passphrase", "administrator": admin})),
+            ("valid keepass passphrase", admin),
         )
+        for weak in ("valid-secret", "aaaaaaaaaaaaaaaaaaaa", admin["password"].upper()):
+            with self.subTest(weak=weak), self.assertRaisesRegex(SetupError, "KeePass database password must"):
+                parse_first_start_secrets(json.dumps({"keepass": weak, "administrator": admin}))
         for payload in (
             {"keepass": None, "administrator": admin},
             {"keepass": "", "administrator": admin},

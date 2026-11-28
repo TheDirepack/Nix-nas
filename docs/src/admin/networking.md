@@ -16,7 +16,7 @@ Interfaces not listed in `nas.trustedInterfaces` remain fail-closed by default.
 
 ## Locked-state recovery
 
-Locked boot exposes no browser management endpoint. Use the local console, SSH with a provisioned recovery key, or hardware KVM to run `sudo nas-secrets activate`. After activation, use the normal Caddy route and Authentik login.
+Locked boot exposes no browser management endpoint. It serves only Authentik sign-in and the `nas_admin`-gated `https://<nas-hostname>.local/unlock/` page. If that is unavailable, use the local console, SSH with a provisioned recovery key, or hardware KVM to run `sudo nas-secrets activate`. After activation, sign in again through the normal Caddy route.
 
 ## Restoring network configuration
 

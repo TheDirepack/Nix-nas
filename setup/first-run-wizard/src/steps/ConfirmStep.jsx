@@ -36,6 +36,16 @@ const validate = (administrator, keePassPassword, keePassPasswordConfirm, plan, 
   if (keePassPassword !== keePassPasswordConfirm) {
     return 'Enter and confirm the KeePassXC database password.';
   }
+  // Keep in sync with validate_keepass_password_strength in nas_setup_config.py.
+  if ([...keePassPassword].length < 16) {
+    return 'Use a KeePassXC database password with at least 16 characters.';
+  }
+  if (new Set(keePassPassword).size < 6) {
+    return 'Use at least 6 different characters in the KeePassXC database password.';
+  }
+  if (keePassPassword.toLowerCase() === administrator.password.toLowerCase()) {
+    return 'The KeePassXC database password must differ from the administrator password.';
+  }
   const blocked = planProblem(plan);
   if (blocked) return blocked;
   if (plan.requiresDestructiveConfirmation && !allowDestructive) {

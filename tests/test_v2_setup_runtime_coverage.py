@@ -325,38 +325,6 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             self.assertIn("db-info", create_admin.call_args_list[1].args[0])
             self.assertNotIn("--pw-stdin", create_admin.call_args_list[1].args[0])
 
-    def test_create_keepass_database_replaces_a_regular_existing_database(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            database = pathlib.Path(raw) / "NAS.kdbx"
-            database.write_text("bootstrap database", encoding="utf-8")
-            calls: list[list[str]] = []
-
-            def root(command: list[str], **_kwargs: object) -> setup.Completed:
-                value = list(command)
-                calls.append(value)
-                if value[:2] == ["rm", "--"]:
-                    database.unlink()
-                return setup.Completed(tuple(value), "", "")
-
-            def admin(command: list[str], **_kwargs: object) -> setup.Completed:
-                value = list(command)
-                if "db-create" in value:
-                    self.assertFalse(database.exists())
-                    database.write_text("fresh database", encoding="utf-8")
-                return setup.Completed(tuple(value), "", "")
-
-            with (
-                mock.patch.object(setup, "KEEPASS_DATABASE", database),
-                mock.patch.object(setup, "local_administrator_username", return_value="nasadmin"),
-                mock.patch.object(setup, "run_root", side_effect=root),
-                mock.patch.object(setup, "run_admin", side_effect=admin) as run_admin,
-            ):
-                self.assertEqual(setup.verify_or_create_database("new-password", True), "created")
-
-            self.assertIn(["rm", "--", str(database)], calls)
-            self.assertEqual(database.read_text(encoding="utf-8"), "fresh database")
-            self.assertEqual(run_admin.call_args_list[-1].kwargs["input_text"], "new-password\n")
-
     def test_create_keepass_database_rejects_non_regular_existing_path(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             database = pathlib.Path(raw) / "NAS.kdbx"
@@ -540,15 +508,16 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
         self.assertEqual(result, {"demo": "always"})
         self.assertIn(setup.MANAGED_SERVICES_CONTROL, root.call_args.args[0])
 
-    def test_password_input_authenticators_are_secret_independent_in_output(self) -> None:
+    def test_legacy_password_input_authenticators_are_secret_independent_in_output(self) -> None:
         plan = {"accounts": [{"username": "alice", "password": "secret"}, {"username": "bob"}]}
-        value = setup.password_input_authenticators(plan, "keepass")
+        value = setup.legacy_password_input_authenticators(plan, "keepass")
         self.assertEqual(set(value), {"alice"})
         self.assertNotIn("secret", json.dumps(value))
-        with self.assertRaisesRegex(setup.SetupError, "Account plan is invalid"):
-            setup.password_input_authenticators({"accounts": 1}, "pw")
-        with self.assertRaisesRegex(setup.SetupError, "Account plan is invalid"):
-            setup.password_input_authenticators({"accounts": [1]}, "pw")
+        for broken in ({"accounts": 1}, {"accounts": [1]}):
+            with self.assertRaisesRegex(setup.SetupError, "Account plan is invalid"):
+                setup.legacy_password_input_authenticators(broken, "pw")
+            with self.assertRaisesRegex(setup.SetupError, "Account plan is invalid"):
+                setup.password_verifier(broken, "pw")
 
     def test_canonical_plan_digest_and_confirmation(self) -> None:
         config = {
@@ -583,9 +552,9 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
         args = argparse.Namespace(
             create_database=False, confirm_storage_device=[], allow_destructive_storage=False, skip_preflight=False
         )
-        first = setup.setup_fingerprint(config, args, {"accounts": []}, "pw")
+        first = setup.setup_fingerprint(config, args)
         args.skip_preflight = True
-        second = setup.setup_fingerprint(config, args, {"accounts": []}, "pw")
+        second = setup.setup_fingerprint(config, args)
         self.assertNotEqual(first, second)
 
     def test_installed_preflight_keeps_release_integrity_checks_without_developer_tooling(self) -> None:

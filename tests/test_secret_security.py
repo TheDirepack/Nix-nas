@@ -4,6 +4,7 @@ import pathlib
 import re
 import shlex
 import subprocess
+import tempfile
 import textwrap
 import unittest
 
@@ -157,6 +158,90 @@ class SecretVaultRenderingTests(unittest.TestCase):
         self.assertIn('user = "admin:$password"', source)
         self.assertNotIn('--user "admin:$password"', source)
         self.assertNotIn('-u "admin:$password"', source)
+
+
+class KeePassPasswordInputTests(unittest.TestCase):
+    def prompt(self, password: str) -> subprocess.CompletedProcess[str]:
+        helpers = rendered_shell_helpers("require_database", "prompt_unlock")
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            database = root / "NAS.kdbx"
+            database.write_text("fixture", encoding="utf-8")
+            fake = root / "keepassxc-cli"
+            fake.write_text("#!/bin/sh\ncat >/dev/null\nexit 0\n", encoding="utf-8")
+            fake.chmod(0o755)
+            script = (
+                "set -Eeuo pipefail\n"
+                f"database={shlex.quote(str(database))}\nkey_file=''\npassword_from_stdin=true\n"
+                + helpers
+                + 'prompt_unlock\necho "length=${#keepass_password}"\n'
+            )
+            return subprocess.run(
+                ["bash", "-c", script],
+                input=password + "\n",
+                env={"PATH": f"{root}:/usr/bin:/bin"},
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+
+    def test_stdin_password_is_one_bounded_line(self) -> None:
+        accepted = self.prompt("p" * 4096)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertIn("length=4096", accepted.stdout)
+        rejected = self.prompt("p" * 5000)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("exceeds 4096", rejected.stderr)
+
+
+class AuthentikActivationModeTests(unittest.TestCase):
+    def activation(self) -> str:
+        source = SECRET_TOOLS.read_text(encoding="utf-8")
+        start = source.index("      command_activate() (")
+        return source[start : source.index("      command_status() {", start)]
+
+    def test_keepass_environment_is_applied_by_restarting_authentik_before_the_target(self) -> None:
+        body = self.activation()
+        swap = body.index("nas_secret_tx_swap")
+        restart = body.index("sudo systemctl try-restart authentik-worker.service authentik.service")
+        target = body.index("sudo systemctl start nas-protected-services.target")
+        link = body.index(
+            'sudo ln -sfn -- "$secret_root/authentik/environment" ${lib.escapeShellArg authentikUnlockedEnvironmentFile}'
+        )
+        self.assertLess(swap, link)
+        self.assertLess(link, restart)
+        self.assertLess(restart, target)
+        self.assertIn("if $post_setup; then", body[swap:link], "first start keeps the regenerated boot environment")
+        setup_branch = body.index('if [[ "$setup_activation" == true ]]; then', swap)
+        self.assertLess(setup_branch, restart, "setup activation keeps its explicit start sequence")
+
+    def test_first_boot_secret_key_is_rotated_before_staging_and_retired_after_commit(self) -> None:
+        body = self.activation()
+        rotation = body.index('store_value authentik-secret-key "$(openssl rand -hex 64)"')
+        guard = body[:rotation]
+        self.assertIn('sudo test -e "$boot_authentik_dir/environment"', guard)
+        self.assertIn("! sudo test -L ${lib.escapeShellArg authentikRuntimeEnvironmentFile}", guard)
+        self.assertIn('if [[ "$setup_activation" != true ]] && sudo test -e /var/lib/nas-setup/state.json', guard)
+        self.assertLess(rotation, body.index('authentik_secret="$(get_secret authentik-secret-key)"'))
+        after_rotation = body[rotation : body.index('authentik_secret="$(get_secret authentik-secret-key)"')]
+        self.assertIn('sudo chown -- "$database_owner" "$database"', after_rotation)
+        self.assertIn('sudo chmod -- "$database_mode" "$database"', after_rotation)
+        commit = body.index("        nas_secret_tx_commit\n")
+        retire = body.index('sudo rm -f -- "$boot_authentik_dir/environment"')
+        self.assertLess(commit, retire)
+        self.assertIn("if $retire_boot_environment; then", body[commit:retire])
+
+    def test_only_the_outpost_token_remains_on_the_system_partition(self) -> None:
+        body = self.activation()
+        commit = body.index("        nas_secret_tx_commit\n")
+        tail = body[commit:]
+        copy = tail.index(
+            'sudo install -m 0400 -o root -g root "$secret_root/authentik/outpost-token" "$boot_authentik_dir/outpost-token"'
+        )
+        removal = tail.index('sudo rm -f -- "$boot_authentik_dir/api-token"')
+        self.assertLess(copy, removal, "the superuser token is removed only after the outpost token is in place")
+        self.assertNotIn('"$authentik_outpost_token" | sudo', tail, "sudo must never consume secret stdin")
 
 
 if __name__ == "__main__":

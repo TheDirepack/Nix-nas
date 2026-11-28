@@ -10,6 +10,7 @@ These modules back installed appliance commands and finite reconciliation helper
 | `nas_identity_sync.py` | Authentik API operations and reserved Syncthing reconciliation |
 | `nas_identity_model.py` | Pure identity/application-capability/account-plan models |
 | `nas_cockpit_api.py` | Fixed privileged Cockpit action allow-list |
+| `nas_unlock_api.py` | Authentik-gated locked-boot unlock socket that feeds `nas-secrets activate-stdin` |
 | `nas_operation_lock.py` | Cross-process conflict reservations |
 | `nas_operation_journal.py` | Resumable workflow journal/manual-recovery boundary |
 | `nas_state.py` | Signed state export, validation, diff, and restore |
