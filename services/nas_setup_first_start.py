@@ -11,7 +11,7 @@ import pathlib
 import re
 from typing import Any
 
-from nas_setup_config import SetupError, normalize_secret_line
+from nas_setup_config import SetupError, normalize_secret_line, validate_keepass_password_strength
 
 
 _REQUEST_KEYS = {
@@ -102,4 +102,5 @@ def parse_first_start_secrets(text: str) -> tuple[str, dict[str, Any]]:
         raise SetupError("KeePassXC database password must be a single line")
     password = normalize_secret_line(password, "KeePass database password")
     administrator = validate_first_start_administrator(payload["administrator"])
+    validate_keepass_password_strength(password, administrator["password"])
     return password, administrator

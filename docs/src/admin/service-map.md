@@ -29,7 +29,7 @@ Use this page when you are unsure where a setting belongs. Keeping one authority
 | UPS | NUT | Cockpit + NUT Web UI | NUT config and boot credential |
 | Managed application/job schedules | Managed Services V2 -> native systemd timers | `services.yaml` / Cockpit systemd timer view | V2 desired state plus generated systemd timers |
 | Optional non-V2 host schedules | Cockpit Scheduler where configured | Cockpit Scheduler | scheduler state |
-| Machine secrets and unlock | KeePassXC + `nas-secrets` | locked-state form / CLI | KDBX + `/run/nas-secrets` |
+| Machine secrets and unlock | KeePassXC + `nas-secrets` | `/unlock/` page (locked, `nas_admin`) / CLI | KDBX + `/run/nas-secrets` |
 | Deployment | `nas-update` + NixOS generations | **NAS Overview** / CLI | Git checkout and Nix profiles |
 | Documentation | mdBook Cockpit package | **NAS Help** | generated from deployed release |
 

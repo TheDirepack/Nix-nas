@@ -142,10 +142,10 @@ test("manifest does not weaken Cockpit content security policy", async () => {
   assert.equal(manifest.requires.cockpit, "300");
 });
 
-test("unlock submits from the keyboard and unfinished backup mutations are absent", async () => {
+test("Cockpit collects no KeePass password and unfinished backup mutations are absent", async () => {
   const app = await source("src/app.jsx");
   const operations = await source("src/pages/operations-page.jsx");
-  assert.match(app, /<Form onSubmit=\{unlock\}>/);
+  assert.doesNotMatch(app, /type="password"|activateSecrets/);
   assert.doesNotMatch(operations, /backup-remote-set|remoteDraft|Save remote/);
   const hook = await source("src/hooks/use-overview.js");
   assert.doesNotMatch(hook, /dbus|mergeSystemdState|readSystemdState/);

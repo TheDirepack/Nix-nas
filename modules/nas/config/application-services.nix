@@ -10,9 +10,12 @@ let
     bootstrapSecretsDir
     bootstrapUsername
     bootstrapPassword
+    authentikUnlockedEnvironmentFile
     authentikRuntimeEnvironmentFile
     authentikRuntimeApiTokenFile
+    authentikRuntimeOutpostTokenFile
     authentikOutpostTokenFile
+    authentikApiTokenFile
     authentikPort
     authentikOutpostPort
     nasAuthentikBlueprints
@@ -28,6 +31,7 @@ let
     nasPythonApplication
     nasSecrets
     postgresqlDataDir
+    secretRoot
     syncthingConfigDir
     syncthingDataDir
     syncthingGuiPort
@@ -75,7 +79,11 @@ let
     Group = "authentik";
     UMask = "0027";
     WorkingDirectory = authentikDataDir;
-    EnvironmentFile = [ authentikRuntimeEnvironmentFile ];
+    # The runtime file carries the boot-scoped key that lets a locked appliance
+    # serve sign-in for /unlock. After setup, activation links the KeePass
+    # environment here so it is read last and overrides that key, then restarts
+    # Authentik; a missing or dangling link is ignored.
+    EnvironmentFile = [ authentikRuntimeEnvironmentFile "-${authentikUnlockedEnvironmentFile}" ];
     NoNewPrivileges = true;
     PrivateTmp = true;
     ProtectHome = true;
@@ -122,6 +130,8 @@ let
     set -euo pipefail
     if [[ -s ${lib.escapeShellArg authentikOutpostTokenFile} ]]; then
       outpost_token="$(${pkgs.coreutils}/bin/cat ${lib.escapeShellArg authentikOutpostTokenFile})"
+    elif [[ -s ${lib.escapeShellArg authentikRuntimeOutpostTokenFile} ]]; then
+      outpost_token="$(${pkgs.coreutils}/bin/cat ${lib.escapeShellArg authentikRuntimeOutpostTokenFile})"
     else
       token="$(${pkgs.coreutils}/bin/cat ${authentikRuntimeApiTokenFile})"
       outpost="$(${pkgs.curl}/bin/curl --fail --silent --show-error \
@@ -272,7 +282,13 @@ in
       wantedBy = [ "multi-user.target" ];
       requires = [ "authentik.service" "nas-identity-bootstrap.service" ];
       after = [ "authentik.service" "nas-identity-bootstrap.service" ];
-      unitConfig.ConditionPathExists = [ authentikRuntimeApiTokenFile ];
+      # Locked boot has only the boot-side outpost token; the API token
+      # resolves through KeePass after activation.
+      unitConfig.ConditionPathExists = [
+        "|${authentikOutpostTokenFile}"
+        "|${authentikRuntimeOutpostTokenFile}"
+        "|${authentikRuntimeApiTokenFile}"
+      ];
       serviceConfig = {
         ExecStart = authentikProxyOutpost;
         Restart = "on-failure";
@@ -281,8 +297,34 @@ in
         PrivateTmp = true;
         ProtectHome = true;
         ProtectSystem = "strict";
-        ReadOnlyPaths = [ authentikRuntimeApiTokenFile ];
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
+      };
+    };
+
+    systemd.services.nas-unlock-api = {
+      description = "Authentik-gated browser unlock for the KeePassXC secret tree";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "network.target" ];
+      # Activation loads ZFS keys, swaps /run/nas-secret-runtime, and restarts
+      # the protected target, so this unit is deliberately not sandboxed beyond
+      # what nas-secrets itself tolerates. Its only input is one bounded
+      # password line, and Caddy routes it only in the locked configuration.
+      path = [ "/run/wrappers" ];
+      environment = {
+        NAS_SECRETS_BIN = "${nasSecrets}/bin/nas-secrets";
+        NAS_SYSTEMCTL = "${pkgs.systemd}/bin/systemctl";
+        NAS_SECRET_READY = "${secretRoot}/ready";
+        NAS_CADDY_USER = config.services.caddy.user;
+        NAS_CADDY_GROUP = config.services.caddy.group;
+      };
+      serviceConfig = {
+        ExecStart = "${nasPythonApplication}/bin/nas-unlock-api --socket-path /run/nas-unlock/unlock.sock";
+        RuntimeDirectory = "nas-unlock";
+        RuntimeDirectoryMode = "0750";
+        ExecStartPost = "${pkgs.coreutils}/bin/chgrp ${config.services.caddy.group} /run/nas-unlock";
+        Restart = "on-failure";
+        RestartSec = "2s";
+        UMask = "0077";
       };
     };
 
@@ -519,6 +561,7 @@ in
         target=${lib.escapeShellArg bootstrapRuntimeRoot}
         environment="$target/authentik/environment"
         api_token="$target/authentik/api-token"
+        outpost_token="$target/authentik/outpost-token"
         secret_owner=${lib.escapeShellArg bootstrapUsername}
         if [[ -s /var/lib/nas-setup/local-administrator.json ]]; then
           secret_owner="$(${pkgs.jq}/bin/jq -er \
@@ -557,10 +600,37 @@ in
           ${pkgs.coreutils}/bin/ln -s "$target/$name" "$link_root/$name"
         done
         ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g authentik /run/nas-authentik
-        ${pkgs.coreutils}/bin/rm -f -- ${lib.escapeShellArg authentikRuntimeEnvironmentFile}
-        ${pkgs.coreutils}/bin/ln -s "$environment" ${lib.escapeShellArg authentikRuntimeEnvironmentFile}
-        ${pkgs.coreutils}/bin/rm -f -- ${lib.escapeShellArg authentikRuntimeApiTokenFile}
-        ${pkgs.coreutils}/bin/ln -s "$api_token" ${lib.escapeShellArg authentikRuntimeApiTokenFile}
+        ${pkgs.coreutils}/bin/rm -f -- \
+          ${lib.escapeShellArg authentikRuntimeEnvironmentFile} \
+          ${lib.escapeShellArg authentikRuntimeApiTokenFile} \
+          ${lib.escapeShellArg authentikRuntimeOutpostTokenFile} \
+          ${lib.escapeShellArg authentikUnlockedEnvironmentFile}
+        if [[ ! -e /var/lib/nas-setup/state.json ]]; then
+          ${pkgs.coreutils}/bin/ln -s "$environment" ${lib.escapeShellArg authentikRuntimeEnvironmentFile}
+          ${pkgs.coreutils}/bin/ln -s "$api_token" ${lib.escapeShellArg authentikRuntimeApiTokenFile}
+          exit 0
+        fi
+        # After setup, a locked boot gets a fresh Authentik key that never
+        # reaches disk: enough to sign in and reach /unlock, while sessions
+        # signed with it stop validating once activation layers the KeePass
+        # environment over it and restarts Authentik.
+        locked_environment="$(${pkgs.coreutils}/bin/mktemp /run/nas-authentik/environment.XXXXXX)"
+        printf 'AUTHENTIK_SECRET_KEY=%s\n' "$(${pkgs.openssl}/bin/openssl rand -hex 64)" > "$locked_environment"
+        ${pkgs.coreutils}/bin/chown root:authentik "$locked_environment"
+        ${pkgs.coreutils}/bin/chmod 0640 "$locked_environment"
+        ${pkgs.coreutils}/bin/mv -f -- "$locked_environment" ${lib.escapeShellArg authentikRuntimeEnvironmentFile}
+        # The outpost token is the only boot-side Authentik credential after
+        # setup. A superuser API token on disk is legacy and is retired once
+        # activation has written the outpost token.
+        if [[ -s "$outpost_token" ]]; then
+          ${pkgs.coreutils}/bin/rm -f -- "$api_token"
+          ${pkgs.coreutils}/bin/ln -s "$outpost_token" ${lib.escapeShellArg authentikRuntimeOutpostTokenFile}
+        fi
+        if [[ -e "$api_token" ]]; then
+          ${pkgs.coreutils}/bin/ln -s "$api_token" ${lib.escapeShellArg authentikRuntimeApiTokenFile}
+        else
+          ${pkgs.coreutils}/bin/ln -s ${lib.escapeShellArg authentikApiTokenFile} ${lib.escapeShellArg authentikRuntimeApiTokenFile}
+        fi
       '';
       NoNewPrivileges = false;
     };
@@ -574,6 +644,11 @@ in
       ExecStart = pkgs.writeShellScript "nas-bootstrap-authentik-secrets" ''
         set -euo pipefail
         environment=${lib.escapeShellArg "${bootstrapAuthentikDataDir}/environment"}
+        # Completed setup retires this file. Recreating it would bring back a
+        # persistent key and AUTHENTIK_BOOTSTRAP_PASSWORD, which recreates akadmin.
+        if [[ -e /var/lib/nas-setup/state.json ]]; then
+          exit 0
+        fi
         if [[ -e "$environment" ]]; then
           if [[ ! -e /var/lib/nas-setup/state.json ]] &&
              ! ${pkgs.gnugrep}/bin/grep -Eq "^AUTHENTIK_BOOTSTRAP_PASSWORD=[[:xdigit:]]{48}$" "$environment"; then

@@ -426,6 +426,16 @@
       "tests": [
         "tests/test_contract_operations.py"
       ]
+    },
+    "nas-unlock-api": {
+      "fuzzStrategy": "unknown-argv",
+      "sources": [
+        "services/nas_unlock_api.py"
+      ],
+      "systemTest": "tests/vm/setup-reboot-e2e.py",
+      "tests": [
+        "tests/test_unlock_api.py"
+      ]
     }
   },
   "pythonModules": {
@@ -493,6 +503,9 @@
       "tests/test_fuzz_boundaries.py",
       "tests/test_property_invariants.py",
       "tests/test_syncthing_devices.py"
+    ],
+    "services/nas_unlock_api.py": [
+      "tests/test_unlock_api.py"
     ]
   },
   "schemaVersion": 3

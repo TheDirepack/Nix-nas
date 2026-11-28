@@ -74,6 +74,7 @@ const AdminStep = ({
       </FormGroup>
       <HelperText>
         <HelperTextItem>The KeePassXC password only unlocks the boot-side appliance secret database. It is not an account password.</HelperTextItem>
+        <HelperTextItem>It is the only protection for the storage encryption key, so use at least 16 characters (a passphrase of several words works well) and do not reuse the administrator password.</HelperTextItem>
       </HelperText>
       <FormGroup label="KeePassXC database password" fieldId="wizard-keepass-password" isRequired>
         <TextInput
@@ -82,6 +83,7 @@ const AdminStep = ({
           value={keePassPassword}
           onChange={(_event, value) => onKeePassPassword(value)}
           autoComplete="new-password"
+          minLength={16}
         />
       </FormGroup>
       <FormGroup

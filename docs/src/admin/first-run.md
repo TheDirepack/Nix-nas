@@ -86,11 +86,20 @@ wizard asks separately for the KeePassXC database password because it only
 unlocks the appliance secret database; it is not an account credential.
 KeePassXC, Authentik, and PostgreSQL remain under
 `/var/lib/nas-control-plane` on the system partition so they are available at
-the unlock boundary. Setup discards any pre-existing `NAS.kdbx` and creates a
-fresh KeePassXC database with the password entered in the wizard. It also
-discards the temporary Authentik/PostgreSQL state and regenerates clean
-databases there; it never moves them onto ZFS. Recover any needed entries from
-an old database before beginning first setup because setup does not retain it.
+the unlock boundary. If a `NAS.kdbx` already exists, setup moves it aside to
+`NAS.kdbx.replaced-<UTC timestamp>` in the same directory and creates a fresh
+KeePassXC database with the password entered in the wizard. Setup never deletes
+a database. If the managed ZFS dataset is already encrypted, as after an
+interrupted run, setup keeps the existing database because it holds the only
+copy of the dataset key, and refuses to continue unless you enter that
+database's password. Setup also discards the temporary Authentik/PostgreSQL
+state and regenerates clean databases there; it never moves them onto ZFS.
+
+The KeePassXC database password is the only protection for the storage
+encryption key and every service secret, and the database is backed up by
+Restic. The wizard and setup backend therefore require at least 16 characters
+and at least 6 different characters, and reject a password equal to the
+administrator password. A passphrase of several unrelated words works well.
 The Storage step includes an explicit ZFS encryption toggle, enabled by
 default. When enabled, setup creates the KeePassXC database first and uses its
 new dataset key to create the encrypted ZFS partition. Turning the toggle off
@@ -254,9 +263,8 @@ Authorized nonbrowser recovery clients can continue sending requests without an
 
 Before setup completes, the Authentik gate protects every management route.
 The setup wizard is reachable only after signing in with the bootstrap
-Authentik identity. After setup, a locked boot serves only a static notice that
-explains how to run `sudo nas-secrets activate` from the recovery plane; see
-[Locked-state unlock](../locked-unlock.md).
+Authentik identity. After setup, a locked boot serves Authentik sign-in and the
+`nas_admin`-only `/unlock/` page; see [Locked-state unlock](../locked-unlock.md).
 
 The Storage step links to Cockpit Storage for disk partitioning or pool import,
 and to the Cockpit terminal for advanced ZFS work. Return to the wizard and

@@ -7,8 +7,6 @@ import {
   CardHeader,
   CardTitle,
   Flex,
-  Form,
-  FormGroup,
   Nav,
   NavItem,
   NavList,
@@ -17,10 +15,8 @@ import {
   Spinner,
   Stack,
   StackItem,
-  TextInput,
   Title,
 } from "@patternfly/react-core";
-import {activateSecrets} from "./api.js";
 import {useOverview} from "./hooks/use-overview.js";
 import {useMutation} from "./hooks/use-mutation.js";
 import {OverviewPage} from "./pages/overview-page.jsx";
@@ -47,26 +43,13 @@ function pageFromHash(hash) {
 export default function App() {
   const {data, loading, error, refresh} = useOverview();
   const [page, setPage] = useState(() => pageFromHash(window.location.hash));
-  const [unlockPassword, setUnlockPassword] = useState("");
-  const {busy, error: mutationError, notice, setError, setNotice, mutate} = useMutation(refresh);
+  const {busy, error: mutationError, notice, mutate} = useMutation(refresh);
 
   useEffect(() => {
     const syncFromHash = () => setPage(pageFromHash(window.location.hash));
     window.addEventListener("hashchange", syncFromHash);
     return () => window.removeEventListener("hashchange", syncFromHash);
   }, []);
-
-  const unlock = async (event) => {
-    if (event) event.preventDefault();
-    if (busy || !unlockPassword) return;
-    try {
-      await mutate(() => activateSecrets(unlockPassword));
-      setUnlockPassword("");
-      setNotice("Runtime secrets activated.");
-    } catch (_reason) {
-      // The mutation hook already surfaced the failure message.
-    }
-  };
 
   const active = PAGES.find(([id]) => id === page) || PAGES[0];
   const ActivePage = active[2];
@@ -123,18 +106,9 @@ export default function App() {
                 <CardTitle>Protected services are locked</CardTitle>
               </CardHeader>
               <CardBody>
-                <Form onSubmit={unlock}>
-                  <FormGroup label="KeePassXC database password">
-                    <TextInput
-                      type="password"
-                      value={unlockPassword}
-                      onChange={(_e, value) => setUnlockPassword(value)}
-                    />
-                  </FormGroup>
-                  <Button type="submit" isDisabled={busy || !unlockPassword}>
-                    Activate secrets
-                  </Button>
-                </Form>
+                Cockpit never collects the KeePassXC database password. After setup, a locked NAS
+                offers <a href="/unlock/">browser unlock</a> to nas_admin members; the recovery
+                console runs <code>sudo nas-secrets activate</code>.
               </CardBody>
             </Card>
           ) : null}

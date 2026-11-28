@@ -38,7 +38,7 @@ class FirstStartExecutionLockTests(unittest.TestCase):
         password.write_text(
             json.dumps(
                 {
-                    "keepass": "fixture-only-password",
+                    "keepass": "fixture-only-keepass-passphrase",
                     "administrator": {
                         "username": "admin",
                         "name": "Administrator",

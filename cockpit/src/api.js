@@ -3,16 +3,6 @@ function requireSpawn(spawn) {
   return spawn;
 }
 
-function singleLinePassword(password) {
-  if (typeof password !== "string" || password.length === 0) {
-    throw new Error("Enter the KeePassXC database password.");
-  }
-  if (password.includes("\n") || password.includes("\r")) {
-    throw new Error("The KeePassXC database password must be a single line.");
-  }
-  return password;
-}
-
 export function parseJsonOutput(output) {
   return JSON.parse(output);
 }
@@ -100,14 +90,4 @@ export function setManagedServiceMode(serviceId, mode, spawn = globalThis.cockpi
     err: "message",
   });
   return jsonResult(process);
-}
-
-export function activateSecrets(password, spawn = globalThis.cockpit?.spawn) {
-  const secret = singleLinePassword(password);
-  const process = requireSpawn(spawn)(["nas-secrets", "activate-stdin"], {
-    superuser: "require",
-    err: "message",
-  });
-  process.input(`${secret}\n`);
-  return process;
 }

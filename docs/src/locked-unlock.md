@@ -1,16 +1,33 @@
 # Locked-state unlock
 
-The NAS intentionally starts **locked** when the KeePass-backed runtime secret tree is absent. Authentik, Cockpit, CopyParty, encrypted ZFS datasets, and protected services are unavailable to browsers.
+The NAS intentionally starts **locked** when the KeePass-backed runtime secret tree is absent. Cockpit, CopyParty, encrypted ZFS datasets, and protected services stay unavailable until it is unlocked.
 
-After setup, a browser that opens the NAS while it is locked sees a static notice with these instructions on every path. The notice accepts no input; it cannot unlock the NAS or open Cockpit.
+## Unlock from the browser
 
-Recover from the local console, SSH using a provisioned recovery key, or hardware KVM. Sign in as the local recovery administrator and activate the secret tree:
+After setup, a locked NAS still runs Authentik so that you must sign in before anyone can try a password.
+
+1. Open the NAS in a browser. Every path redirects to `/unlock/`.
+2. Sign in with an Authentik account that is a member of `nas_admin`. Other accounts get HTTP 403.
+3. Enter the KeePass database password and select **Unlock**. Loading storage keys and starting services can take a few minutes.
+4. When the page reports success, Authentik restarts with its KeePass configuration. Sign in again to reach the portal.
+
+The page sends the password once, over HTTPS, to a root-only Unix socket that passes it to `nas-secrets activate-stdin` on standard input. Nothing stores it. Only one attempt runs at a time, and each failure doubles a delay that starts at 5 seconds and is capped at 5 minutes. `journalctl -t nas-unlock-api` records which Authentik user made each attempt.
+
+While locked, Authentik's user and admin interfaces redirect to `/unlock/`. Authentik uses a signing key generated for this boot only, so any session from before the unlock stops working once it completes.
+
+If Authentik or its outpost cannot start, the browser shows a static notice instead and you must use the recovery console.
+
+## Unlock from the recovery console
+
+Use the local console, SSH with a provisioned recovery key, or hardware KVM. Sign in as the local recovery administrator and activate the secret tree:
 
 ```bash
 sudo nas-secrets activate
 ```
 
 Enter the KeePass database password only at the local terminal prompt. The command reads it from standard input; it does not store it in a URL, argument, environment variable, Nix store path, browser storage, or disk file.
+
+## Activation transaction
 
 Activation performs the following transaction:
 
@@ -19,7 +36,7 @@ Activation performs the following transaction:
 3. Verify the staging directory is mode `0700` before writing secrets.
 4. Install a complete new `/run/nas-secrets` tree atomically.
 5. Load the ZFS encryption key when enabled.
-6. Start the protected service target.
+6. Restart Authentik with the KeePass environment and start the protected service target.
 7. Validate Authentik API readiness, CopyParty's Unix socket, and required service state.
 8. Roll back to the previous secret tree and service state if validation fails.
 
@@ -28,7 +45,8 @@ Activation performs the following transaction:
 ## Locked-state troubleshooting
 
 - Confirm that you have console, SSH, or KVM access before changing network or storage state.
-- If the password is rejected, retry `sudo nas-secrets activate` at the local recovery terminal.
+- If the password is rejected, retry on `/unlock/` after the delay it shows, or run `sudo nas-secrets activate` at the local recovery terminal.
+- If `/unlock/` shows the static locked notice, Authentik or its outpost is down. Unlock from the console.
 - If activation rolls back, inspect `systemctl --failed`, `journalctl -u nas-protected-services.target`, and the specific exit message.
 - If the KDBX file is missing, restore it before attempting activation.
 - An Authentik administrator is not automatically a local recovery administrator.

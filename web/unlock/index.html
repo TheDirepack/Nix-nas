@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Unlock NAS</title>
+  <link rel="stylesheet" href="unlock.css">
+  <script src="unlock.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1 id="nas-unlock">This NAS is locked</h1>
+    <p>Setup is complete, but the KeePassXC database has not been unlocked since the appliance started. Files, applications and Cockpit stay unavailable until it is.</p>
+    <section>
+      <h2>Unlock</h2>
+      <form id="unlock-form" autocomplete="off">
+        <label for="unlock-password">KeePassXC database password</label>
+        <input id="unlock-password" name="password" type="password" autocomplete="current-password" maxlength="4096" required>
+        <button id="unlock-submit" type="submit">Unlock</button>
+      </form>
+      <p id="unlock-status" role="status" aria-live="polite"></p>
+      <p class="note">After unlocking, Authentik restarts with its KeePass configuration and you will be asked to sign in again.</p>
+    </section>
+    <section>
+      <h2>Recovery console</h2>
+      <p>If browser unlock fails, use the local console, SSH with a provisioned recovery key, or hardware KVM. Sign in as the local recovery administrator and run <code>sudo nas-secrets activate</code>.</p>
+    </section>
+  </main>
+</body>
+</html>

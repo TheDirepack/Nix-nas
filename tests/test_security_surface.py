@@ -243,10 +243,12 @@ class SecuritySurfaceTests(unittest.TestCase):
         self.assertNotIn(".restore '$source'", source)
 
     def test_static_pages_render_no_identity_headers(self):
-        # The only Caddy-served static page is the locked notice; no static
-        # page interpolates proxy identity headers that would need escaping.
-        pages = list((ROOT / "web").rglob("*.html"))
-        self.assertEqual([page.relative_to(ROOT).as_posix() for page in pages], ["web/locked/index.html"])
+        # Caddy serves only the locked notice and the gated unlock page; neither
+        # interpolates proxy identity headers that would need escaping.
+        pages = sorted((ROOT / "web").rglob("*.html"))
+        self.assertEqual(
+            [page.relative_to(ROOT).as_posix() for page in pages], ["web/locked/index.html", "web/unlock/index.html"]
+        )
         for page in pages:
             content = page.read_text(encoding="utf-8")
             self.assertNotIn("{{", content)
