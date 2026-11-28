@@ -22,6 +22,11 @@ import nas_v2_caddy as caddy  # noqa: E402
 import nas_v2_spec as v2_spec  # noqa: E402
 import nas_v2_activation as activation  # noqa: E402
 import nas_syncthing_devices as syncthing  # noqa: E402
+from keepass_fakes import export_keepass_setup  # noqa: E402
+
+
+def setUpModule() -> None:
+    export_keepass_setup()
 
 
 BASE_V2_DOCUMENT = {
