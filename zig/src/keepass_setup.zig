@@ -63,8 +63,7 @@ const Fields = struct {
     }
 };
 
-/// Splits `Fields` into owned secrets; the split happens inside a predicate
-/// so the raw buffer never leaves the secret module's view.
+/// Splits the borrowed field stream into independently owned secrets.
 fn splitFields(z: *secret.ZeroingAllocator, fields: *const Fields, out: *std.ArrayList(Secret), a: std.mem.Allocator) Refusal!void {
     const Split = struct { z: *secret.ZeroingAllocator, out: *std.ArrayList(Secret), a: std.mem.Allocator, failed: bool = false };
     var ctx: Split = .{ .z = z, .out = out, .a = a };

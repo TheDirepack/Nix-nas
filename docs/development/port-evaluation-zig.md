@@ -22,6 +22,7 @@ Explicit error sets are used throughout. The only `anyerror` is the signature th
 ## Limits
 
 - **Field access.** Zig exposes struct fields. Constructor-only use of `AdminSession`, `UnlockRequest`, and other validated types relies on module conventions and source checks in `tests/test_secret_security.py`. A pointer cast can bypass the opacity of `Secret`.
+- **Validation callbacks.** `Secret.satisfies*` lends a byte slice to a caller-supplied function. The compiler cannot prevent the function from retaining or copying it. Review callback call sites as part of the secret boundary.
 - **Transaction ownership.** Zig permits copying transaction values. The runtime phase guard in `Context` rejects a second swap through a copied handle. Activation exit paths explicitly handle commit and rollback.
 - **Lifetimes.** Black-box tests caught a `Payload` retaining a slice into an expired stack frame. Payload parts now have a comptime size bound and are stored by value.
 - **Secret sinks.** Activation writes systemd environment files through `PrivateFile` in a verified 0700 directory. Existing `show-*` commands use explicit `RevealGrant` values for stdout, including ZFS key handoff.

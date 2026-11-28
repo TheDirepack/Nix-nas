@@ -129,7 +129,7 @@ pub const Secret = struct {
         return self.bytes().len == 0;
     }
 
-    /// Answers a yes/no question about the bytes without exposing them.
+    /// Borrows the bytes for validation. The predicate must not retain or emit them.
     pub fn satisfies(self: Secret, comptime predicate: fn ([]const u8) bool) bool {
         return predicate(self.bytes());
     }
