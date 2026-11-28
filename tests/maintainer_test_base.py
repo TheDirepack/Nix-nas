@@ -26,6 +26,7 @@ class MaintainerScriptMixin:
                 ".codex",
                 ".aws",
                 ".fuzz-crashes",
+                ".hypothesis",
                 ".pytest_cache",
                 ".ruff_cache",
                 ".mypy_cache",
