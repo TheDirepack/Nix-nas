@@ -18,7 +18,7 @@ class CockpitCspPatchTests(unittest.TestCase):
         self.tree = pathlib.Path(temporary.name)
         source = self.tree / "src/cockpit/packages.py"
         source.parent.mkdir(parents=True)
-        shutil.copyfile(ROOT / "tests/fixtures/cockpit-362/packages.py.txt", source)
+        shutil.copyfile(ROOT / "tests/fixtures/cockpit-368/packages.py.txt", source)
         if PATCH.exists():
             subprocess.run(["git", "apply", str(PATCH)], cwd=self.tree, check=True, capture_output=True)
         namespace = {}

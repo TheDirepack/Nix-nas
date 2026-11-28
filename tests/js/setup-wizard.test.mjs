@@ -42,7 +42,7 @@ test("wizard builds steps from WizardStep children with explicit ids", async () 
   );
 });
 
-test("wizard step components use exports that exist in react-core 6.1.0", async () => {
+test("wizard step components use supported PatternFly exports", async () => {
   for (const step of ["AdminStep", "StorageStep", "ConfirmStep"]) {
     const text = await wizard(`src/steps/${step}.jsx`);
     assert.match(

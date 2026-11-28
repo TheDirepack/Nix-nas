@@ -6,7 +6,7 @@ import {createRequire} from "node:module";
 const require = createRequire(new URL("../../cockpit/package.json", import.meta.url));
 const {build} = require("esbuild");
 const fixture = await readFile(
-  new URL("../fixtures/cockpit-362/manifest-routing.ts.txt", import.meta.url),
+  new URL("../fixtures/cockpit-368/manifest-routing.ts.txt", import.meta.url),
   "utf8",
 );
 const result = await build({

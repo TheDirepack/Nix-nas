@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "tests/fixtures/cockpit-362"
+FIXTURE = ROOT / "tests/fixtures/cockpit-368"
 PATCH = ROOT / "cockpit/patches/cockpit-default-bus-cache.patch"
 
 

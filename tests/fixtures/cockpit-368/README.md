@@ -1,14 +1,14 @@
-# Cockpit 362 behavior fixtures
+# Cockpit 368 behavior fixtures
 
 The upstream source is `cockpit-project/cockpit` commit
-`ca0d360e3a858a7eb189edde15cf7b976018404b` (tag `362`), selected by the
+`853699ab9697053d299921db46a5900c7a23649e` (tag `368`), selected by the
 repository's locked nixpkgs package.
 
 - `packages.py.txt` contains the unchanged `Document` declaration and
   `Package.get_content_security_policy` / `load_file` methods from
   `src/cockpit/packages.py`, with standard-library imports and a minimal class
   wrapper. Full upstream file SHA256:
-  `f95afb2b3d2305a9b1b2eadc55a7a1247d3473b434e2262044b96b107162b107`.
+  `1aa706c38398c07ec9b58ca6a18670a6a5675bf747cbc627d46ecd571e5d7f55`.
 - `manifest-routing.ts.txt` contains unchanged lines 71–241 from
   `pkg/shell/util.tsx`, with its copyright notice and runtime Cockpit import.
   Full upstream file SHA256:

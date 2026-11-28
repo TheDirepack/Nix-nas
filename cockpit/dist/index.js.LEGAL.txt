@@ -33,14 +33,25 @@ react-dom/cjs/react-dom.production.min.js:
    * LICENSE file in the root directory of this source tree.
    */
 
+react/cjs/react-jsx-runtime.production.min.js:
+  /**
+   * @license React
+   * react-jsx-runtime.production.min.js
+   *
+   * Copyright (c) Facebook, Inc. and its affiliates.
+   *
+   * This source code is licensed under the MIT license found in the
+   * LICENSE file in the root directory of this source tree.
+   */
+
 tabbable/dist/index.esm.js:
   /*!
-  * tabbable 6.5.0
+  * tabbable 6.5.2
   * @license MIT, https://github.com/focus-trap/tabbable/blob/master/LICENSE
   */
 
 focus-trap/dist/focus-trap.esm.js:
   /*!
-  * focus-trap 7.6.2
+  * focus-trap 7.6.6
   * @license MIT, https://github.com/focus-trap/focus-trap/blob/master/LICENSE
   */

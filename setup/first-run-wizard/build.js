@@ -57,8 +57,8 @@ function sourceHash() {
 function sourceCheck() {
   const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const required = {
-    '@patternfly/patternfly': '6.1.0',
-    '@patternfly/react-core': '6.1.0',
+    '@patternfly/patternfly': '6.7.0',
+    '@patternfly/react-core': '6.7.0',
     react: '18.3.1',
     'react-dom': '18.3.1',
   };

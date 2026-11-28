@@ -14,7 +14,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "tests/fixtures/cockpit-362/native"
+FIXTURE = ROOT / "tests/fixtures/cockpit-368/native"
 PATCH = ROOT / "cockpit/patches/cockpit-error-csp.patch"
 
 
@@ -67,7 +67,7 @@ class CockpitErrorCspTests(unittest.TestCase):
                 "-I" + str(cls.tree),
                 "-I" + str(cls.tree / "src"),
                 "-I" + str(cls.tree / "src/ws"),
-                str(ROOT / "tests/fixtures/cockpit-362/error-response-probe.c"),
+                str(ROOT / "tests/fixtures/cockpit-368/error-response-probe.c"),
                 *(
                     str(cls.tree / "src/ws" / name)
                     for name in ("cockpitwebresponse.c", "cockpitwebfilter.c", "cockpitflow.c", "cockpithash.c")

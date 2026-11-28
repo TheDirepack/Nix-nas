@@ -157,7 +157,7 @@ class SetupRebootE2eContracts(unittest.TestCase):
         ):
             runner.activate_after_reboot()
 
-    def locked_surface(self, responses, *, times=(0,)):
+    def locked_surface(self, responses):
         runner = self.runner()
         requests = []
 
@@ -174,8 +174,6 @@ class SetupRebootE2eContracts(unittest.TestCase):
         with (
             mock.patch.object(runner, "run", side_effect=run),
             mock.patch.object(runner, "wait_active"),
-            mock.patch.object(runner.time, "monotonic", side_effect=times),
-            mock.patch.object(runner.time, "sleep"),
             mock.patch.object(runner.pathlib.Path, "exists", exists),
             mock.patch.object(runner.pathlib.Path, "is_file", exists),
         ):
@@ -192,24 +190,6 @@ class SetupRebootE2eContracts(unittest.TestCase):
             return "204", "", ""
         return "303", "https://nas-test.local/unlock/", ""
 
-    def test_locked_boot_waits_for_the_outpost_sign_in_redirect(self) -> None:
-        unlock = iter((("503", "", "This NAS is locked"), self.healthy_locked("GET", "/unlock/")))
-
-        def responses(method, path):
-            return next(unlock) if path == "/unlock/" else self.healthy_locked(method, path)
-
-        _runner, requests = self.locked_surface(responses, times=(0, 1))
-        self.assertEqual(sum(command[-1].endswith("/unlock/") for command in requests), 2)
-
-    def test_locked_boot_fails_if_the_outpost_never_becomes_ready(self) -> None:
-        def responses(method, path):
-            if path == "/unlock/":
-                return "503", "", "This NAS is locked"
-            return self.healthy_locked(method, path)
-
-        with self.assertRaisesRegex(RuntimeError, "HTTP 503"):
-            self.locked_surface(responses, times=(0, 1, 180))
-
     def test_locked_boot_serves_only_sign_in_and_the_gated_unlock_page(self) -> None:
         _runner, requests = self.locked_surface(self.healthy_locked)
         paths = [command[-1].removeprefix("https://nas-test.local") for command in requests]
@@ -225,6 +205,7 @@ class SetupRebootE2eContracts(unittest.TestCase):
             ("unlock page without sign-in", override("/unlock/", ("200", "", '<form id="unlock-form">'))),
             ("unlock form in an error response", override("/unlock/", ("503", "", '<form id="unlock-form">'))),
             ("sign-in redirect has no destination", override("/unlock/", ("302", "", ""))),
+            ("unexpected gateway response", override("/unlock/", ("503", "", "unexpected response"))),
             ("unlock API without sign-in", override("/unlock/api/activate", ("200", "", '{"unlocked": true}'))),
             ("Authentik down", override("/identity/-/health/live/", ("503", "", "notice"))),
             ("setup API reachable", override("/setup/api/reboot", ("200", "", '{"rebooting": true}'))),
@@ -232,6 +213,35 @@ class SetupRebootE2eContracts(unittest.TestCase):
             with self.subTest(label), self.assertRaises(Exception) as raised:
                 self.locked_surface(responses)
             self.assertEqual(type(raised.exception).__name__, "CheckError")
+
+    def test_locked_boot_waits_for_sign_in_after_the_static_recovery_notice(self) -> None:
+        unlock_requests = 0
+
+        def responses(method, path):
+            nonlocal unlock_requests
+            if (method, path) == ("GET", "/unlock/"):
+                unlock_requests += 1
+                if unlock_requests == 1:
+                    return "503", "", '<h1 id="nas-locked">This NAS is locked</h1>'
+            return self.healthy_locked(method, path)
+
+        with mock.patch("time.sleep") as sleep:
+            self.locked_surface(responses)
+        self.assertEqual(unlock_requests, 2)
+        sleep.assert_called_once_with(2)
+
+    def test_locked_sign_in_unavailability_remains_fatal(self) -> None:
+        runner = self.runner()
+        with (
+            mock.patch.object(
+                runner, "locked_request", return_value=("503", "", '<h1 id="nas-locked">This NAS is locked</h1>')
+            ),
+            mock.patch.object(runner.time, "monotonic", side_effect=[0, 120]),
+            mock.patch.object(runner.time, "sleep") as sleep,
+            self.assertRaisesRegex(runner.CheckError, "HTTP 503"),
+        ):
+            runner.wait_locked_sign_in()
+        sleep.assert_not_called()
 
     def test_runner_rechecks_storage_v2_apps_and_authenticated_routes_after_each_reboot(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
