@@ -6,8 +6,11 @@ import importlib.util
 import os
 import pathlib
 import re
+import subprocess
 import tempfile
 import unittest
+
+from tests.go_binaries import binary
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -21,6 +24,22 @@ def load_vendor_hash():
 
 
 class GoToolingTests(unittest.TestCase):
+    def test_installed_command_help_and_unknown_option_contract(self) -> None:
+        for command in ("nas-keepass-setup", "nas-unlock-api"):
+            executable = binary(command)
+            for argument, status in (("--help", 0), ("--fuzz-unknown-option", 2)):
+                with self.subTest(command=command, argument=argument):
+                    result = subprocess.run(
+                        [executable, argument],
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True,
+                        text=True,
+                        timeout=20,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, status, result.stdout + result.stderr)
+                    self.assertIn("usage", (result.stdout + result.stderr).lower())
+
     def test_nar_hash_matches_nix_hash_for_files_executables_symlinks_and_directories(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             tree = pathlib.Path(raw) / "tree"

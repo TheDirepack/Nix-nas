@@ -19,6 +19,7 @@ import tempfile
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MODULE = "github.com/TheDirepack/Nix-nas/go"
 BLACKBOX_SUITES = (
+    "tests.test_go_tooling",
     "tests.test_nas_secrets_blackbox",
     "tests.test_unlock_api",
     "tests.test_zfs_key_staging",

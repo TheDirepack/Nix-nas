@@ -41,6 +41,13 @@ func run(args []string) int {
 	socketPath := fs.String("socket-path", "", "absolute Unix socket path")
 	pol := registerPolicyFlags(fs)
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fs.Usage()
 		return 2
 	}
 	if *socketPath == "" {

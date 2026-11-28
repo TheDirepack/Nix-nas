@@ -34,6 +34,8 @@ const (
 	exitMismatch = 3
 )
 
+const usage = "usage: nas-keepass-setup {check-strength|verifier create|verifier verify|verifier legacy|database ...}"
+
 func main() { os.Exit(run(os.Args[1:])) }
 
 func die(code int, err error) int {
@@ -43,7 +45,11 @@ func die(code int, err error) int {
 
 func run(args []string) int {
 	if len(args) == 0 {
-		return die(exitUsage, errors.New("usage: nas-keepass-setup {check-strength|verifier create|verifier verify|verifier legacy|database ...}"))
+		return die(exitUsage, errors.New(usage))
+	}
+	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
+		fmt.Fprintln(os.Stdout, usage)
+		return exitOK
 	}
 	in := lineio.NewStdin(os.Stdin)
 	switch args[0] {
@@ -60,7 +66,7 @@ func run(args []string) int {
 	case "database":
 		return database(in, args[1:])
 	}
-	return die(exitUsage, fmt.Errorf("unknown command %q", args[0]))
+	return die(exitUsage, errors.New(usage))
 }
 
 func readPassword(in *lineio.Stdin) (secret.KeePassPassword, error) {

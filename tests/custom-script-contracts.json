@@ -71,6 +71,7 @@
       ],
       "systemTest": "tests/vm/adversarial-installed.py",
       "tests": [
+        "tests/test_go_tooling.py",
         "tests/test_setup.py",
         "tests/test_v2_setup_runtime_coverage.py",
         "tests/test_secret_security_fuzz.py"
@@ -141,6 +142,7 @@
       ],
       "systemTest": "tests/vm/setup-reboot-e2e.py",
       "tests": [
+        "tests/test_go_tooling.py",
         "tests/test_unlock_api.py",
         "go/internal/unlockapi/unlockapi_test.go"
       ]
