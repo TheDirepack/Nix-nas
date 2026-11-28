@@ -420,6 +420,21 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertEqual(self.needs(integration), {"prepare"})
         self.assertIn("!cancelled()", str(integration.get("if", "")))
 
+    def test_installer_rehearses_package_upgrade_after_fresh_browser_failure(self) -> None:
+        steps = self.jobs["installer"]["steps"]
+        install = next(step for step in steps if step.get("id") == "fresh-install")
+        upgrade = next(step for step in steps if step.get("id") == "package-upgrade")
+        browser = next(
+            step for step in steps if step.get("name") == "Check the upgraded VM browser and security surfaces"
+        )
+        self.assertLess(steps.index(install), steps.index(upgrade))
+        self.assertLess(steps.index(upgrade), steps.index(browser))
+        self.assertNotIn("continue-on-error", upgrade)
+        self.assertNotIn("continue-on-error", browser)
+        self.assertEqual(upgrade["env"]["NAS_QEMU_PACKAGE_UPGRADE"], "1")
+        self.assertEqual(upgrade["if"], "${{ !cancelled() && steps.fresh-install.outcome == 'success' }}")
+        self.assertEqual(browser["if"], "${{ !cancelled() && steps.package-upgrade.outcome == 'success' }}")
+
     def test_full_stack_and_installer_qualify_every_commit(self) -> None:
         integration_if = str(self.jobs["integration"].get("if", ""))
         installer_if = str(self.jobs["installer"].get("if", ""))

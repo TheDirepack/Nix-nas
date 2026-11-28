@@ -76,3 +76,44 @@ diff --git a/web/src/flow/components/ak-brand-footer.ts b/web/src/flow/component
          justify-content: center;
          padding: 0;
          column-gap: var(--pf-global--spacer--xl);
+diff --git a/web/src/user/LibraryPage/ApplicationList.css b/web/src/user/LibraryPage/ApplicationList.css
+--- a/web/src/user/LibraryPage/ApplicationList.css
++++ b/web/src/user/LibraryPage/ApplicationList.css
+@@ -151,5 +151,6 @@
+     @media (max-width: 767px) {
+         --app-list-column-count: 1 !important;
++        grid-template-columns: minmax(0, 1fr);
+         justify-items: normal;
+     }
+ }
+@@ -168,4 +169,5 @@
+     @media (max-width: 767px) {
++        min-inline-size: 0;
+         width: auto;
+         grid-template-rows: auto;
+     }
+diff --git a/web/src/elements/locale/ak-locale-select.ts b/web/src/elements/locale/ak-locale-select.ts
+--- a/web/src/elements/locale/ak-locale-select.ts
++++ b/web/src/elements/locale/ak-locale-select.ts
+@@ -133,10 +133,6 @@
+                     part="label"
+                     for="locale-selector"
+                     @click=${this.show}
+-                    aria-label=${msg("Select language", {
+-                        id: "language-selector-label",
+-                        desc: "Label for the language selection dropdown",
+-                    })}
+                 >
+                     <svg
+                         class="icon"
+@@ -153,6 +149,10 @@
+                 <select
+                     ${ref(this.#selectRef)}
+                     part="select"
++                    aria-label=${msg("Select language", {
++                        id: "language-selector-label",
++                        desc: "Label for the language selection dropdown",
++                    })}
+                     id="locale-selector"
+                     @change=${this.#localeChangeListener}
+                     class="ak-m-capitalize"

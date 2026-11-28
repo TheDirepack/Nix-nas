@@ -15,6 +15,11 @@ import { fetchJson } from './http.js';
 const emptyAdministrator = { username: '', name: '', email: '', password: '', confirm: '' };
 const THEME_STORAGE_KEY = 'nas-setup-theme-preference';
 
+const nameWizardToggleFromVisibleStep = (main) => {
+  // PatternFly's mobile toggle hardcodes an aria-label over the current step text.
+  main?.querySelector('button.pf-v6-c-wizard__toggle')?.removeAttribute('aria-label');
+};
+
 const readThemePreference = () => {
   try {
     const value = window.localStorage.getItem(THEME_STORAGE_KEY);
@@ -103,7 +108,7 @@ const App = () => {
           </select>
         </label>
       </header>
-      <main className="nas-setup-main">
+      <main className="nas-setup-main" ref={nameWizardToggleFromVisibleStep}>
         <SetupNotice plan={plan} onRefresh={refreshPlan} />
         <Wizard
           className="nas-setup-wizard"

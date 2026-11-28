@@ -16,20 +16,20 @@
     "test:browser": "playwright test --config e2e/playwright.config.mjs"
   },
   "dependencies": {
-    "@patternfly/patternfly": "6.1.0",
-    "@patternfly/react-core": "6.1.0",
+    "@patternfly/patternfly": "6.7.0",
+    "@patternfly/react-core": "6.7.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "@patternfly/react-icons": "6.1.0",
-    "@patternfly/react-styles": "6.6.0"
+    "@patternfly/react-icons": "6.7.0",
+    "@patternfly/react-styles": "6.7.0"
   },
   "devDependencies": {
-    "@types/react": "18.3.13",
-    "@types/react-dom": "18.3.1",
-    "esbuild": "0.28.1",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "esbuild": "0.28.2",
     "esbuild-sass-plugin": "3.7.0",
     "typescript": "6.0.3",
-    "@playwright/test": "1.62.0",
-    "@axe-core/playwright": "4.12.1"
+    "@playwright/test": "1.65.1",
+    "@axe-core/playwright": "4.14.0"
   }
 }

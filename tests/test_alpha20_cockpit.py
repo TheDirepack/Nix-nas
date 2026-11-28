@@ -125,7 +125,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
         index = text("cockpit/src/index.jsx")
         app = text("cockpit/src/app.jsx")
         self.assertIn('"react": "18.3.1"', package)
-        self.assertIn('"@patternfly/react-core": "6.1.0"', package)
+        self.assertIn('"@patternfly/react-core": "6.7.0"', package)
         self.assertIn("createRoot", index)
         self.assertIn("@patternfly/patternfly/patternfly.css", index)
         self.assertIn('from "@patternfly/react-core"', app)
@@ -302,15 +302,15 @@ class Alpha20CockpitContracts(unittest.TestCase):
         policy = text(".github/CI_CACHE_POLICY.md")
         self.assertIn("CI_CACHE_SCHEMA", workflow)
         self.assertIn(
-            "actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae",
+            "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
             workflow,
         )
         self.assertIn(
-            "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae",
+            "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
             handoff,
         )
         self.assertIn(
-            "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae",
+            "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
             handoff,
         )
         self.assertIn("vm-bundles.sh", handoff)

@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/cockpit-project/cockpit",
-  "commit": "ca0d360e3a858a7eb189edde15cf7b976018404b",
+  "commit": "853699ab9697053d299921db46a5900c7a23649e",
   "files": {
     "src/ws/cockpitwebresponse.c": {
       "gitBlob": "63df41717337362efa5158ca9afa2e0dd049ba14",

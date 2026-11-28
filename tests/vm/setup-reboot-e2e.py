@@ -288,6 +288,21 @@ def unlock_api(payload: str) -> tuple[str, dict[str, Any]]:
     return code, document
 
 
+def wait_locked_sign_in(timeout_seconds: int = 120) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        code, location, body = locked_request("/unlock/")
+        if "unlock-form" in body:
+            break
+        if code in {"302", "303", "307"}:
+            return
+        # The outpost can be active before Caddy's forward-auth request succeeds.
+        if code != "503" or 'id="nas-locked"' not in body or time.monotonic() >= deadline:
+            break
+        time.sleep(2)
+    raise CheckError(f"unauthenticated /unlock/ was not sent to Authentik sign-in (HTTP {code} {location})")
+
+
 def verify_locked_browser_surface() -> None:
     """After setup, a locked boot serves only Authentik sign-in and the gated unlock page."""
     for unit in ("caddy.service", "authentik.service", "nas-authentik-proxy-outpost.service", "nas-unlock-api.service"):
@@ -296,9 +311,7 @@ def verify_locked_browser_surface() -> None:
         code, location, _body = locked_request(path)
         if code != "303" or not location.endswith("/unlock/"):
             raise CheckError(f"locked route {path} did not redirect to /unlock/ (HTTP {code} {location})")
-    code, location, body = locked_request("/unlock/")
-    if code not in {"302", "303", "307"} or "unlock-form" in body:
-        raise CheckError(f"unauthenticated /unlock/ was not sent to Authentik sign-in (HTTP {code} {location})")
+    wait_locked_sign_in()
     code, _location, body = locked_request(
         "/unlock/api/activate",
         "--request",

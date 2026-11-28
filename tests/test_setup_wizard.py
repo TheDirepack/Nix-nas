@@ -50,7 +50,7 @@ class TestWizardPackaging(unittest.TestCase):
         lock = json.loads(lockfile.read_text(encoding="utf-8"))
         packages = lock.get("packages", {})
         self.assertIn("node_modules/@patternfly/react-core", packages)
-        self.assertEqual(packages["node_modules/@patternfly/react-core"]["version"], "6.1.0")
+        self.assertEqual(packages["node_modules/@patternfly/react-core"]["version"], "6.7.0")
 
     def test_structure_validation_allowlists_the_generated_dist(self):
         validator = (ROOT / "scripts/validate-structure.py").read_text(encoding="utf-8")
@@ -167,7 +167,7 @@ class TestWizardSource(unittest.TestCase):
 
     def test_recovery_notice_precedes_password_steps_and_gates_retry(self):
         index = (WIZARD / "src/index.jsx").read_text(encoding="utf-8")
-        main = index.split('<main className="nas-setup-main">', 1)[1]
+        main = index.split('<main className="nas-setup-main"', 1)[1]
         # SSR tests render SetupNotice itself; this pins where the shipped page mounts it.
         self.assertLess(main.index("<SetupNotice plan={plan}"), main.index("<Wizard"))
         self.assertLess(main.index("<Wizard"), main.index("<AdminStep"))

@@ -2,7 +2,7 @@
 
 `source-manifest.json` binds complete, byte-exact upstream files to their Git
 blobs and SHA256 hashes. Cockpit is commit
-`ca0d360e3a858a7eb189edde15cf7b976018404b` (362); its `vendor/systemd_ctypes`
+`853699ab9697053d299921db46a5900c7a23649e` (368); its `vendor/systemd_ctypes`
 gitlink selects `a627fb8b2b58e6dead4ab85aa14abb41d1a48397` from
 `allisonkarlitskaya/systemd_ctypes`. The vendored files retain their upstream
 GPL-3.0-or-later notices; `COPYING` is the upstream license. Cockpit files retain
