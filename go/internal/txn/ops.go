@@ -5,9 +5,43 @@ import (
 	"fmt"
 	"strings"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/TheDirepack/Nix-nas/go/internal/cmdexec"
+	"github.com/TheDirepack/Nix-nas/go/internal/hostfs"
 	"github.com/TheDirepack/Nix-nas/go/internal/syspath"
 )
+
+type DirectFS struct{}
+
+func (DirectFS) IsDir(_ context.Context, p syspath.Abs) bool     { return fileType(p, unix.S_IFDIR) }
+func (DirectFS) IsFile(_ context.Context, p syspath.Abs) bool    { return fileType(p, unix.S_IFREG) }
+func (DirectFS) IsSymlink(_ context.Context, p syspath.Abs) bool { return fileType(p, unix.S_IFLNK) }
+func (DirectFS) Exists(_ context.Context, p syspath.Abs) bool {
+	_, err := hostfs.Lstat(p)
+	return err == nil
+}
+
+func fileType(p syspath.Abs, want uint32) bool {
+	st, err := hostfs.Lstat(p)
+	return err == nil && uint32(st.Mode)&unix.S_IFMT == want
+}
+
+func (DirectFS) Realpath(_ context.Context, p syspath.Abs) (string, error) {
+	if err := hostfs.CheckDir(p); err != nil {
+		return "", err
+	}
+	return p.String(), nil
+}
+
+func (DirectFS) Move(ctx context.Context, src, dst syspath.Abs) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return hostfs.MoveNoReplace(src, dst)
+}
+
+func (DirectFS) RemoveAll(_ context.Context, p syspath.Abs) error { return hostfs.RemoveAll(p) }
 
 // PrivilegedFS observes the filesystem the privileged swap operates on.
 // Transaction trees live under root-owned 0700 directories that the calling
@@ -45,8 +79,8 @@ func (e *StepError) Error() string {
 	return fmt.Sprintf("%s exited with status %d", strings.Join(e.Argv, " "), e.Code)
 }
 
-func (f PrivilegedFS) root(ctx context.Context, c cmdexec.Privileged) error {
-	res, err := f.Runner.RunRoot(ctx, c.Stderr(cmdexec.Inherit))
+func runRoot(ctx context.Context, runner cmdexec.Runner, c cmdexec.Privileged) error {
+	res, err := runner.RunRoot(ctx, c.Stderr(cmdexec.Inherit))
 	if err != nil {
 		return err
 	}
@@ -57,11 +91,11 @@ func (f PrivilegedFS) root(ctx context.Context, c cmdexec.Privileged) error {
 }
 
 func (f PrivilegedFS) Move(ctx context.Context, src, dst syspath.Abs) error {
-	return f.root(ctx, cmdexec.Root(cmdexec.Mv, cmdexec.Word("-T"), cmdexec.Word("--"), src, dst))
+	return runRoot(ctx, f.Runner, cmdexec.Root(cmdexec.Mv, cmdexec.Word("-T"), cmdexec.Word("--no-copy"), cmdexec.Word("--update=none-fail"), cmdexec.Word("--"), src, dst))
 }
 
 func (f PrivilegedFS) RemoveAll(ctx context.Context, p syspath.Abs) error {
-	return f.root(ctx, cmdexec.Root(cmdexec.Rm, cmdexec.Word("-rf"), cmdexec.Word("--"), p))
+	return runRoot(ctx, f.Runner, cmdexec.Root(cmdexec.Rm, cmdexec.Word("-rf"), cmdexec.Word("--"), p))
 }
 
 // PrivilegedSystemd runs systemctl as root.
@@ -83,7 +117,7 @@ func (s PrivilegedSystemd) Show(ctx context.Context, t syspath.Target) (string, 
 }
 
 func (s PrivilegedSystemd) Stop(ctx context.Context, t syspath.Target) error {
-	return PrivilegedFS(s).root(ctx, cmdexec.Root(cmdexec.Systemctl, cmdexec.Word("stop"), t))
+	return runRoot(ctx, s.Runner, cmdexec.Root(cmdexec.Systemctl, cmdexec.Word("stop"), t))
 }
 
 func (s PrivilegedSystemd) Start(ctx context.Context, t syspath.Target) error {

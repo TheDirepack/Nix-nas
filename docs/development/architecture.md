@@ -63,6 +63,8 @@ A new feature should extend an existing authority whenever possible. It should n
 
 The Go `nas-unlock-api` checks Unix peer credentials and browser authorization before accepting an unlock body. It feeds one password line into `nas-secrets activate-stdin`. The activation command stages a private runtime tree, swaps it into place, and validates the protected stack before committing. The Python first-start worker calls `nas-keepass-setup` over stdin for KDBX creation and verification, password strength checks, and journal verifier operations.
 
+Root activation uses Linux descriptor-relative operations for staging, swapping, and removing transaction trees. It pins parent directories before inspecting or changing their entries. The console path retains the pre-authorized sudo backend when the process runs as the local administrator. Both paths reject an occupied swap destination. The same operation coordinator serializes setup and activation. On browser unlock timeout it forwards SIGTERM and keeps its lock until activation finishes rollback. Forced termination after the grace period cleans up the activation process group.
+
 ## Authentication and authorization
 
 Authentik authenticates users and owns group membership. Caddy removes client-supplied identity headers, performs forward authentication, and applies generated capability checks at the edge. Applications keep their own native authorization where applicable. Browser visibility is convenience only; server-side policy is the security boundary.

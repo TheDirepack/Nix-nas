@@ -12,6 +12,19 @@ import (
 // The cases below must not compile. They document what the typestate makes
 // unrepresentable; the test builds each one and requires the named error.
 var mustNotCompile = map[string]struct{ body, want string }{
+	"secret for environment": {
+		`_ = os.Setenv("VALUE", secret.Secret{})`, "cannot use secret.Secret",
+	},
+	"strong password into argv": {
+		`_ = cmdexec.New(cmdexec.KeePassXC, secret.StrongKeePassPassword{})`, "does not implement cmdexec.Arg",
+	},
+	"setup mode has no unlock-link authority": {
+		`_ = nassecrets.SetupMode{}.linkUnlockedEnvironment`, "linkUnlockedEnvironment undefined",
+	},
+	"committed cannot roll back": {
+		`_ = txn.Committed{}.Abort(1)`, "Abort undefined",
+	},
+
 	"commit before swap": {
 		`var s *txn.Staged; s.Commit(context.Background())`, "s.Commit undefined",
 	},
@@ -74,11 +87,12 @@ func TestTypestateRejectsMisuseAtCompileTime(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(mod), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			src := "package probe\n\nimport (\n\t\"context\"\n\n" +
+			src := "package probe\n\nimport (\n\t\"context\"\n\t\"os\"\n\n" +
+				"\t\"github.com/TheDirepack/Nix-nas/go/internal/nassecrets\"\n" +
 				"\t\"github.com/TheDirepack/Nix-nas/go/internal/cmdexec\"\n" +
 				"\t\"github.com/TheDirepack/Nix-nas/go/internal/secret\"\n" +
 				"\t\"github.com/TheDirepack/Nix-nas/go/internal/txn\"\n)\n\n" +
-				"var _ = context.Background\nvar _ cmdexec.Arg\nvar _ secret.Secret\nvar _ txn.Exit\n\n" +
+				"var _ = context.Background\nvar _ = os.Setenv\nvar _ nassecrets.SetupMode\nvar _ cmdexec.Arg\nvar _ secret.Secret\nvar _ txn.Exit\n\n" +
 				"func probe() {\n\t" + c.body + "\n}\n"
 			if err := os.WriteFile(filepath.Join(dir, "probe.go"), []byte(src), 0o600); err != nil {
 				t.Fatal(err)

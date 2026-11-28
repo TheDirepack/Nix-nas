@@ -17,6 +17,7 @@ import os
 import pathlib
 import re
 import secrets
+import signal
 import stat
 import subprocess
 import sys
@@ -349,6 +350,26 @@ def operation_state() -> dict[str, Any]:
     }
 
 
+def _run_terminable(command: list[str], environment: dict[str, str]) -> int:
+    child = None
+    pending = False
+
+    def forward(_signum: int, _frame: Any) -> None:
+        nonlocal pending
+        pending = True
+        if child is not None:
+            child.terminate()
+
+    previous = signal.signal(signal.SIGTERM, forward)
+    try:
+        child = subprocess.Popen(command, env=environment)
+        if pending:
+            child.terminate()
+        return child.wait()
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="nas-operation-run",
@@ -367,6 +388,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--validate-current",
         action="store_true",
         help="Validate the inherited parent coordination token instead of launching a command.",
+    )
+    parser.add_argument(
+        "--forward-termination", action="store_true", help="Keep the lock while the child handles SIGTERM."
     )
     parser.add_argument("command", nargs=argparse.REMAINDER, help="Command argv after --")
     args = parser.parse_args(argv)
@@ -394,18 +418,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("a command is required after --")
 
     environment = os.environ.copy()
+
+    def invoke() -> int:
+        if args.forward_termination:
+            return _run_terminable(command, environment)
+        return subprocess.run(command, env=environment, check=False).returncode
+
     if token:
         try:
             validate_coordination_token(token, args.classes)
         except OperationBusyError as exc:
             print(f"nas-operation-run: {exc}", file=sys.stderr)
             return 76
-        return subprocess.run(command, env=environment, check=False).returncode
+        return invoke()
 
     try:
         with acquire_operation(args.action, args.classes) as active:
             environment[COORDINATION_TOKEN_ENV] = active.coordination_token
-            return subprocess.run(command, env=environment, check=False).returncode
+            return invoke()
     except OperationBusyError as exc:
         print(f"nas-operation-run: {exc}", file=sys.stderr)
         return 75

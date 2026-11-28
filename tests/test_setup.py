@@ -1254,10 +1254,8 @@ class ConfiguredAdministratorTests(unittest.TestCase):
             self.assertEqual(database.read_text(encoding="utf-8"), "fresh")
             log = operations(root)
         self.assertFalse([line for line in log if " rm " in f" {line} "])
-        self.assertTrue(log[1].startswith("sudo -n -- install -d -m 0700"))
-        mv = next(line for line in log if "mv --no-clobber --" in line)
+        self.assertFalse([line for line in log if " mv " in f" {line} "])
         create = next(line for line in log if "db-create" in line)
-        self.assertLess(log.index(mv), log.index(create))
         self.assertIn("--set-password --decryption-time 1000", create)
         self.assertIn("db-info", log[-1])
         for line in log:

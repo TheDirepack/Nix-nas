@@ -33,15 +33,14 @@ type Exit uint8
 // ExitManualRecovery means rollback or commit cleanup could not complete.
 const ExitManualRecovery Exit = 125
 
-// FS performs privileged filesystem observations and mutations. The
-// production implementation runs coreutils through cmdexec.Root.
+// FS isolates transaction filesystem operations for fault injection.
 type FS interface {
 	IsDir(ctx context.Context, p syspath.Abs) bool
 	IsFile(ctx context.Context, p syspath.Abs) bool
 	IsSymlink(ctx context.Context, p syspath.Abs) bool
 	Exists(ctx context.Context, p syspath.Abs) bool
 	Realpath(ctx context.Context, p syspath.Abs) (string, error)
-	// Move has mv -T semantics: a directory replaces only an empty one.
+	// Move must refuse an existing destination.
 	Move(ctx context.Context, src, dst syspath.Abs) error
 	RemoveAll(ctx context.Context, p syspath.Abs) error
 }
@@ -389,7 +388,7 @@ func (c *core) rollback(ctx context.Context) bool {
 		if c.newIn && fs.RemoveAll(ctx, p.root) != nil {
 			failed = true
 		}
-		if c.oldMv {
+		if !failed && c.oldMv {
 			if fs.IsDir(ctx, p.previous) && !fs.IsSymlink(ctx, p.previous) {
 				if fs.Move(ctx, p.previous, p.root) != nil {
 					failed = true
@@ -412,7 +411,7 @@ func (c *core) rollback(ctx context.Context) bool {
 				failed = true
 			}
 		}
-		if fs.RemoveAll(ctx, p.stage) != nil {
+		if !failed && fs.RemoveAll(ctx, p.stage) != nil {
 			failed = true
 		}
 		if !failed && c.removeDirectory(ctx) != nil {

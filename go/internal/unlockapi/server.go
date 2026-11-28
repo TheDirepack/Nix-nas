@@ -123,7 +123,7 @@ func (h *Host) Activate(ctx context.Context, pw secret.KeePassPassword) Result {
 	runCtx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	c := cmdexec.New(h.NASSecrets, cmdexec.Word("activate-stdin")).
-		WithStdin(secret.Lines(pw)).Stdout(cmdexec.Capture).Stderr(cmdexec.Capture)
+		WithTerminationGroup().WithStdin(secret.Lines(pw)).Stdout(cmdexec.Capture).Stderr(cmdexec.Capture)
 	res, err := h.Runner.Run(runCtx, c)
 	if errors.Is(err, context.DeadlineExceeded) || runCtx.Err() != nil {
 		h.Log.Notice("nas-unlock-api: nas-secrets activate-stdin timed out")

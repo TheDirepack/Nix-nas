@@ -13,6 +13,8 @@ import os
 import pathlib
 import socket
 import subprocess
+import shlex
+import sys
 import tempfile
 import time
 import unittest
@@ -44,6 +46,8 @@ class Fixture:
         self.state.write_text("{}", encoding="utf-8")
         self.calls = root / "calls.log"
         self.stdin = root / "stdin.log"
+        self.operation_root = root / "operations"
+        self.operation_root.mkdir(mode=0o700)
         self.secrets = root / "nas-secrets"
         # The fake accepts only PASSWORD and records argv and stdin separately.
         self.secrets.write_text(
@@ -52,14 +56,36 @@ class Fixture:
             f'IFS= read -r line; printf "%s\\n" "$line" >> "{self.stdin}"\n'
             f'if [ "$line" = "{PASSWORD}" ]; then : > "{self.ready}"; exit 0; fi\n'
             'if [ "$line" = "explode" ]; then echo "Protected service target failed to start" >&2; exit 71; fi\n'
-            'if [ "$line" = "slow down" ]; then trap \'kill "$sleeper"; wait "$sleeper"; echo rolled-back >&2; exit 143\' TERM; sleep 30 >/dev/null 2>&1 & sleeper=$!; wait "$sleeper"; fi\n'
+            'if [ "$line" = "slow down" ]; then trap \'kill "$sleeper"; wait "$sleeper"; sleep 0.1; echo rolled-back >> "$FAKE_ACTIVATION_LOG"; exit 143\' TERM; sleep 30 >/dev/null 2>&1 & sleeper=$!; wait "$sleeper"; fi\n'
             'echo "Unable to unlock the KeePassXC database." >&2\n'
             "exit 1\n",
             encoding="utf-8",
         )
+        self.coordinator = root / "coordinated-nas-secrets"
+        runner = pathlib.Path(__file__).resolve().parents[1] / "services/nas_operation_lock.py"
+        self.coordinator.write_text(
+            "#!/bin/sh\nexec "
+            + shlex.join(
+                [
+                    sys.executable,
+                    str(runner),
+                    "--action",
+                    "test unlock",
+                    "--class",
+                    "secrets",
+                    "--class",
+                    "runtime",
+                    "--forward-termination",
+                    "--",
+                    str(self.secrets),
+                ]
+            )
+            + ' "$@"\n',
+            encoding="utf-8",
+        )
         self.systemctl = root / "systemctl"
         self.systemctl.write_text(f'#!/bin/sh\necho "systemctl $*" >> "{self.calls}"\n', encoding="utf-8")
-        for tool in (self.secrets, self.systemctl):
+        for tool in (self.secrets, self.coordinator, self.systemctl):
             tool.chmod(0o755)
 
     def env(self) -> dict[str, str]:
@@ -67,8 +93,11 @@ class Fixture:
             **os.environ,
             "NAS_SECRET_READY": str(self.ready),
             "NAS_SETUP_STATE": str(self.state),
-            "NAS_SECRETS_BIN": str(self.secrets),
+            "NAS_SECRETS_BIN": str(self.coordinator),
+            "NAS_OPERATION_ROOT": str(self.operation_root),
+            "NAS_OPERATION_COORDINATION_TOKEN": "",
             "NAS_SYSTEMCTL": str(self.systemctl),
+            "FAKE_ACTIVATION_LOG": str(self.calls),
             "NAS_CADDY_GROUP": "",
         }
 
@@ -293,10 +322,12 @@ class ActivationTimeoutTests(UnlockApiTests):
         status, body, _ = self.request("POST", "/unlock/api/activate", {"password": "slow down"})
         self.assertEqual(status, 504, body)
         self.assertLess(time.monotonic() - started, 9, "SIGTERM must reach nas-secrets so it can roll back")
-        self.assertIn(
-            "systemctl start authentik-worker.service authentik.service nas-authentik-proxy-outpost.service",
-            self.fixture.log(),
+        log = self.fixture.log()
+        self.assertLess(
+            log.index("rolled-back"),
+            log.index("systemctl start authentik-worker.service authentik.service nas-authentik-proxy-outpost.service"),
         )
+        self.assertEqual((self.fixture.operation_root / "operation.lock").read_bytes(), b"")
 
 
 class PeerTests(unittest.TestCase):

@@ -1,9 +1,14 @@
 package secret
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
+
+	"golang.org/x/sys/unix"
 )
 
 // Payload is the complete stdin a child process receives. It can only be
@@ -76,4 +81,69 @@ func DiscloseToStdout(prefix Lit, h Holder, suffix Lit) error {
 	_, err := os.Stdout.Write(out)
 	clear(out)
 	return err
+}
+
+// InstallPrivateFile keeps descriptor ownership and secret bytes inside this
+// sink. Replacement publishes a complete owner-read-only file atomically.
+func InstallPrivateFile(src *os.Root, from string, dst *os.Root, to string, uid, gid int, replace bool) error {
+	var reader io.Reader
+	if src != nil {
+		if !filepath.IsLocal(from) || filepath.Base(from) == "." {
+			return errors.New("secret input must be relative to its root")
+		}
+		parent, err := src.Open(filepath.Dir(from))
+		if err != nil {
+			return err
+		}
+		defer parent.Close()
+		// os.Root follows in-root symlinks. Open the final component relative to
+		// its pinned parent to enforce O_NOFOLLOW at the actual read boundary.
+		fd, err := unix.Openat(int(parent.Fd()), filepath.Base(from), unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0) // #nosec G115 -- OS descriptor fits int
+		if err != nil {
+			return err
+		}
+		in := os.NewFile(uintptr(fd), from) // #nosec G115 -- openat succeeded
+		defer in.Close()
+		st, err := in.Stat()
+		if err != nil {
+			return err
+		}
+		if !st.Mode().IsRegular() {
+			return errors.New("secret input must be a regular file")
+		}
+		reader = in
+	}
+	name := to
+	if replace {
+		name = ".secret-" + rand.Text()
+	}
+	out, err := dst.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	complete := false
+	defer func() {
+		if !complete {
+			_ = dst.Remove(name)
+		}
+	}()
+	if reader != nil {
+		_, err = io.Copy(out, reader)
+	}
+	if err == nil {
+		err = out.Chown(uid, gid)
+	}
+	if err == nil {
+		err = out.Chmod(0o400)
+	}
+	if err := errors.Join(err, out.Close()); err != nil {
+		return err
+	}
+	if replace {
+		if err := dst.Rename(name, to); err != nil {
+			return err
+		}
+	}
+	complete = true
+	return nil
 }

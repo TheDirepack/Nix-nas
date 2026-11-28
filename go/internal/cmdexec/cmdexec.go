@@ -82,11 +82,12 @@ const (
 
 // Command is an unprivileged invocation.
 type Command struct {
-	prog   Program
-	args   []Arg
-	stdin  *secret.Payload
-	stdout Output
-	stderr Output
+	terminationGroup bool
+	prog             Program
+	args             []Arg
+	stdin            *secret.Payload
+	stdout           Output
+	stderr           Output
 }
 
 // New builds a command; streams default to Discard.
@@ -96,6 +97,9 @@ func New(p Program, args ...Arg) Command {
 
 // WithStdin attaches the secret payload; only unprivileged commands have it.
 func (c Command) WithStdin(p secret.Payload) Command { c.stdin = &p; return c }
+
+// WithTerminationGroup confines forced timeout cleanup to this command's descendants.
+func (c Command) WithTerminationGroup() Command { c.terminationGroup = true; return c }
 
 // Stdout selects the stdout disposition.
 func (c Command) Stdout(o Output) Command { c.stdout = o; return c }
@@ -180,7 +184,7 @@ func stream(o Output, inherit *os.File, buf *bytes.Buffer) io.Writer {
 	return nil
 }
 
-func (r *OS) run(ctx context.Context, argv []string, stdin *secret.Payload, stdout, stderr Output, secretOut bool) (secret.Secret, Result, error) {
+func (r *OS) run(ctx context.Context, argv []string, stdin *secret.Payload, stdout, stderr Output, secretOut, terminationGroup bool) (secret.Secret, Result, error) {
 	if stdin != nil {
 		defer stdin.Destroy()
 	}
@@ -200,6 +204,9 @@ func (r *OS) run(ctx context.Context, argv []string, stdin *secret.Payload, stdo
 	// SIGTERM lets nas-secrets roll back; SIGKILL follows only after Grace.
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = Grace
+	if terminationGroup {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	var pipe *secret.StdinPipe
 	var readEnd *os.File
 	if stdin != nil {
@@ -242,7 +249,12 @@ func (r *OS) run(ctx context.Context, argv []string, stdin *secret.Payload, stdo
 	case errors.As(werr, &exitErr):
 		res.Code = exitErr.ExitCode()
 		if res.Code < 0 {
-			res.Code = 128 + int(exitErr.Sys().(syscall.WaitStatus).Signal()) // linux WaitStatus
+			sig := exitErr.Sys().(syscall.WaitStatus).Signal()
+			res.Code = 128 + int(sig)
+			if terminationGroup && sig == syscall.SIGKILL && ctx.Err() != nil {
+				// A coordinator killed after the grace period may still have children.
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			}
 		}
 	default:
 		return secret.Secret{}, Result{Code: 127}, werr
@@ -260,13 +272,13 @@ func (r *OS) run(ctx context.Context, argv []string, stdin *secret.Payload, stdo
 
 // Run executes an unprivileged command.
 func (r *OS) Run(ctx context.Context, c Command) (Result, error) {
-	_, res, err := r.run(ctx, c.Argv(), c.stdin, c.stdout, c.stderr, false)
+	_, res, err := r.run(ctx, c.Argv(), c.stdin, c.stdout, c.stderr, false, c.terminationGroup)
 	return res, err
 }
 
 // RunSecret executes c and returns its stdout as a secret.
 func (r *OS) RunSecret(ctx context.Context, c Command) (secret.Secret, Result, error) {
-	return r.run(ctx, c.Argv(), c.stdin, c.stdout, c.stderr, true)
+	return r.run(ctx, c.Argv(), c.stdin, c.stdout, c.stderr, true, c.terminationGroup)
 }
 
 // RunRoot executes a privileged command with stdin bound to /dev/null.
@@ -279,6 +291,6 @@ func (r *OS) RunRoot(ctx context.Context, c Privileged) (Result, error) {
 		}
 		argv = append(prefix, argv...)
 	}
-	_, res, err := r.run(ctx, argv, nil, c.stdout, c.stderr, false)
+	_, res, err := r.run(ctx, argv, nil, c.stdout, c.stderr, false, false)
 	return res, err
 }

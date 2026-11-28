@@ -695,6 +695,9 @@ func TestFailedLiveTreeRemovalCannotNestPrevious(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 	w.must("tx/previous/old", "root/new", "!root/previous")
+	if w.fs.moves != 2 {
+		t.Fatal("must not attempt restore after live-tree removal fails")
+	}
 	if w.sd.started() {
 		t.Fatal("must not restart new consumers")
 	}

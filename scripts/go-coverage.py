@@ -32,6 +32,8 @@ FLOORS = {
     "cmd/nas-unlock-api": 55.0,
     "internal/cmdexec": 85.0,
     "internal/config": 67.0,
+    "internal/hardening": 100.0,
+    "internal/hostfs": 60.0,
     "internal/keepass": 83.0,
     "internal/lineio": 80.0,
     "internal/nassecrets": 75.0,

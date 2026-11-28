@@ -13,6 +13,7 @@ import (
 
 	"github.com/TheDirepack/Nix-nas/go/internal/cmdexec"
 	"github.com/TheDirepack/Nix-nas/go/internal/config"
+	"github.com/TheDirepack/Nix-nas/go/internal/hostfs"
 	"github.com/TheDirepack/Nix-nas/go/internal/keepass"
 	"github.com/TheDirepack/Nix-nas/go/internal/lineio"
 	"github.com/TheDirepack/Nix-nas/go/internal/secret"
@@ -88,7 +89,29 @@ func (a *App) rootOK(ctx context.Context, c cmdexec.Privileged) bool {
 }
 
 func (a *App) rootTest(ctx context.Context, flag string, p syspath.Abs) bool {
+	if !a.Escalates {
+		if flag == "-L" {
+			st, err := os.Lstat(p.String())
+			return err == nil && st.Mode()&os.ModeSymlink != 0
+		}
+		st, err := os.Stat(p.String())
+		return err == nil && (flag == "-e" || flag == "-f" && st.Mode().IsRegular())
+	}
 	return a.rootOK(ctx, cmdexec.Root(cmdexec.Test, cmdexec.Word(flag), p))
+}
+
+func (a *App) removeFile(ctx context.Context, p syspath.Abs) error {
+	if !a.Escalates {
+		return hostfs.Unlink(p)
+	}
+	return a.root(ctx, cmdexec.Root(cmdexec.Rm, cmdexec.Word("-f"), cmdexec.Word("--"), p))
+}
+
+func (a *App) replaceLink(ctx context.Context, target, p syspath.Abs) error {
+	if !a.Escalates {
+		return hostfs.ReplaceSymlink(target, p)
+	}
+	return a.root(ctx, cmdexec.Root(cmdexec.Ln, cmdexec.Word("-sfn"), cmdexec.Word("--"), target, p))
 }
 
 func statusOf(code int) txn.Exit {

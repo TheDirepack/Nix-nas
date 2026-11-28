@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/TheDirepack/Nix-nas/go/internal/cmdexec"
+	"github.com/TheDirepack/Nix-nas/go/internal/hardening"
 	"github.com/TheDirepack/Nix-nas/go/internal/syspath"
 	"github.com/TheDirepack/Nix-nas/go/internal/unlockapi"
 )
@@ -34,7 +35,13 @@ func envProgram(name, fallback string) cmdexec.Program {
 	return cmdexec.Program(fallback)
 }
 
-func main() { os.Exit(run(os.Args[1:])) }
+func main() {
+	if err := hardening.DisableDumps(); err != nil {
+		fmt.Fprintln(os.Stderr, "nas-unlock-api: unable to disable process dumps:", err)
+		os.Exit(1)
+	}
+	os.Exit(run(os.Args[1:]))
+}
 
 func run(args []string) int {
 	fs := flag.NewFlagSet("nas-unlock-api", flag.ContinueOnError)

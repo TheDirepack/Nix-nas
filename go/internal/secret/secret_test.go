@@ -42,7 +42,11 @@ func TestSecretNeverFormats(t *testing.T) {
 			t.Fatalf("secret leaked through formatting: %q", out)
 		}
 	}
-	for _, typed := range []any{mustHex(t), mustAtom(t), KeePassPassword{s: s}, Payload{s: s}} {
+	for _, typed := range []any{mustHex(t), mustAtom(t), KeePassPassword{s: s}, StrongKeePassPassword{p: KeePassPassword{s: s}}, Payload{s: s}} {
+		encoded, err := json.Marshal(map[string]any{"secret": typed})
+		if err != nil || strings.Contains(string(encoded), canary) || strings.Contains(string(encoded), "abcdef") {
+			t.Fatal("typed secret wrapper leaked through JSON")
+		}
 		for _, verb := range []string{"%v", "%+v", "%#v", "%s"} {
 			if out := fmt.Sprintf(verb, typed); strings.Contains(out, canary) || strings.Contains(out, "abcdef") {
 				t.Fatalf("validated wrapper leaked through %s: %q", verb, out)
@@ -334,4 +338,43 @@ func FuzzReadLine(f *testing.F) {
 			t.Fatalf("read past the newline: consumed %d of %q", consumed, input)
 		}
 	})
+}
+
+func TestInstallPrivateFileRefusesSymlinksAndAtomicallyReplacesDestination(t *testing.T) {
+	source, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	target, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	if err := source.WriteFile("token", []byte(canary), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Symlink("token", "link"); err != nil {
+		t.Fatal(err)
+	}
+	uid, gid := os.Getuid(), os.Getgid()
+	if err := InstallPrivateFile(source, "link", target, "token", uid, gid, false); err == nil {
+		t.Fatal("accepted a symlink source")
+	}
+	if err := InstallPrivateFile(nil, "", target, "token", uid, gid, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallPrivateFile(source, "token", target, "token", uid, gid, false); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("non-replacing install: %v", err)
+	}
+	if err := InstallPrivateFile(source, "token", target, "token", uid, gid, true); err != nil {
+		t.Fatal(err)
+	}
+	info, err := target.Stat("token")
+	if err != nil || info.Mode().Perm() != 0o400 {
+		t.Fatalf("installed file: %v, %v", info, err)
+	}
+	if data, err := target.ReadFile("token"); err != nil || string(data) != canary {
+		t.Fatal("installed token differs from source")
+	}
 }

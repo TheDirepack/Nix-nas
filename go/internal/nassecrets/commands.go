@@ -323,15 +323,19 @@ func (a *App) cmdStop(ctx context.Context) error {
 	defer func() { _ = lock.Close() }()
 	// Path-triggered Caddy selection must see the locked state before
 	// stopping units can publish changes that trigger reconciliation.
-	steps := []cmdexec.Privileged{
-		cmdexec.Root(cmdexec.Rm, cmdexec.Word("-f"), cmdexec.Word("--"), a.S.SecretRoot.Join(syspath.MustName("ready"))),
-		cmdexec.Root(cmdexec.Systemctl, cmdexec.Word("stop"), a.S.ProtectedTarget),
-		cmdexec.Root(cmdexec.Rm, cmdexec.Word("-rf"), cmdexec.Word("--"), a.S.SecretRoot),
+	if err := a.removeFile(ctx, a.S.SecretRoot.Join(syspath.MustName("ready"))); err != nil {
+		return err
 	}
-	for _, c := range steps {
-		if err := a.root(ctx, c); err != nil {
-			return err
-		}
+	if err := a.root(ctx, cmdexec.Root(cmdexec.Systemctl, cmdexec.Word("stop"), a.S.ProtectedTarget)); err != nil {
+		return err
+	}
+	if a.Escalates {
+		err = (txn.PrivilegedFS{Runner: a.R}).RemoveAll(ctx, a.S.SecretRoot)
+	} else {
+		err = (txn.DirectFS{}).RemoveAll(ctx, a.S.SecretRoot)
+	}
+	if err != nil {
+		return err
 	}
 	a.say("Protected services stopped and runtime secrets removed. KeePassXC was not modified.")
 	return nil

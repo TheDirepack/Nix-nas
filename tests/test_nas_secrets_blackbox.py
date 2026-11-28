@@ -68,7 +68,7 @@ class RuntimeActivationTests(Base):
         self.assertLess(rotate, log("keepassxc-cli show"), "the boot key is rotated before staging")
         self.assertLess(rotate, log(f"chown -- {os.getuid()}:{os.getgid()} {self.app.database}"))
         self.assertLess(rotate, log(f"chmod -- 0640 {self.app.database}"))
-        swap = log(f"mv -T -- {self.app.runtime}/transactions")
+        swap = log(f"mv -T --no-copy --update=none-fail -- {self.app.runtime}/transactions")
         link = log(
             f"ln -sfn -- {self.app.secret_root}/authentik/environment {self.app.authentik_run}/unlocked-environment"
         )
@@ -151,7 +151,7 @@ class RuntimeActivationTests(Base):
         self.assertIn("Protected service target failed to start", result.stderr)
         self.assertTrue((self.app.secret_root / "old-marker").exists())
         failed_start = self.app.index("systemctl start nas-protected-services.target")
-        restore = self.app.index("mv -T --", start=failed_start)
+        restore = self.app.index("mv -T --no-copy --update=none-fail --", start=failed_start)
         self.assertLess(restore, self.app.index("systemctl start nas-protected-services.target", start=restore))
         self.assertEqual(list((self.app.runtime / "transactions").iterdir()), [])
 
@@ -429,6 +429,15 @@ class LifecycleTests(Base):
         )
         self.assert_ok(self.app.run("status", stdin="", NAS_OPERATION_COORDINATION_TOKEN=""))
         self.assertEqual(sum(line.startswith("runner --action") for line in self.app.log()), 1)
+
+    def test_browser_activation_requests_termination_forwarding(self) -> None:
+        result = self.app.run("activate-stdin", stdin="wrong\n", NAS_OPERATION_COORDINATION_TOKEN="")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(MARKER, result.stderr)
+        self.assertIn(
+            "runner --action nas-secrets:activate-stdin --class secrets --class runtime --forward-termination --",
+            "\n".join(self.app.log()),
+        )
 
     def test_concurrent_operations_are_refused(self) -> None:
         import fcntl

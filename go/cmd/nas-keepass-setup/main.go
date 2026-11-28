@@ -21,6 +21,7 @@ import (
 	"strconv"
 
 	"github.com/TheDirepack/Nix-nas/go/internal/cmdexec"
+	"github.com/TheDirepack/Nix-nas/go/internal/hardening"
 	"github.com/TheDirepack/Nix-nas/go/internal/lineio"
 	"github.com/TheDirepack/Nix-nas/go/internal/secret"
 	"github.com/TheDirepack/Nix-nas/go/internal/setupkp"
@@ -36,7 +37,13 @@ const (
 
 const usage = "usage: nas-keepass-setup {check-strength|verifier create|verifier verify|verifier legacy|database ...}"
 
-func main() { os.Exit(run(os.Args[1:])) }
+func main() {
+	if err := hardening.DisableDumps(); err != nil {
+		fmt.Fprintln(os.Stderr, "nas-keepass-setup: unable to disable process dumps:", err)
+		os.Exit(1)
+	}
+	os.Exit(run(os.Args[1:]))
+}
 
 func die(code int, err error) int {
 	fmt.Fprintln(os.Stderr, err)

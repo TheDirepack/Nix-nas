@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/TheDirepack/Nix-nas/go/internal/cmdexec"
+	"github.com/TheDirepack/Nix-nas/go/internal/hostfs"
 	"github.com/TheDirepack/Nix-nas/go/internal/keepass"
 	"github.com/TheDirepack/Nix-nas/go/internal/secret"
 	"github.com/TheDirepack/Nix-nas/go/internal/syspath"
@@ -31,11 +32,11 @@ type RuntimeMode struct{}
 func (SetupMode) sealedMode()   {}
 func (RuntimeMode) sealedMode() {}
 
-// PostSetup is evidence that first-start setup completed. Only
+// postSetup is evidence that first-start setup completed. Only
 // detectPostSetup constructs it and only RuntimeMode calls that, so setup
 // activation cannot rotate the boot key, link the unlocked environment or
 // retire boot-side credentials.
-type PostSetup struct {
+type postSetup struct {
 	retireBootEnvironment bool
 }
 
@@ -55,11 +56,11 @@ var (
 	accObservability = syspath.MustAccount("nas-observability")
 )
 
-func (a *App) detectPostSetup(ctx context.Context, _ RuntimeMode) *PostSetup {
+func (a *App) detectPostSetup(ctx context.Context, _ RuntimeMode) *postSetup {
 	if !a.rootTest(ctx, "-e", a.S.SetupState) {
 		return nil
 	}
-	return &PostSetup{}
+	return &postSetup{}
 }
 
 // staged is one file in the user-private staging directory and its
@@ -73,7 +74,7 @@ type staged struct {
 type activation struct {
 	a       *App
 	mode    Mode
-	post    *PostSetup
+	post    *postSetup
 	sess    *keepass.Session
 	local   *os.Root
 	localAt syspath.Abs
@@ -154,14 +155,23 @@ func (a *App) finish(r txn.RolledBack) txn.Exit {
 
 func (a *App) privateRuntimeBase(ctx context.Context) (syspath.Abs, error) {
 	stagingRoot := a.S.RuntimeRoot.Join(syspath.MustName("staging"))
-	if err := a.root(ctx, cmdexec.Root(cmdexec.Install, cmdexec.Word("-d"), cmdexec.Word("-m"), cmdexec.Mode(0o711),
-		cmdexec.Word("-o"), accRoot, cmdexec.Word("-g"), accRoot, stagingRoot)); err != nil {
-		return syspath.Abs{}, err
-	}
 	base := stagingRoot.Join(syspath.MustName(strconv.Itoa(a.UID)))
-	if err := a.root(ctx, cmdexec.Root(cmdexec.Install, cmdexec.Word("-d"), cmdexec.Word("-m"), cmdexec.Mode(0o700),
-		cmdexec.Word("-o"), cmdexec.Int(a.UID), cmdexec.Word("-g"), cmdexec.Int(a.GID), base)); err != nil {
-		return syspath.Abs{}, err
+	if !a.Escalates {
+		if err := hostfs.Mkdir(stagingRoot, 0, 0, 0o711); err != nil {
+			return syspath.Abs{}, err
+		}
+		if err := hostfs.Mkdir(base, a.UID, a.GID, 0o700); err != nil {
+			return syspath.Abs{}, err
+		}
+	} else {
+		if err := a.root(ctx, cmdexec.Root(cmdexec.Install, cmdexec.Word("-d"), cmdexec.Word("-m"), cmdexec.Mode(0o711),
+			cmdexec.Word("-o"), accRoot, cmdexec.Word("-g"), accRoot, stagingRoot)); err != nil {
+			return syspath.Abs{}, err
+		}
+		if err := a.root(ctx, cmdexec.Root(cmdexec.Install, cmdexec.Word("-d"), cmdexec.Word("-m"), cmdexec.Mode(0o700),
+			cmdexec.Word("-o"), cmdexec.Int(a.UID), cmdexec.Word("-g"), cmdexec.Int(a.GID), base)); err != nil {
+			return syspath.Abs{}, err
+		}
 	}
 	st, err := os.Lstat(base.String())
 	if err != nil || !st.IsDir() || st.Mode()&os.ModeSymlink != 0 || ownerOf(st) != a.UID || st.Mode().Perm()&0o077 != 0 {
@@ -172,6 +182,16 @@ func (a *App) privateRuntimeBase(ctx context.Context) (syspath.Abs, error) {
 
 func (a *App) transactionDir(ctx context.Context) (syspath.Abs, error) {
 	txRoot := a.S.RuntimeRoot.Join(syspath.MustName("transactions"))
+	if !a.Escalates {
+		if err := hostfs.Mkdir(txRoot, 0, 0, 0o700); err != nil {
+			return syspath.Abs{}, err
+		}
+		dir, err := os.MkdirTemp(txRoot.String(), "transaction.")
+		if err != nil {
+			return syspath.Abs{}, err
+		}
+		return syspath.NewAbs(dir)
+	}
 	if err := a.root(ctx, cmdexec.Root(cmdexec.Install, cmdexec.Word("-d"), cmdexec.Word("-m"), cmdexec.Mode(0o700),
 		cmdexec.Word("-o"), accRoot, cmdexec.Word("-g"), accRoot, txRoot)); err != nil {
 		return syspath.Abs{}, err
@@ -230,7 +250,10 @@ func (a *App) activate(ctx context.Context, mode Mode, src PasswordSource) txn.E
 	if err != nil {
 		return a.report(ctx, formatFail(err))
 	}
-	fs := txn.PrivilegedFS{Runner: a.R}
+	var fs txn.FS = txn.DirectFS{}
+	if a.Escalates {
+		fs = txn.PrivilegedFS{Runner: a.R}
+	}
 	staged, err := txn.Begin(ctx, fs, txn.PrivilegedSystemd{Runner: a.R}, a.Err, plan)
 	if err != nil {
 		// The transaction never owned the directory.
@@ -488,7 +511,7 @@ func (v *activation) prepareOptional(ctx context.Context) error {
 // rotateBootKey replaces the Authentik key that setup adopted from a
 // plaintext first-boot file, before that file is retired. A symlinked
 // runtime environment means this boot still uses the file.
-func (v *activation) rotateBootKey(ctx context.Context, post *PostSetup) error {
+func (v *activation) rotateBootKey(ctx context.Context, post *postSetup) error {
 	a := v.a
 	bootEnv := a.S.BootstrapAuthentikDir.Join(syspath.MustName("environment"))
 	if !a.rootTest(ctx, "-e", bootEnv) || a.rootTest(ctx, "-L", a.S.AuthentikRuntimeEnvironmentFile) {
@@ -498,8 +521,7 @@ func (v *activation) rotateBootKey(ctx context.Context, post *PostSetup) error {
 	if err != nil {
 		return fail(ExitFailure, "Unable to inspect the KeePassXC database: %v", err)
 	}
-	owner := cmdexec.Word(strconv.Itoa(ownerOf(st)) + ":" + strconv.Itoa(groupOf(st)))
-	mode := cmdexec.Mode(uint32(st.Mode().Perm()))
+
 	if err := v.sess.EnsureGroup(ctx); err != nil {
 		return formatFail(err)
 	}
@@ -513,11 +535,18 @@ func (v *activation) rotateBootKey(ctx context.Context, post *PostSetup) error {
 	}
 	// KeePassXC saves by replacing the file; a root activation must not take
 	// the database away from its administrator owner.
-	if err := a.root(ctx, cmdexec.Root(cmdexec.Chown, cmdexec.Word("--"), owner, a.S.Database)); err != nil {
-		return err
-	}
-	if err := a.root(ctx, cmdexec.Root(cmdexec.Chmod, cmdexec.Word("--"), mode, a.S.Database)); err != nil {
-		return err
+	if !a.Escalates {
+		if err := hostfs.RestoreFileMetadata(a.S.Database, ownerOf(st), groupOf(st), uint32(st.Mode().Perm())); err != nil {
+			return err
+		}
+	} else {
+		owner := cmdexec.Word(strconv.Itoa(ownerOf(st)) + ":" + strconv.Itoa(groupOf(st)))
+		if err := a.root(ctx, cmdexec.Root(cmdexec.Chown, cmdexec.Word("--"), owner, a.S.Database)); err != nil {
+			return err
+		}
+		if err := a.root(ctx, cmdexec.Root(cmdexec.Chmod, cmdexec.Word("--"), cmdexec.Mode(st.Mode().Perm()), a.S.Database)); err != nil {
+			return err
+		}
 	}
 	post.retireBootEnvironment = true
 	a.say("Rotated the Authentik secret key held in KeePassXC; the first-boot copy will be removed.")
@@ -536,6 +565,13 @@ func (v *activation) install(ctx context.Context, rootStage syspath.Abs) error {
 		target := rootStage
 		if name != "" {
 			target = rootStage.Join(syspath.MustName(name))
+		}
+		if !a.Escalates {
+			gid, err := hostfs.GroupID(group)
+			if err != nil {
+				return err
+			}
+			return hostfs.Mkdir(target, 0, gid, uint32(mode))
 		}
 		return a.root(ctx, cmdexec.Root(cmdexec.Install, cmdexec.Word("-d"), cmdexec.Word("-m"), mode,
 			cmdexec.Word("-o"), accRoot, cmdexec.Word("-g"), group, target))
@@ -562,10 +598,30 @@ func (v *activation) install(ctx context.Context, rootStage syspath.Abs) error {
 			return err
 		}
 	}
+	var root *os.Root
+	if !a.Escalates {
+		var err error
+		root, err = hostfs.OpenRoot(rootStage)
+		if err != nil {
+			return err
+		}
+		defer root.Close()
+	}
 	for _, file := range v.files {
 		rel := file.name
 		if file.dir != "" {
 			rel = file.dir + "/" + file.name
+		}
+		if root != nil {
+			uid, uidErr := hostfs.UserID(file.owner)
+			gid, gidErr := hostfs.GroupID(file.group)
+			if err := errors.Join(uidErr, gidErr); err != nil {
+				return err
+			}
+			if err := secret.InstallPrivateFile(v.local, rel, root, rel, uid, gid, false); err != nil {
+				return err
+			}
+			continue
 		}
 		st, err := v.local.Lstat(rel)
 		if err != nil || !st.Mode().IsRegular() {
@@ -577,6 +633,9 @@ func (v *activation) install(ctx context.Context, rootStage syspath.Abs) error {
 			cmdexec.Word("-o"), file.owner, cmdexec.Word("-g"), file.group, cmdexec.Word("--"), src, dst)); err != nil {
 			return err
 		}
+	}
+	if root != nil {
+		return secret.InstallPrivateFile(nil, "", root, "ready", 0, 0, false)
 	}
 	return a.root(ctx, cmdexec.Root(cmdexec.Install, cmdexec.Word("-m"), cmdexec.Mode(0o400), cmdexec.Word("-o"), accRoot,
 		cmdexec.Word("-g"), accRoot, syspath.MustAbs("/dev/null"), rootStage.Join(syspath.MustName("ready"))))
@@ -627,12 +686,16 @@ func unitArgs(verb string, flags []string, units ...syspath.Unit) []cmdexec.Arg 
 
 // startServices requires *txn.Swapped: no service is restarted against the
 // previous tree.
-func (v *activation) startServices(ctx context.Context, _ *txn.Swapped, v2 []syspath.Unit) error {
+func (*postSetup) linkUnlockedEnvironment(ctx context.Context, a *App, _ *txn.Swapped) error {
+	return a.replaceLink(ctx,
+		a.S.SecretRoot.Join(syspath.MustName("authentik")).Join(syspath.MustName("environment")),
+		a.S.AuthentikUnlockedEnvironmentFile)
+}
+
+func (v *activation) startServices(ctx context.Context, swapped *txn.Swapped, v2 []syspath.Unit) error {
 	a := v.a
 	if v.post != nil {
-		if err := a.root(ctx, cmdexec.Root(cmdexec.Ln, cmdexec.Word("-sfn"), cmdexec.Word("--"),
-			a.S.SecretRoot.Join(syspath.MustName("authentik")).Join(syspath.MustName("environment")),
-			a.S.AuthentikUnlockedEnvironmentFile)); err != nil {
+		if err := v.post.linkUnlockedEnvironment(ctx, a, swapped); err != nil {
 			return err
 		}
 	}
@@ -740,24 +803,39 @@ func (v *activation) afterCommit(ctx context.Context, done txn.Committed) error 
 	boot := a.S.BootstrapAuthentikDir
 	bootOutpost := boot.Join(syspath.MustName("outpost-token"))
 	liveOutpost := done.Root().Join(syspath.MustName("authentik")).Join(syspath.MustName("outpost-token"))
-	copied := v.outpost && a.root(ctx, cmdexec.Root(cmdexec.Install, cmdexec.Word("-m"), cmdexec.Mode(0o400),
-		cmdexec.Word("-o"), accRoot, cmdexec.Word("-g"), accRoot, liveOutpost, bootOutpost)) == nil
-	if copied {
-		steps := []cmdexec.Privileged{
-			cmdexec.Root(cmdexec.Rm, cmdexec.Word("-f"), cmdexec.Word("--"), boot.Join(syspath.MustName("api-token"))),
-			cmdexec.Root(cmdexec.Ln, cmdexec.Word("-sfn"), cmdexec.Word("--"), bootOutpost, a.S.AuthentikRuntimeOutpostTokenFile),
-			cmdexec.Root(cmdexec.Ln, cmdexec.Word("-sfn"), cmdexec.Word("--"), a.S.AuthentikAPITokenFile, a.S.AuthentikRuntimeAPITokenFile),
+	if v.outpost && a.installOutpost(ctx, liveOutpost, bootOutpost) == nil {
+		if err := a.removeFile(ctx, boot.Join(syspath.MustName("api-token"))); err != nil {
+			return err
 		}
-		for _, c := range steps {
-			if err := a.root(ctx, c); err != nil {
-				return err
-			}
+		if err := a.replaceLink(ctx, bootOutpost, a.S.AuthentikRuntimeOutpostTokenFile); err != nil {
+			return err
+		}
+		if err := a.replaceLink(ctx, a.S.AuthentikAPITokenFile, a.S.AuthentikRuntimeAPITokenFile); err != nil {
+			return err
 		}
 	} else {
 		a.warn("WARNING: the boot-side Authentik outpost token was not refreshed; browser unlock may be unavailable after reboot.")
 	}
 	if v.post.retireBootEnvironment {
-		return a.root(ctx, cmdexec.Root(cmdexec.Rm, cmdexec.Word("-f"), cmdexec.Word("--"), boot.Join(syspath.MustName("environment"))))
+		return a.removeFile(ctx, boot.Join(syspath.MustName("environment")))
 	}
 	return nil
+}
+
+func (a *App) installOutpost(ctx context.Context, from, to syspath.Abs) error {
+	if a.Escalates {
+		return a.root(ctx, cmdexec.Root(cmdexec.Install, cmdexec.Word("-m"), cmdexec.Mode(0o400),
+			cmdexec.Word("-o"), accRoot, cmdexec.Word("-g"), accRoot, from, to))
+	}
+	src, err := hostfs.OpenRoot(from.Dir())
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst, err := hostfs.OpenRoot(to.Dir())
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+	return secret.InstallPrivateFile(src, from.Base(), dst, to.Base(), 0, 0, true)
 }

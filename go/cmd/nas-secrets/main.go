@@ -12,6 +12,7 @@ import (
 
 	"github.com/TheDirepack/Nix-nas/go/internal/cmdexec"
 	"github.com/TheDirepack/Nix-nas/go/internal/config"
+	"github.com/TheDirepack/Nix-nas/go/internal/hardening"
 	"github.com/TheDirepack/Nix-nas/go/internal/lineio"
 	"github.com/TheDirepack/Nix-nas/go/internal/nassecrets"
 	"github.com/TheDirepack/Nix-nas/go/internal/txn"
@@ -21,6 +22,10 @@ import (
 const configEnv = "NAS_SECRETS_CONFIG"
 
 func main() {
+	if err := hardening.DisableDumps(); err != nil {
+		fmt.Fprintln(os.Stderr, "nas-secrets: unable to disable process dumps:", err)
+		os.Exit(1)
+	}
 	os.Exit(int(run()))
 }
 
@@ -103,8 +108,16 @@ func enterCoordinator(s *config.Settings, name string) (txn.Exit, bool) {
 		fmt.Fprintf(os.Stderr, "nas-secrets cannot locate itself: %v\n", err)
 		return nassecrets.ExitFailure, true
 	}
-	if err := syscall.Exec(runner, []string{runner, "--action", "nas-secrets:" + name, "--class", "secrets", "--class", "runtime", "--", self, name}, os.Environ()); err != nil { // #nosec -- runner is the pinned coordinator
+	if err := syscall.Exec(runner, coordinatorArgs(runner, self, name), os.Environ()); err != nil { // #nosec -- runner is the pinned coordinator
 		fmt.Fprintf(os.Stderr, "NAS operation coordinator is unavailable: %v\n", err)
 	}
 	return nassecrets.ExitFailure, true
+}
+
+func coordinatorArgs(runner, self, name string) []string {
+	args := []string{runner, "--action", "nas-secrets:" + name, "--class", "secrets", "--class", "runtime"}
+	if name == "activate-stdin" {
+		args = append(args, "--forward-termination")
+	}
+	return append(args, "--", self, name)
 }

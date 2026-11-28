@@ -10,9 +10,12 @@ import (
 	"io"
 	"os"
 	"os/user"
+
+	"golang.org/x/sys/unix"
 	"time"
 
 	"github.com/TheDirepack/Nix-nas/go/internal/cmdexec"
+	"github.com/TheDirepack/Nix-nas/go/internal/hostfs"
 	"github.com/TheDirepack/Nix-nas/go/internal/secret"
 	"github.com/TheDirepack/Nix-nas/go/internal/syspath"
 )
@@ -188,42 +191,54 @@ func (d *Database) create(ctx context.Context, pw secret.StrongKeePassPassword) 
 	return nil
 }
 
-func present(p syspath.Abs) (os.FileInfo, bool) {
-	st, err := os.Lstat(p.String())
-	return st, err == nil
+func (d *Database) prepareParent(ctx context.Context) error {
+	if d.Escalate {
+		return d.root(ctx, cmdexec.Root(cmdexec.Install, cmdexec.Word("-d"), cmdexec.Word("-m"), cmdexec.Mode(0o700),
+			cmdexec.Word("-o"), d.Owner, cmdexec.Word("-g"), usersGroup, d.Path.Dir()))
+	}
+	uid, uidErr := hostfs.UserID(d.Owner)
+	gid, gidErr := hostfs.GroupID(usersGroup)
+	if err := errors.Join(uidErr, gidErr); err != nil {
+		return err
+	}
+	return hostfs.Mkdir(d.Path.Dir(), uid, gid, 0o700)
 }
 
-// VerifyOrCreate never deletes an existing database. It refuses to replace
-// one while the managed dataset may hold its key, and otherwise moves it
-// aside with mv --no-clobber before creating a fresh one.
+// VerifyOrCreate preserves any database that may hold the managed dataset key.
 func (d *Database) VerifyOrCreate(ctx context.Context, mode Mode, pw secret.KeePassPassword, admin *secret.Secret, dataset DatasetEncryption) (Result, error) {
-	if err := d.root(ctx, cmdexec.Root(cmdexec.Install, cmdexec.Word("-d"), cmdexec.Word("-m"), cmdexec.Mode(0o700),
-		cmdexec.Word("-o"), d.Owner, cmdexec.Word("-g"), usersGroup, d.Path.Dir())); err != nil {
+	if err := d.prepareParent(ctx); err != nil {
 		return Result{}, err
 	}
-	st, exists := present(d.Path)
-	if exists && (st.Mode()&os.ModeSymlink != 0 || !st.Mode().IsRegular()) {
+	st, err := hostfs.Lstat(d.Path)
+	if err != nil && !errors.Is(err, unix.ENOENT) {
+		return Result{}, err
+	}
+	exists := err == nil
+	if exists && st.Mode&unix.S_IFMT != unix.S_IFREG {
 		return Result{}, fmt.Errorf("KeePass database path is not a regular file: %s", d.Path)
+	}
+	if !exists && mode == VerifyOnly {
+		return Result{}, fmt.Errorf("KeePass database does not exist: %s", d.Path)
+	}
+	if exists && mode == VerifyOnly {
+		if err := d.opens(ctx, pw); err != nil {
+			return Result{}, err
+		}
+		return result(Existing, nil), nil
+	}
+	if exists && dataset.holdsKey() {
+		if err := d.opens(ctx, pw); err != nil {
+			return Result{}, fmt.Errorf("The managed ZFS dataset is already encrypted with a key held in %s. "+
+				"Setup never replaces that database; retry with its password.", d.Path)
+		}
+		return result(Existing, nil), nil
+	}
+	strong, err := secret.NewStrongKeePassPassword(pw, admin)
+	if err != nil {
+		return Result{}, err
 	}
 	var preserved *syspath.Abs
 	if exists {
-		switch mode {
-		case VerifyOnly:
-			if err := d.opens(ctx, pw); err != nil {
-				return Result{}, err
-			}
-			return result(Existing, nil), nil
-		case Create:
-		}
-		if dataset.holdsKey() {
-			// The encrypted dataset's only key lives in this database; a
-			// fresh database would silently orphan the data.
-			if err := d.opens(ctx, pw); err != nil {
-				return Result{}, fmt.Errorf("The managed ZFS dataset is already encrypted with a key held in %s. "+
-					"Setup never replaces that database; retry with its password.", d.Path)
-			}
-			return result(Existing, nil), nil
-		}
 		now := time.Now
 		if d.Now != nil {
 			now = d.Now
@@ -232,30 +247,18 @@ func (d *Database) VerifyOrCreate(ctx context.Context, mode Mode, pw secret.KeeP
 		if err != nil {
 			return Result{}, err
 		}
-		if err := d.root(ctx, cmdexec.Root(cmdexec.Mv, cmdexec.Word("--no-clobber"), cmdexec.Word("--"), d.Path, aside)); err != nil {
-			return Result{}, err
-		}
-		if _, still := present(d.Path); still {
-			return Result{}, fmt.Errorf("Unable to move the existing KeePassXC database aside to %s", aside)
+		if err := hostfs.MoveDatabase(d.Path, aside, d.Progress); err != nil {
+			return Result{}, fmt.Errorf("Unable to move the existing KeePassXC database aside to %s: %w", aside, err)
 		}
 		if d.Progress != nil {
 			_, _ = fmt.Fprintf(d.Progress, "nas-setup: kept the previous KeePassXC database as %s\n", aside)
 		}
 		preserved = &aside
 	}
-	switch mode {
-	case VerifyOnly:
-		return Result{}, fmt.Errorf("KeePass database does not exist: %s", d.Path)
-	case Create:
-	}
-	strong, err := secret.NewStrongKeePassPassword(pw, admin)
-	if err != nil {
-		return Result{}, err
-	}
 	if err := d.create(ctx, strong); err != nil {
 		return Result{}, err
 	}
-	if _, ok := present(d.Path); !ok {
+	if st, err := hostfs.Lstat(d.Path); err != nil || st.Mode&unix.S_IFMT != unix.S_IFREG {
 		return Result{}, fmt.Errorf("KeePassXC did not create %s", d.Path)
 	}
 	if err := d.opens(ctx, pw); err != nil {
