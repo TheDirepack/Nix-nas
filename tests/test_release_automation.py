@@ -343,11 +343,10 @@ class ReleaseAutomationTests(unittest.TestCase):
             self.assertLess(changelog.index("## 1.2.5"), changelog.index("## 1.2.4"))
             self.assertLess(changelog.index("## 1.2.4"), changelog.index("## 1.2.3"))
 
-    def test_linux_authentik_and_keepass_use_the_canonical_bootstrap_password(self) -> None:
+    def test_linux_and_authentik_use_the_canonical_bootstrap_password(self) -> None:
         for relative in (
             "modules/nas/config/systemd-services.nix",
             "modules/nas/config/application-services.nix",
-            "modules/nas/internal/secret-tools.nix",
         ):
             self.assertIn("bootstrapPassword", (ROOT / relative).read_text(encoding="utf-8"))
 

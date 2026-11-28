@@ -78,6 +78,8 @@ A rolled-back activation stops the protected target, and with it Authentik. `nas
 
 `nas-secrets` reads the KDBX password from standard input, stages only required runtime material under `/run/nas-secrets`, validates storage/secrets, and then starts the protected target.
 
+`nas-secrets`, `nas-unlock-api` and `nas-keepass-setup` are Zig binaries (`zig/`). `Secret` owns zeroed buffers and rejects value formatting and JSON serialization. The code uses typed sinks for child stdin, private 0600 staging files, key derivation, and the existing `show-*` commands. Validation callbacks borrow raw bytes for the duration of the call and must keep them inside that boundary. The argv builder rejects types carrying a secret at compile time, and the sudo runner has no stdin parameter. The activation transaction is a typestate (`Staged`, `Swapped`, `Committed`, rollback outcomes), and post-setup steps require witness values (`PostSetup`, `Rotated`, `transaction.Committed`). Feature-specific secrets are compiled in only when the module option enables them.
+
 No long-running service should need broad read access to the whole secret tree when an exact credential or read-only path is sufficient.
 
 The unlock control plane is system-partition state: KeePassXC, Authentik, and

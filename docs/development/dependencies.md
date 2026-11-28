@@ -48,6 +48,14 @@ does: one trimmed line, a Restic backend scheme, or an absolute or `local:` path
 It classifies only the location and never prints the string. When Restic adds a
 backend scheme, add it to `NETWORK_BACKENDS` with a classification test.
 
+## Zig toolchain
+
+The KeePass tools (`zig/`) require Zig 0.17.1. nixpkgs 26.05 packages Zig only up to 0.16.0, so `modules/nas/internal/zig-toolchain.nix` fetches the official static release tarball by SRI hash; `minimum_zig_version` in `zig/build.zig.zon` must name the same version (enforced by `tests/test_zig_contracts.py`). Zig is pre-1.0: re-run `zig build test`, `zig build compile-errors` and the Python black-box suites on every bump, and expect API changes in `std.Io`, `std.process`, `@typeInfo` and the build system. The project uses no third-party Zig packages; scrypt, Argon2id, bcrypt and HMAC come from `std.crypto`. Builds target `-Dcpu=baseline` so a closure built on a newer machine runs on the appliance.
+
+Full password case folding uses Unicode 16.0.0 data in `zig/src/data/CaseFolding.txt`.
+Update that table alongside the Python Unicode version if password comparison
+behavior changes. [Unicode case-folding data](https://www.unicode.org/Public/16.0.0/ucd/CaseFolding.txt)
+
 ## Python runtime validation
 
 The privileged control plane uses the Python standard library, immutable dataclasses at internal boundaries, and committed closed JSON Schemas for external payloads. A runtime framework such as Pydantic is not required for the current recovery plane and would add a new boot-critical dependency. Reconsider only when schema generation or cross-process model reuse clearly exceeds the existing validators.

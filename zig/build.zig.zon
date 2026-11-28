@@ -1,0 +1,11 @@
+.{
+    .name = .nas_keepass,
+    .version = "0.1.0",
+    .fingerprint = 0x7d460815f60a9f9f,
+    .minimum_zig_version = "0.17.1",
+    // Standard library only: scrypt, Argon2id, bcrypt, HMAC and the
+    // syscall layer all come from `std`, so there is no third-party package
+    // to vet or pin.
+    .dependencies = .{},
+    .paths = .{ "build.zig", "build.zig.zon", "src", "config", "tests" },
+}

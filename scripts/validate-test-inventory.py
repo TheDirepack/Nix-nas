@@ -124,6 +124,18 @@ def nix_commands() -> dict[str, set[str]]:
     return commands
 
 
+def zig_commands() -> dict[str, set[str]]:
+    """Installed Zig executables declared in zig/build.zig (test-only harnesses excluded)."""
+    text = (ROOT / "zig" / "build.zig").read_text(encoding="utf-8")
+    commands: dict[str, set[str]] = {}
+    for match in re.finditer(r'\.\{ \.name = "([^"]+)", \.root = "([^"]+)"(, \.harness_only = true)? \}', text):
+        if match.group(3) is None:
+            commands.setdefault(match.group(1), set()).add(f"zig/{match.group(2)}")
+    if not commands:
+        fail("zig/build.zig declares no installed executables")
+    return commands
+
+
 def repository_executables() -> dict[str, set[str]]:
     commands: dict[str, set[str]] = {}
     roots = (ROOT / "scripts",)
@@ -152,10 +164,10 @@ def main() -> int:
     assert isinstance(entries, dict)
     assert isinstance(python_modules, dict)
     discovered: dict[str, set[str]] = {}
-    for source in (pyproject_commands(), nix_commands(), repository_executables()):
+    for source in (pyproject_commands(), nix_commands(), zig_commands(), repository_executables()):
         for name, paths in source.items():
             discovered.setdefault(name, set()).update(paths)
-    installed_commands = set(pyproject_commands()) | set(nix_commands())
+    installed_commands = set(pyproject_commands()) | set(nix_commands()) | set(zig_commands())
     source_commands = set(repository_executables())
     missing = sorted(set(discovered) - set(entries))
     stale = sorted(set(entries) - set(discovered))

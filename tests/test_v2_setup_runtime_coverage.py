@@ -19,6 +19,11 @@ if str(SERVICES) not in sys.path:
 
 import nas_setup as setup  # noqa: E402
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from keepass_fakes import export_keepass_setup, fake_keepass  # noqa: E402
+
+export_keepass_setup()
+
 
 class SetupRuntimeCoverageTests(unittest.TestCase):
     def test_run_maps_results_timeouts_and_failures(self) -> None:
@@ -295,35 +300,35 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
                 mock.patch.object(setup, "KEEPASS_DATABASE", database),
                 mock.patch.object(setup, "local_administrator_username", return_value="nasadmin"),
                 mock.patch.object(setup, "run_root") as root_run,
-                mock.patch.object(setup, "run_admin") as admin,
+                fake_keepass(setup) as keepass,
             ):
                 self.assertEqual(setup.verify_or_create_database("pw", False), "existing")
+                calls = keepass.calls()
             self.assertIn("nasadmin", root_run.call_args.args[0])
-            self.assertIn("db-info", admin.call_args.args[0])
-            self.assertNotIn("--pw-stdin", admin.call_args.args[0])
+            self.assertEqual(calls[0]["argv"][0], "db-info")
+            self.assertNotIn("--pw-stdin", calls[0]["argv"])
+            self.assertEqual(calls[0]["stdin"], "pw\n")
             database.unlink()
-            with mock.patch.object(setup, "KEEPASS_DATABASE", database), mock.patch.object(setup, "run_root"):
+            with (
+                mock.patch.object(setup, "KEEPASS_DATABASE", database),
+                mock.patch.object(setup, "run_root"),
+                fake_keepass(setup),
+            ):
                 with self.assertRaisesRegex(setup.SetupError, "does not exist"):
                     setup.verify_or_create_database("pw", False)
-
-            def create(command: list[str], **kwargs: object) -> setup.Completed:
-                if "db-create" in command:
-                    self.assertEqual(kwargs.get("input_text"), "pw\npw\n")
-                    database.write_text("created", encoding="utf-8")
-                else:
-                    self.assertIn("db-info", command)
-                    self.assertEqual(kwargs.get("input_text"), "pw\n")
-                return setup.Completed((), "", "")
 
             with (
                 mock.patch.object(setup, "KEEPASS_DATABASE", database),
                 mock.patch.object(setup, "run_root"),
-                mock.patch.object(setup, "run_admin", side_effect=create) as create_admin,
+                fake_keepass(setup) as keepass,
             ):
                 self.assertEqual(setup.verify_or_create_database("pw", True), "created")
-            self.assertIn("--set-password", create_admin.call_args_list[0].args[0])
-            self.assertIn("db-info", create_admin.call_args_list[1].args[0])
-            self.assertNotIn("--pw-stdin", create_admin.call_args_list[1].args[0])
+                create, verify = keepass.calls()
+            self.assertIn("--set-password", create["argv"])
+            self.assertEqual(create["stdin"], "pw\npw\n")
+            self.assertEqual(verify["argv"][0], "db-info")
+            self.assertEqual(verify["stdin"], "pw\n")
+            self.assertNotIn("--pw-stdin", verify["argv"])
 
     def test_create_keepass_database_rejects_non_regular_existing_path(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -332,11 +337,13 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             with (
                 mock.patch.object(setup, "KEEPASS_DATABASE", database),
                 mock.patch.object(setup, "local_administrator_username", return_value="nasadmin"),
+                mock.patch.object(setup, "managed_dataset_encrypted", return_value=False),
                 mock.patch.object(setup, "run_root"),
-                mock.patch.object(setup, "run_admin"),
+                fake_keepass(setup) as keepass,
                 self.assertRaisesRegex(setup.SetupError, "not a regular file"),
             ):
                 setup.verify_or_create_database("pw", True)
+            self.assertEqual(keepass.calls(), [])
 
     def test_verify_or_create_database_reports_failed_creation_and_key_file(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -345,11 +352,12 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
                 mock.patch.object(setup, "KEEPASS_DATABASE", database),
                 mock.patch.object(setup, "KEEPASS_KEY_FILE", "/key"),
                 mock.patch.object(setup, "run_root"),
-                mock.patch.object(setup, "run_admin") as admin,
+                fake_keepass(setup, create_noop=True) as keepass,
             ):
                 with self.assertRaisesRegex(setup.SetupError, "did not create"):
                     setup.verify_or_create_database("pw", True)
-            self.assertIn("--set-key-file", admin.call_args.args[0])
+                argv = keepass.argv()
+            self.assertIn("--set-key-file", argv[0])
 
     def test_setup_storage_creates_plain_pool_and_dataset(self) -> None:
         calls: list[list[str]] = []

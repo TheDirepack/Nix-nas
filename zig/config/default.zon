@@ -1,0 +1,22 @@
+.{
+    .database = "/var/lib/nas-control-plane/nas-secrets/NAS.kdbx",
+    .key_file = null,
+    .secret_group = "NAS",
+    .secret_root = "/run/nas-secrets",
+    .bootstrap_authentik_dir = "/var/lib/nas-control-plane/bootstrap/authentik",
+    .authentik_runtime_environment_file = "/run/nas-authentik/environment",
+    .authentik_unlocked_environment_file = "/run/nas-authentik/unlocked-environment",
+    .authentik_runtime_outpost_token_file = "/run/nas-authentik/outpost-token",
+    .authentik_api_token_file = "/run/nas-secrets/authentik/api-token",
+    .authentik_runtime_api_token_file = "/run/nas-authentik/api-token",
+    .authentik_ready_url = "http://127.0.0.1:9000/auth/-/health/ready/",
+    .bootstrap_email = "admin@example.invalid",
+    .features = .{
+        .grafana = true,
+        .ntfy = true,
+        .nut_webgui = true,
+        .zfs_encryption = true,
+        .vaultwarden = true,
+        .observability_dir = true,
+    },
+}

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -12,8 +14,14 @@ SERVICES = ROOT / "services"
 if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
+import nas_setup_config as setup_config  # noqa: E402
 from nas_setup_config import SetupError  # noqa: E402
 from nas_setup_first_start import parse_first_start_request, parse_first_start_secrets  # noqa: E402
+from keepass_fakes import export_keepass_setup  # noqa: E402
+
+
+def setUpModule() -> None:
+    export_keepass_setup()
 
 
 def valid_request() -> dict:
@@ -31,6 +39,24 @@ def valid_request() -> dict:
 
 
 class FirstStartRequestContractTests(unittest.TestCase):
+    def test_keepass_helper_resolves_from_path_or_fails_closed(self) -> None:
+        with mock.patch.dict(os.environ), mock.patch.object(setup_config.shutil, "which") as which:
+            os.environ.pop("NAS_KEEPASS_SETUP_BIN", None)
+            which.return_value = "/bin/nas-keepass-setup"
+            self.assertEqual(setup_config.keepass_setup_bin(), "/bin/nas-keepass-setup")
+            which.return_value = None
+            with self.assertRaisesRegex(SetupError, "nas-keepass-setup is unavailable"):
+                setup_config.keepass_setup_bin()
+
+    def test_keepass_helper_timeout_reports_the_operation_without_the_payload(self) -> None:
+        with mock.patch.object(
+            setup_config.subprocess, "run", side_effect=subprocess.TimeoutExpired("nas-keepass-setup", 1)
+        ) as run:
+            with self.assertRaisesRegex(SetupError, "^nas-keepass-setup check-strength failed: TimeoutExpired$"):
+                setup_config.run_keepass_setup(["check-strength"], b"fixture-passphrase\n", timeout=1)
+        self.assertEqual(run.call_args.args[0][1:], ["check-strength"])
+        self.assertEqual(run.call_args.kwargs["input"], b"fixture-passphrase\n")
+
     def test_cli_secret_input_uses_the_same_backend_contract(self):
         import io
         import sys

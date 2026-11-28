@@ -83,10 +83,22 @@ offline error format.
 - `cockpit/src/app.scss`: NAS-specific layout only; PatternFly owns component styling.
 - `cockpit/build.js`: Starter Kit style esbuild/Sass source-to-package build and source-hash stale-output check.
 - `cockpit/dist/`: generated React/PatternFly package payload installed by Nix; never edit it directly.
-- `web/unlock/` and `services/nas_unlock_api.py`: the `nas_admin`-gated browser unlock page and its root Unix-socket backend, which feeds `nas-secrets activate-stdin`.
+- `web/unlock/` and `zig/src/unlock_api.zig`: the `nas_admin`-gated browser unlock page and its root Unix-socket backend, which feeds `nas-secrets activate-stdin`.
 - `web/locked/`: the static notice Caddy serves when the locked sign-in layer is unavailable.
 
 Pure Cockpit API and view-model behavior has direct Node coverage. JSX component composition is checked structurally and through the built browser package in CI.
+
+## KeePass secret system (Zig)
+
+The security-critical KeePass path is Zig 0.17 (`zig/`, standard library only); the rest of the control plane stays Python. Interop is the existing executables and stdin, not new IPC.
+
+- `zig/src/nas_secrets.zig`: `nas-secrets` CLI (activation, rotation, unlocked-environment link, outpost-token install, plaintext retirement, KeePass entry commands).
+- `zig/src/transaction.zig`: activation transaction typestate (`Staged` → `Swapped` → `Committed` | rollback outcomes).
+- `zig/src/unlock_api.zig`, `zig/src/unlock_http.zig`: `nas-unlock-api` socket server and its pure, fuzzed request/policy layer.
+- `zig/src/keepass_setup.zig`: `nas-keepass-setup` (strength floor, setup scrypt verifier and legacy migration, never-replace database guard) called by `services/nas_setup.py` and `services/nas_setup_config.py`.
+- `zig/src/secret.zig`, `zig/src/command.zig`, `zig/src/validate.zig`: `Secret` and its sinks, comptime-checked argv, validated value types.
+- `zig/src/config.zig` and `modules/nas/internal/secret-tools.nix`: comptime ZON configuration rendered from module options; `modules/nas/internal/zig-toolchain.nix` pins the compiler.
+- `zig/tests/compile_errors/`: snippets that must not compile (`zig build compile-errors`).
 
 ## Validation
 

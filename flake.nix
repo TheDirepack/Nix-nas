@@ -203,6 +203,7 @@
             pkgs.semgrep
             pkgs.shellcheck
             pkgs.systemd
+            (import ./modules/nas/internal/zig-toolchain.nix { inherit pkgs; })
           ];
           buildInputs = [ pkgs.glib pkgs.json-glib ];
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.systemd ];
@@ -227,6 +228,7 @@
             openssh
             python3
             qemu
+            (import ./modules/nas/internal/zig-toolchain.nix { inherit pkgs; })
           ];
           shellHook = ''
             echo "NixOS NAS QEMU tools are available." >&2

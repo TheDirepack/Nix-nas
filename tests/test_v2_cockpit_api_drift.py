@@ -20,6 +20,11 @@ if str(SERVICES) not in sys.path:
 import nas_cockpit_api as api  # noqa: E402
 from nas_common import CommandResult  # noqa: E402
 from nas_operation_lock import OperationBusyError  # noqa: E402
+from keepass_fakes import export_keepass_setup  # noqa: E402
+
+
+def setUpModule() -> None:
+    export_keepass_setup()
 
 
 class CockpitApiDriftTests(unittest.TestCase):

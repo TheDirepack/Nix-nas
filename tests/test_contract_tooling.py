@@ -374,6 +374,9 @@ class ContractTests(unittest.TestCase):
                     ignore=shutil.ignore_patterns(
                         ".pytest_cache",
                         ".ruff_cache",
+                        ".zig-cache",
+                        "zig-out",
+                        "tmp",
                         "__pycache__",
                         ".coverage",
                         ".coverage.*",
@@ -438,6 +441,9 @@ class ContractTests(unittest.TestCase):
                     ".git",
                     ".pytest_cache",
                     ".ruff_cache",
+                    ".zig-cache",
+                    "zig-out",
+                    "tmp",
                     "__pycache__",
                     ".coverage",
                     ".coverage.*",
@@ -566,13 +572,15 @@ class ContractTests(unittest.TestCase):
         expected_wrappers = {
             "modules/nas/internal/account-tools.nix": 1,
             "modules/nas/internal/maintenance-tools.nix": 1,
-            "modules/nas/internal/secret-tools.nix": 1,
             "modules/nas/internal/zfs-tools.nix": 3,
         }
         for filename, count in expected_wrappers.items():
             source = text(filename)
             self.assertNotIn("pkgs.sudo", source, msg=filename)
             self.assertEqual(source.count(wrapper_path), count, msg=filename)
+        secrets = text("modules/nas/internal/secret-tools.nix")
+        self.assertNotIn("pkgs.sudo", secrets)
+        self.assertIn('sudo = "/run/wrappers/bin/sudo";', secrets)
 
     def test_browser_authorization_matrix_is_exercised_in_qemu(self):
         browser = text("tests/browser/authz.py")

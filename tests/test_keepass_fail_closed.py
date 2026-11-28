@@ -1,104 +1,57 @@
+"""KeePass access in `nas-secrets` fails closed (black-box against the Zig binary)."""
+
 from __future__ import annotations
 
-import os
+import json
 import pathlib
-import subprocess
+import sys
 import tempfile
 import unittest
 
-from tests.test_secret_security import ROOT, rendered_shell_helpers
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+from test_nas_secrets import PASSWORD, Appliance  # noqa: E402
 
 
 class KeePassFailClosedTests(unittest.TestCase):
-    def run_helper(
-        self,
-        command: str,
-        *,
-        listing: str = "",
-        ls_status: int = 0,
-        mkdir_status: int = 0,
-    ) -> tuple[subprocess.CompletedProcess[str], str]:
-        helpers = rendered_shell_helpers(
-            "kp_args",
-            "entry_path",
-            "ensure_group",
-            "has_secret",
-            "store_value",
-        )
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp = pathlib.Path(temp_dir)
-            fake = temp / "keepassxc-cli"
-            log = temp / "commands.log"
-            fake.write_text(
-                """#!/usr/bin/env bash
-set -eu
-cmd="$1"
-shift
-printf '%s\n' "$cmd" >> "$FAKE_KP_LOG"
-case "$cmd" in
-  ls)
-    status="${FAKE_KP_LS_STATUS:-0}"
-    if [[ "$status" -ne 0 ]]; then exit "$status"; fi
-    printf '%b' "${FAKE_KP_LISTING:-}"
-    ;;
-  mkdir) exit "${FAKE_KP_MKDIR_STATUS:-0}" ;;
-  add|edit|show|rm) exit 0 ;;
-  *) exit 0 ;;
-esac
-""",
-                encoding="utf-8",
-            )
-            fake.chmod(0o755)
-            env = {
-                **os.environ,
-                "PATH": f"{temp}:{os.environ.get('PATH', '')}",
-                "FAKE_KP_LOG": str(log),
-                "FAKE_KP_LISTING": listing,
-                "FAKE_KP_LS_STATUS": str(ls_status),
-                "FAKE_KP_MKDIR_STATUS": str(mkdir_status),
-            }
-            script = (
-                "set -Eeuo pipefail\n"
-                "key_file=''\n"
-                "database=/tmp/test.kdbx\n"
-                "secret_group=NAS\n"
-                "keepass_password=test-password\n" + helpers + command
-            )
-            result = subprocess.run(
-                ["bash", "-c", script],
-                cwd=ROOT,
-                env=env,
-                text=True,
-                capture_output=True,
-                check=False,
-                timeout=10,
-            )
-            return result, log.read_text(encoding="utf-8") if log.exists() else ""
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.nas = Appliance(pathlib.Path(temporary.name))
+
+    def keepass_verbs(self) -> list[str]:
+        return [call[0] for call in self.nas.calls("keepassxc-cli")]
 
     def test_argument_builder_succeeds_without_optional_key_file(self) -> None:
-        result, _ = self.run_helper("kp_args\nprintf 'ok\\n'\n")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "ok\n")
+        self.nas.initialise()
+        for call in self.nas.calls("keepassxc-cli"):
+            self.assertNotIn("--key-file", call)
 
     def test_membership_uses_exact_flattened_listing(self) -> None:
-        result, log = self.run_helper(
-            "has_secret alpha\nif has_secret alp; then exit 9; fi\n",
-            listing="alpha\nalphabet\n",
-        )
+        data = json.loads(self.nas.db.read_text(encoding="utf-8"))
+        data["groups"] = ["NAS"]
+        data["entries"]["NAS/zfs-dataset-key-old"] = "not the key"
+        self.nas.db.write_text(json.dumps(data), encoding="utf-8")
+        result = self.nas.run("init")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(log.splitlines(), ["ls", "ls"])
+        self.assertIn("Created KeePassXC item: ZFS native encryption key", result.stdout)
+        self.assertNotEqual(self.nas.entries()["NAS/zfs-dataset-key"], "not the key")
 
     def test_listing_failure_aborts_before_add_or_edit(self) -> None:
-        result, log = self.run_helper("store_value alpha replacement\n", ls_status=7)
+        data = json.loads(self.nas.db.read_text(encoding="utf-8"))
+        data["groups"] = ["NAS"]
+        self.nas.db.write_text(json.dumps(data), encoding="utf-8")
+        result = self.nas.run("init", env={"FAKE_KP_LS_FAIL": "1"})
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Unable to inspect the KeePassXC secret group.", result.stderr)
-        self.assertEqual(log.splitlines(), ["ls"])
+        self.assertFalse({"add", "edit"} & set(self.keepass_verbs()))
 
     def test_group_creation_failure_is_not_ignored(self) -> None:
-        result, log = self.run_helper("ensure_group\n", ls_status=1, mkdir_status=2)
+        result = self.nas.run("init", env={"FAKE_KP_MKDIR_FAIL": "1"})
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Unable to ensure KeePassXC group", result.stderr)
-        self.assertEqual(log.splitlines(), ["ls", "mkdir"])
+        self.assertEqual(self.keepass_verbs(), ["db-info", "ls", "mkdir"])
+        self.assertNotIn(PASSWORD, result.stderr)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 
 `nas_setup.py` currently mixes four separate jobs: first-start request handling, privileged orchestration, identity/bootstrap retirement, and steady-state recovery/status. The cleanup should reduce it to a thin command surface over smaller modules rather than growing more setup-specific helpers in the same file.
 
-The secret-runtime extraction is complete: `secret-tools.nix` sources the immutable `nas-secret-runtime.sh` library for validation and private-file installation. The validators retain their existing call sites and diagnostics; private installation rejects missing, non-regular, and symlink sources. There is no duplicate implementation in the Nix string. The setup-module and npm cleanup below remain separate follow-up changes, not part of this extraction.
+The secret runtime is the Zig `nas-secrets` binary (`zig/`); `secret-tools.nix` only renders its compile-time configuration. KeePass database creation, the KeePass password floor and the resumable-journal verifier run in `nas-keepass-setup`, which `nas_setup.py` and `nas_setup_config.py` call with secrets on stdin. The setup-module and npm cleanup below remain separate follow-up changes.
 
 ## Target split
 
@@ -11,7 +11,7 @@ The secret-runtime extraction is complete: `secret-tools.nix` sources the immuta
 - `nas_setup_first_start.py`: first-start request/result files, plan confirmation, and systemd job handoff.
 - `nas_setup_apply.py`: finite first-run orchestration and rollback/journal integration.
 - `nas_setup_recovery.py`: status and explicit recovery/reconciliation commands.
-- `scripts/lib/nas-secret-runtime.sh`: shared shell validation and private-file installation helpers used by secret activation code.
+- `zig/src/keepass_setup.zig`: KeePass-specific setup checks; keep them out of the Python modules.
 
 Do not add a setup daemon, a second mutable desired-state store, or another lock database. Long-running work remains systemd-owned and privileged mutation coordination remains the shared operation lock.
 

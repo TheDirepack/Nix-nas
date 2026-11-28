@@ -123,6 +123,7 @@ CURL_CONFIG
       pkgs.systemd
       pkgs.util-linux
       pkgs.zfs
+      (import ./zig-toolchain.nix { inherit pkgs; })
     ];
     text = ''
       export NAS_CONFIG_DIR=${lib.escapeShellArg cfg.configurationDir}
